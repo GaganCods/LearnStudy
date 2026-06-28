@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LearnStudy – Focus Playlist Player</title>
     <link rel="icon" href="https://icon-library.com/images/play-icon-white-png/play-icon-white-png-4.jpg" type="image/x-icon">
-    <!-- Lucide Icons & Canvas Confetti -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
     <style>
@@ -59,7 +58,7 @@
             display: flex;
             gap: 8px;
             flex: 1;
-            max-width: 600px;
+            max-width: 500px;
         }
 
         input, select {
@@ -99,6 +98,14 @@
         .btn:hover { background: var(--accent-hover); }
         .btn-secondary { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main); }
         .btn-secondary:hover { background: var(--border); }
+        .btn-success { background: var(--success); color: white; }
+        .btn-success:hover { background: #059669; }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
 
         /* Main Workspace Layout */
         .workspace {
@@ -184,7 +191,7 @@
         }
         .control-group { display: flex; align-items: center; gap: 8px; }
 
-        /* Progress Card Grid (Now below video player) */
+        /* Progress Card Grid */
         .progress-row-container {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -314,9 +321,51 @@
             box-shadow: 0 4px 12px rgba(0,0,0,0.5);
         }
 
+        /* PWA Install Banner Popup */
+        .pwa-popup {
+            position: fixed;
+            bottom: 24px;
+            left: 24px;
+            background: rgba(19, 21, 32, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            max-width: 360px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            z-index: 2000;
+            display: none;
+            animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes slideUp {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .pwa-popup-content {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            margin-bottom: 14px;
+        }
+        .pwa-popup-icon {
+            background: var(--bg-input);
+            padding: 10px;
+            border-radius: 8px;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .pwa-popup-text h4 { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+        .pwa-popup-text p { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+        .pwa-popup-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
         @media (max-width: 1000px) {
             .workspace { grid-template-columns: 1fr; height: auto; overflow: visible; }
             body.focus-mode .workspace { grid-template-columns: 1fr; }
+            header { flex-direction: column; align-items: stretch; gap: 12px; }
+            .playlist-loader { max-width: 100%; }
         }
     </style>
 </head>
@@ -331,15 +380,19 @@
             <input type="text" id="playlistInput" placeholder="Paste YouTube Playlist URL or List ID...">
             <button class="btn" id="loadBtn"><i data-lucide="list-video"></i> Load</button>
         </div>
-        <div class="session-timer">
-            <i data-lucide="timer" style="width:16px;height:16px;"></i>
-            <span>Session: <span id="sessionClock">00:00</span></span>
+        <div class="header-actions">
+            <button class="btn btn-secondary" id="headerInstallBtn" style="display: none;">
+                <i data-lucide="download"></i> Install App
+            </button>
+            <div class="session-timer">
+                <i data-lucide="timer" style="width:16px;height:16px;"></i>
+                <span>Session: <span id="sessionClock">00:00</span></span>
+            </div>
         </div>
     </header>
 
     <div class="workspace">
         
-        <!-- Left Workspace Pane: Video Player + Progress Tracker Metrics Below -->
         <div class="left-area">
             <div class="video-player-card">
                 <div class="video-ratio-wrapper">
@@ -376,7 +429,6 @@
                 </div>
             </div>
 
-            <!-- Study Progress Tracker Row Layout Located directly below the Video Player -->
             <div class="progress-row-container">
                 <div class="progress-card">
                     <div class="progress-headline">
@@ -424,7 +476,6 @@
             </div>
         </div>
 
-        <!-- Right Side Panel: Playlist & Lecture Items List -->
         <div class="panel right-panel">
             <div class="panel-header">
                 <div class="panel-title" id="plTitle">No Playlist Loaded</div>
@@ -436,6 +487,22 @@
             <ul class="lecture-list" id="lectureList"></ul>
         </div>
 
+    </div>
+
+    <div class="pwa-popup" id="pwaPrompt">
+        <div class="pwa-popup-content">
+            <div class="pwa-popup-icon">
+                <i data-lucide="graduation-cap" style="width: 24px; height: 24px;"></i>
+            </div>
+            <div class="pwa-popup-text">
+                <h4>Install LearnStudy</h4>
+                <p>Add LearnStudy to your home screen or desktop for full-screen focus sessions and instant offline usage access.</p>
+            </div>
+        </div>
+        <div class="pwa-popup-actions">
+            <button class="btn btn-secondary" id="pwaCancelBtn" style="padding: 6px 12px; font-size: 13px;">Later</button>
+            <button class="btn btn-success" id="pwaInstallBtn" style="padding: 6px 12px; font-size: 13px;">Install</button>
+        </div>
     </div>
 
     <div class="toast" id="toastMessage">Error Message Container</div>
@@ -451,6 +518,7 @@
         
         let currentSessionSeconds = 0;
         let trackingInterval;
+        let deferredPrompt;
 
         // Elements
         const playlistInput = document.getElementById('playlistInput');
@@ -464,6 +532,11 @@
         
         const prevBtn = document.getElementById('prevBtn');
         const nextBtn = document.getElementById('nextBtn');
+
+        const pwaPrompt = document.getElementById('pwaPrompt');
+        const pwaInstallBtn = document.getElementById('pwaInstallBtn');
+        const pwaCancelBtn = document.getElementById('pwaCancelBtn');
+        const headerInstallBtn = document.getElementById('headerInstallBtn');
 
         function showToast(msg) {
             const t = document.getElementById('toastMessage');
@@ -493,11 +566,11 @@
         function onPlayerReady() {
             lucide.createIcons();
             initApp();
+            initPWA();
         }
 
         function onPlayerStateChange(event) {
             if (event.data === YT.PlayerState.PLAYING) {
-                // Apply chosen user speed setting immediately upon playback trigger
                 if (player && player.setPlaybackRate) {
                     player.setPlaybackRate(parseFloat(speedSelect.value));
                 }
@@ -565,6 +638,78 @@
             loadPlaylistDataset(defaultPlaylistId);
         }
 
+        /* Dynamic PWA Pipeline Injection Setup */
+        function initPWA() {
+            // Generate and inject a dynamic Web App Manifest
+            const manifestObj = {
+                name: "LearnStudy Focus Player",
+                short_name: "LearnStudy",
+                start_url: window.location.href,
+                display: "standalone",
+                background_color: "#0a0b10",
+                theme_color: "#131520",
+                icons: [
+                    {
+                        src: "https://icon-library.com/images/play-icon-white-png/play-icon-white-png-4.jpg",
+                        sizes: "512x512",
+                        type: "image/png"
+                    }
+                ]
+            };
+            const manifestStr = JSON.stringify(manifestObj);
+            const blob = new Blob([manifestStr], { type: 'application/json' });
+            const manifestURL = URL.createObjectURL(blob);
+            
+            const manifestLink = document.createElement('link');
+            manifestLink.rel = 'manifest';
+            manifestLink.href = manifestURL;
+            document.head.appendChild(manifestLink);
+
+            // Register a virtual loop service worker inside a Data URL path structure
+            if ('serviceWorker' in navigator) {
+                const swCode = `
+                    self.addEventListener('install', (e) => self.skipWaiting());
+                    self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+                    self.addEventListener('fetch', (e) => {
+                        // Pass-through handler allowing active asset pipelining
+                        e.respondWith(fetch(e.request).catch(() => new Response("Offline backup active.")));
+                    });
+                `;
+                const swBlob = new Blob([swCode], { type: 'text/javascript' });
+                const swURL = URL.createObjectURL(swBlob);
+                
+                navigator.serviceWorker.register(swURL).catch(err => console.log("Service Worker Failed:", err));
+            }
+
+            // Capture application install trigger sequences
+            window.addEventListener('beforeinstallprompt', (e) => {
+                e.preventDefault();
+                deferredPrompt = e;
+                
+                // Show installation UI hooks across header actions and modal card elements
+                pwaPrompt.style.display = 'block';
+                headerInstallBtn.style.display = 'inline-flex';
+            });
+
+            const triggerInstallAction = async () => {
+                if (!deferredPrompt) return;
+                pwaPrompt.style.display = 'none';
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    headerInstallBtn.style.display = 'none';
+                }
+                deferredPrompt = null;
+            };
+
+            pwaInstallBtn.addEventListener('click', triggerInstallAction);
+            headerInstallBtn.addEventListener('click', triggerInstallAction);
+            
+            pwaCancelBtn.addEventListener('click', () => {
+                pwaPrompt.style.display = 'none';
+            });
+        }
+
         function parsePlaylistID(input) {
             input = input.trim();
             if (input.includes('list=')) {
@@ -584,7 +729,6 @@
             }
         }
 
-        // Helper helper function parsing YouTube ISO 8601 timestamps to total seconds
         function parseISO8601ToSeconds(duration) {
             const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
             if (!match) return 0;
@@ -625,7 +769,6 @@
                     loopGuard++;
                 }
 
-                // Chunk raw data IDs and hit the videos endpoint to grab the exact native duration definitions
                 const videoIds = rawItems.map(itm => itm.snippet?.resourceId?.videoId).filter(Boolean);
                 
                 let detailedDurations = {};
@@ -647,7 +790,7 @@
                             videoId: vId,
                             title: itm.snippet.title,
                             thumb: itm.snippet.thumbnails.default ? itm.snippet.thumbnails.default.url : 'https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=120',
-                            durationSec: detailedDurations[vId] || 0 // Accurate dynamic duration
+                            durationSec: detailedDurations[vId] || 0
                         });
                     }
                 });
@@ -754,12 +897,10 @@
                     completedCount++;
                     watchedSec += itm.durationSec;
                 } else {
-                    // Count structural timestamp progress inside ongoing metrics tracking calculations
                     watchedSec += (userData.timestamps[itm.videoId] || 0);
                 }
             });
 
-            // Prevent watched overflow calculations errors
             if (watchedSec > totalSec) watchedSec = totalSec;
             const remainingSec = Math.max(0, totalSec - watchedSec);
             const percentage = Math.round((completedCount / totalLectures) * 100);
