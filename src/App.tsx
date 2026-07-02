@@ -631,11 +631,36 @@ export default function App() {
       const res = await fetch(`/api/youtube-info?url=${encodedUrl}`);
       
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Failed to load YouTube content. Check the URL.");
+        let errMsg = `Server returned status ${res.status}`;
+        try {
+          const contentType = res.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            const errData = await res.json();
+            errMsg = errData.error || errMsg;
+          } else {
+            const text = await res.text();
+            if (text && (text.trim().startsWith("<") || text.includes("The page c"))) {
+              errMsg = "The service is temporarily busy, or rate-limited by YouTube. Please try again in a few seconds.";
+            } else if (text && text.length < 150) {
+              errMsg = text.trim();
+            } else if (res.statusText) {
+              errMsg = `${errMsg}: ${res.statusText}`;
+            }
+          }
+        } catch (_) {
+          if (res.statusText) {
+            errMsg = `${errMsg}: ${res.statusText}`;
+          }
+        }
+        throw new Error(errMsg);
       }
 
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch (jsonErr: any) {
+        throw new Error("Failed to parse server response. Please try again.");
+      }
 
       if (data.type === "playlist") {
         const playlist: PlaylistInfo = {

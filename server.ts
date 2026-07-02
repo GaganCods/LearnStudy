@@ -57,6 +57,23 @@ function extractJsonBlock(html: string, keyword: string): any {
   return null;
 }
 
+// Fetch with a strict timeout to avoid Gateway Timeout errors
+async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 6000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+}
+
 // Parse YouTube URL to extract playlist ID or video ID
 function parseYoutubeUrl(urlStr: string) {
   try {
@@ -238,7 +255,7 @@ async function fetchPlaylistFromRss(playlistId: string): Promise<any[] | null> {
   try {
     const rssUrl = `https://www.youtube.com/feeds/videos.xml?playlist_id=${playlistId}`;
     console.log(`Fetching playlist RSS: ${rssUrl}`);
-    const response = await fetch(rssUrl, {
+    const response = await fetchWithTimeout(rssUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
       }
@@ -308,7 +325,7 @@ app.get("/api/youtube-info", async (req, res) => {
       let html = "";
       let fetchSuccess = false;
       try {
-        const response = await fetch(playlistUrl, { headers });
+        const response = await fetchWithTimeout(playlistUrl, { headers });
         if (response.ok) {
           html = await response.text();
           fetchSuccess = true;
@@ -477,7 +494,7 @@ app.get("/api/youtube-info", async (req, res) => {
       let fetchSuccess = false;
 
       try {
-        const response = await fetch(videoUrl, { headers });
+        const response = await fetchWithTimeout(videoUrl, { headers });
         if (response.ok) {
           html = await response.text();
           fetchSuccess = true;
@@ -568,7 +585,7 @@ app.get("/api/youtube-info", async (req, res) => {
       if (!videoInfo) {
         console.log(`Failed watch page parsing and meta tags, falling back to oEmbed for: ${parsed.id}`);
         try {
-          const embedRes = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${parsed.id}`);
+          const embedRes = await fetchWithTimeout(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${parsed.id}`);
           if (embedRes.ok) {
             const embedData = await embedRes.json() as any;
             if (embedData && embedData.title) {
