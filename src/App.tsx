@@ -47,6 +47,7 @@ export default function App() {
 
   // Navigation & Theme
   const [activeTab, setActiveTab] = useState<ActiveTab>("home");
+  const [historyFilter, setHistoryFilter] = useState<"all" | "playlist" | "video">("all");
   const [settings, setSettings] = useState<StudySettings>(Storage.getSettings());
   const [searchQuery, setSearchQuery] = useState("");
   const [pendingSeekSeconds, setPendingSeekSeconds] = useState<number | null>(null);
@@ -256,7 +257,8 @@ export default function App() {
 
   // Re-build/re-initialize player on video switch or returning to study tab
   useEffect(() => {
-    if (!activeVideoId || activeTab !== "study") return;
+    if (activeTab !== "study") return;
+    if (!activeVideoId && activeSession?.type !== "playlist") return;
 
     let isCancelled = false;
     let player: any = null;
@@ -299,10 +301,12 @@ export default function App() {
 
       placeholder.innerHTML = '<div id="yt-player-frame"></div>';
 
+      const isPlaylist = activeSession?.type === "playlist";
+
       player = new window.YT.Player("yt-player-frame", {
         width: "100%",
         height: "100%",
-        videoId: activeVideoId,
+        videoId: activeVideoId || undefined,
         playerVars: {
           autoplay: settings.autoPlay ? 1 : 0,
           controls: 1,
@@ -310,7 +314,8 @@ export default function App() {
           showinfo: 0,
           modestbranding: 1,
           playsinline: 1,
-          start: startSeconds
+          start: startSeconds,
+          ...(isPlaylist ? { listType: "playlist", list: activeSession.id } : {})
         },
         events: {
           onReady: (event: any) => {
@@ -338,7 +343,8 @@ export default function App() {
                 try {
                   const currentTime = playerRef.current.getCurrentTime();
                   const duration = playerRef.current.getDuration();
-                  if (duration > 0) {
+                  const isLive = duration <= 0 || !isFinite(duration) || isNaN(duration);
+                  if (duration > 0 || isLive) {
                     handleProgressUpdate(currentTime, duration);
                   }
                 } catch (e) {
@@ -349,6 +355,99 @@ export default function App() {
           },
           onStateChange: (event: any) => {
             if (isCancelled) return;
+
+            // Extract metadata if it's a playlist
+            if (activeSession?.type === "playlist") {
+              try {
+                const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
+                if (currentPlaylist) {
+                  let modified = false;
+                  if (typeof event.target.getPlaylist === "function") {
+                    const videoIds = event.target.getPlaylist() || [];
+                    if (videoIds.length > 0 && currentPlaylist.videos.length === 0) {
+                      currentPlaylist.videos = videoIds.map((vid: string, index: number) => ({
+                        id: vid,
+                        title: `Video ${index + 1}`,
+                        channelName: currentPlaylist.channelName || "Unknown Channel",
+                        duration: "10:00", // Default placeholder
+                        thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                        progress: 0,
+                        lastWatchedPosition: 0,
+                        completed: false
+                      }));
+                      currentPlaylist.totalVideos = videoIds.length;
+                      modified = true;
+                    }
+                  }
+
+                  if (typeof event.target.getVideoData === "function") {
+                    const videoData = event.target.getVideoData();
+                    if (videoData && videoData.video_id) {
+                      const vId = videoData.video_id;
+                      const vTitle = videoData.title;
+                      const vAuthor = videoData.author;
+                      
+                      const videoIndex = currentPlaylist.videos.findIndex(v => v.id === vId);
+                      if (videoIndex >= 0) {
+                        if (vTitle && currentPlaylist.videos[videoIndex].title !== vTitle) {
+                          currentPlaylist.videos[videoIndex].title = vTitle;
+                          modified = true;
+                        }
+                        if (vAuthor && currentPlaylist.videos[videoIndex].channelName !== vAuthor) {
+                          currentPlaylist.videos[videoIndex].channelName = vAuthor;
+                          modified = true;
+                        }
+                      }
+
+                      // We do NOT call playVideoInSession here because that would trigger a re-render
+                      // and destroy the player since activeVideoId is in the dependency array.
+                      // Instead, we just update the states so the UI reflects the current video.
+                      if (activeVideoId !== vId) {
+                        setActiveVideoId(vId);
+                        setActiveVideoTitle(vTitle || currentPlaylist.videos[videoIndex]?.title || "YouTube Video");
+                        setActiveVideoChannel(vAuthor || currentPlaylist.videos[videoIndex]?.channelName || "Unknown Channel");
+                      }
+                    }
+                  }
+
+                  if (modified) {
+                    Storage.savePlaylist(currentPlaylist);
+                    setPlaylists(Storage.getPlaylists());
+                  }
+                }
+              } catch (err) {
+                console.warn("Failed to extract playlist metadata", err);
+              }
+            } else if (activeSession?.type === "video") {
+               try {
+                 if (typeof event.target.getVideoData === "function") {
+                    const videoData = event.target.getVideoData();
+                    if (videoData && (videoData.title || videoData.author)) {
+                       const vTitle = videoData.title;
+                       const vAuthor = videoData.author;
+                       let modified = false;
+                       const currentVideo = Storage.getSingleVideos().find(v => v.id === activeSession.id);
+                       if (currentVideo) {
+                          if (vTitle && currentVideo.title === "YouTube Video" && currentVideo.title !== vTitle) {
+                             currentVideo.title = vTitle;
+                             setActiveVideoTitle(vTitle);
+                             modified = true;
+                          }
+                          if (vAuthor && currentVideo.channelName === "Unknown Channel" && currentVideo.channelName !== vAuthor) {
+                             currentVideo.channelName = vAuthor;
+                             setActiveVideoChannel(vAuthor);
+                             modified = true;
+                          }
+                          if (modified) {
+                             Storage.saveSingleVideo(currentVideo);
+                             setSingleVideos(Storage.getSingleVideos());
+                          }
+                       }
+                    }
+                 }
+               } catch (err) {}
+            }
+
             if (event.data === 1) { // Playing
               setIsPlaying(true);
             } else if (event.data === 2) { // Paused
@@ -376,7 +475,8 @@ export default function App() {
       }
       playerRef.current = null;
     };
-  }, [activeVideoId, activeTab]);
+  }, [activeSession, activeTab]); // REMOVED activeVideoId from dependencies so it doesn't remount the player when tracking playlist progress
+
 
   // Seek to pending timestamp if player is already loaded and ready
   useEffect(() => {
@@ -425,6 +525,34 @@ export default function App() {
     };
   }, [playerReady, activeVideoId]);
 
+  // Handle explicit video changes within the same session
+  useEffect(() => {
+    if (playerReady && playerRef.current && activeVideoId) {
+      try {
+        if (typeof playerRef.current.getVideoData === "function") {
+          const currentVideoData = playerRef.current.getVideoData();
+          if (currentVideoData && currentVideoData.video_id !== activeVideoId) {
+            if (activeSession?.type === "playlist" && typeof playerRef.current.getPlaylist === "function" && typeof playerRef.current.playVideoAt === "function") {
+              const playlist = playerRef.current.getPlaylist();
+              if (playlist) {
+                const idx = playlist.indexOf(activeVideoId);
+                if (idx >= 0) {
+                  playerRef.current.playVideoAt(idx);
+                } else if (typeof playerRef.current.loadVideoById === "function") {
+                  playerRef.current.loadVideoById(activeVideoId);
+                }
+              }
+            } else if (typeof playerRef.current.loadVideoById === "function") {
+              playerRef.current.loadVideoById(activeVideoId);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to sync video id with player", e);
+      }
+    }
+  }, [activeVideoId, playerReady, activeSession]);
+
   const formatSecondsToDuration = (totalSeconds: number): string => {
     if (isNaN(totalSeconds) || totalSeconds <= 0) return "0:00";
     const h = Math.floor(totalSeconds / 3600);
@@ -440,12 +568,21 @@ export default function App() {
 
   // Handle study progression
   const handleProgressUpdate = (currentTime: number, duration: number) => {
-    const percent = Math.min(Math.round((currentTime / duration) * 100), 100);
-    const isCompleted = percent >= 95;
-    const formattedDur = formatSecondsToDuration(duration);
-
     // 1. Log study time in background (5 seconds increment)
     Storage.addStudyTime(activeVideoId, activeVideoTitle, 5);
+
+    // Determine if it is a live stream or invalid duration
+    const isLiveVideo = duration <= 0 || !isFinite(duration) || isNaN(duration);
+
+    let percent = 0;
+    let isCompleted = false;
+    let formattedDur = "LIVE";
+
+    if (!isLiveVideo) {
+      percent = Math.min(Math.round((currentTime / duration) * 100), 100);
+      isCompleted = percent >= 95;
+      formattedDur = formatSecondsToDuration(duration);
+    }
 
     // 2. Update status in local storage
     if (activeSession) {
@@ -456,13 +593,19 @@ export default function App() {
         if (playlist) {
           const video = playlist.videos.find(v => v.id === activeVideoId);
           if (video) {
-            video.progress = percent;
-            video.lastWatchedPosition = currentTime;
-            if (video.duration === "0:00" || video.duration === "10:00" || !video.duration) {
-              video.duration = formattedDur;
-            }
-            if (isCompleted) {
-              video.completed = true;
+            if (!isLiveVideo) {
+              video.progress = percent;
+              video.lastWatchedPosition = currentTime;
+              if (video.duration === "0:00" || video.duration === "10:00" || !video.duration) {
+                video.duration = formattedDur;
+              }
+              if (isCompleted) {
+                video.completed = true;
+              }
+            } else {
+              video.progress = 0;
+              video.duration = "LIVE";
+              video.lastWatchedPosition = currentTime;
             }
           }
 
@@ -478,14 +621,21 @@ export default function App() {
         const singlesFromDb = Storage.getSingleVideos();
         const video = singlesFromDb.find(v => v.id === activeSession.id);
         if (video) {
-          video.progress = percent;
-          video.lastWatchedPosition = currentTime;
-          video.lastWatchedAt = nowStr;
-          if (video.duration === "0:00" || video.duration === "10:00" || !video.duration) {
-            video.duration = formattedDur;
-          }
-          if (isCompleted) {
-            video.completed = true;
+          if (!isLiveVideo) {
+            video.progress = percent;
+            video.lastWatchedPosition = currentTime;
+            video.lastWatchedAt = nowStr;
+            if (video.duration === "0:00" || video.duration === "10:00" || !video.duration) {
+              video.duration = formattedDur;
+            }
+            if (isCompleted) {
+              video.completed = true;
+            }
+          } else {
+            video.progress = 0;
+            video.duration = "LIVE";
+            video.lastWatchedPosition = currentTime;
+            video.lastWatchedAt = nowStr;
           }
           Storage.saveSingleVideo(video);
           setSingleVideos(singlesFromDb);
@@ -520,7 +670,7 @@ export default function App() {
       }
     }
 
-    if (settings.autoPlay) {
+    if (settings.autoPlay && activeSession?.type !== "playlist") {
       handleNextVideo();
     }
   };
@@ -627,55 +777,67 @@ export default function App() {
     setErrorMessage("");
 
     try {
-      const encodedUrl = encodeURIComponent(urlInput.trim());
-      const res = await fetch(`/api/youtube-info?url=${encodedUrl}`);
-      
-      if (!res.ok) {
-        let errMsg = `Server returned status ${res.status}`;
-        try {
-          const contentType = res.headers.get("content-type");
-          if (contentType && contentType.includes("application/json")) {
-            const errData = await res.json();
-            errMsg = errData.error || errMsg;
-          } else {
-            const text = await res.text();
-            if (text && (text.trim().startsWith("<") || text.includes("The page c"))) {
-              errMsg = "The service is temporarily busy, or rate-limited by YouTube. Please try again in a few seconds.";
-            } else if (text && text.length < 150) {
-              errMsg = text.trim();
-            } else if (res.statusText) {
-              errMsg = `${errMsg}: ${res.statusText}`;
-            }
-          }
-        } catch (_) {
-          if (res.statusText) {
-            errMsg = `${errMsg}: ${res.statusText}`;
+      const urlStr = urlInput.trim();
+      let type: "video" | "playlist" | null = null;
+      let id = "";
+
+      try {
+        const url = new URL(urlStr);
+        if (url.searchParams.has("list")) {
+          type = "playlist";
+          id = url.searchParams.get("list")!;
+        } else if (url.hostname.includes("youtube.com") || url.hostname.includes("youtu.be")) {
+          if (url.searchParams.has("v")) {
+            type = "video";
+            id = url.searchParams.get("v")!;
+          } else if (url.pathname.startsWith("/shorts/")) {
+            type = "video";
+            id = url.pathname.split("/")[2];
+          } else if (url.pathname.startsWith("/live/")) {
+            type = "video";
+            id = url.pathname.split("/")[2];
+          } else if (url.pathname.startsWith("/embed/")) {
+            type = "video";
+            id = url.pathname.split("/")[2];
+          } else if (url.hostname === "youtu.be") {
+            type = "video";
+            id = url.pathname.slice(1);
           }
         }
-        throw new Error(errMsg);
+      } catch (e) {
+        const playlistMatch = urlStr.match(/[?&]list=([a-zA-Z0-9_-]+)/);
+        if (playlistMatch) {
+          type = "playlist";
+          id = playlistMatch[1];
+        } else {
+          const videoMatch = urlStr.match(/(?:v=|\/embed\/|\/watch\?v=|\/\d+\/|\/vi\/|youtu\.be\/|shorts\/|live\/)([^#\&\?]+)/);
+          if (videoMatch) {
+            type = "video";
+            id = videoMatch[1];
+          }
+        }
       }
 
-      let data;
-      try {
-        data = await res.json();
-      } catch (jsonErr: any) {
-        throw new Error("Failed to parse server response. Please try again.");
+      if (!type || !id) {
+        throw new Error("Invalid YouTube URL. Please enter a valid video, shorts, live, or playlist link.");
       }
 
-      if (data.type === "playlist") {
-        const playlist: PlaylistInfo = {
-          id: data.id,
-          type: "playlist",
-          title: data.title,
-          channelName: data.channelName,
-          totalVideos: data.totalVideos,
-          videos: data.videos,
-          thumbnail: data.thumbnail || data.videos[0]?.thumbnail || "",
-          progress: 0,
-          lastWatchedAt: new Date().toISOString()
-        };
-
-        Storage.savePlaylist(playlist);
+      if (type === "playlist") {
+        let playlist = Storage.getPlaylists().find(p => p.id === id);
+        if (!playlist) {
+          playlist = {
+            id: id,
+            type: "playlist",
+            title: "YouTube Playlist",
+            channelName: "Unknown Channel",
+            totalVideos: 0,
+            videos: [],
+            thumbnail: "",
+            progress: 0,
+            lastWatchedAt: new Date().toISOString()
+          };
+          Storage.savePlaylist(playlist);
+        }
         setPlaylists(Storage.getPlaylists());
         setActiveSession({ id: playlist.id, type: "playlist" });
         
@@ -684,21 +846,27 @@ export default function App() {
           setActiveVideoId(firstVid.id);
           setActiveVideoTitle(firstVid.title);
           setActiveVideoChannel(firstVid.channelName);
+        } else {
+          setActiveVideoId(""); // Will be populated by the iframe player if possible
+          setActiveVideoTitle("YouTube Playlist");
+          setActiveVideoChannel("Unknown Channel");
         }
       } else {
-        const video: SingleVideoInfo = {
-          id: data.id,
-          type: "video",
-          title: data.title,
-          channelName: data.channelName,
-          duration: data.duration,
-          thumbnail: data.thumbnail,
-          progress: 0,
-          lastWatchedAt: new Date().toISOString(),
-          completed: false
-        };
-
-        Storage.saveSingleVideo(video);
+        let video = Storage.getSingleVideos().find(v => v.id === id);
+        if (!video) {
+          video = {
+            id: id,
+            type: "video",
+            title: "YouTube Video",
+            channelName: "Unknown Channel",
+            duration: "LIVE",
+            thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+            progress: 0,
+            lastWatchedAt: new Date().toISOString(),
+            completed: false
+          };
+          Storage.saveSingleVideo(video);
+        }
         setSingleVideos(Storage.getSingleVideos());
         setActiveSession({ id: video.id, type: "video" });
         
@@ -818,20 +986,6 @@ export default function App() {
   const handleAddBookmark = (customLabel?: string) => {
     if (!playerRef.current || !playerReady) return;
     try {
-      // Study 60 mins daily to log custom bookmarks
-      const studyLogs = Storage.getStudyLogs();
-      const todayStr = new Date().toLocaleDateString("en-CA");
-      const todaySeconds = studyLogs
-        .filter((l) => l.date === todayStr)
-        .reduce((sum, l) => sum + l.secondsStudied, 0);
-
-      const targetSeconds = 3600; // 60 minutes
-      if (todaySeconds < targetSeconds) {
-        const remainingMins = Math.ceil((targetSeconds - todaySeconds) / 60);
-        showShortcutToast(`⚠️ Study ${remainingMins} more mins today to unlock custom bookmarks!`);
-        return;
-      }
-
       const seconds = playerRef.current.getCurrentTime();
       if (isNaN(seconds)) return;
 
@@ -1487,15 +1641,20 @@ export default function App() {
 
             {/* Theme Single Switch Toggle */}
             <button
-              onClick={() => handleSettingChange("theme", settings.theme === "dark" ? "light" : "dark")}
-              className={`p-2 sm:p-2.5 rounded-xl border cursor-pointer transition-all duration-200 hover:scale-[1.04] active:scale-[0.96] shadow-sm hover:shadow-md ${
+              onClick={() => {
+                const nextTheme = settings.theme === "light" ? "dark" : settings.theme === "dark" ? "system" : "light";
+                handleSettingChange("theme", nextTheme);
+              }}
+              className={`p-2 sm:p-2.5 rounded-xl border cursor-pointer transition-all duration-200 hover:scale-[1.04] active:scale-[0.96] shadow-sm hover:shadow-md flex items-center justify-center ${
                 settings.theme === "dark"
-                  ? "bg-zinc-900 hover:bg-zinc-800 border-zinc-800 hover:border-zinc-700 text-amber-400 hover:text-amber-300"
-                  : "bg-slate-100 hover:bg-slate-200 border-slate-200 hover:border-slate-300 text-slate-600 hover:text-slate-900"
+                  ? "bg-zinc-900 hover:bg-zinc-800 border-zinc-800 hover:border-zinc-700 text-blue-400 hover:text-blue-300"
+                  : settings.theme === "system"
+                  ? "bg-slate-100 dark:bg-zinc-900 hover:bg-slate-200 dark:hover:bg-zinc-800 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400"
+                  : "bg-slate-100 hover:bg-slate-200 border-slate-200 hover:border-slate-300 text-amber-500 hover:text-amber-600"
               }`}
-              title={settings.theme === "dark" ? "Switch to Light Theme" : "Switch to Dark Theme"}
+              title={settings.theme === "dark" ? "Switch to System Theme" : settings.theme === "system" ? "Switch to Light Theme" : "Switch to Dark Theme"}
             >
-              {settings.theme === "dark" ? <Sun className="w-4 h-4 sm:w-5 sm:h-5" /> : <Moon className="w-4 h-4 sm:w-5 sm:h-5" />}
+              {settings.theme === "dark" ? <Moon className="w-4 h-4 sm:w-5 sm:h-5" /> : settings.theme === "system" ? <Laptop className="w-4 h-4 sm:w-5 sm:h-5" /> : <Sun className="w-4 h-4 sm:w-5 sm:h-5" />}
             </button>
           </div>
         </header>
@@ -1715,7 +1874,18 @@ export default function App() {
                           >
                             <img src={v.thumbnail} className="w-full aspect-video object-cover rounded-xl mb-3" alt={v.title} />
                             <div className="font-bold text-sm text-slate-900 dark:text-zinc-100 line-clamp-1">{v.title}</div>
-                            <div className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{v.channelName} • {v.duration}</div>
+                            <div className="text-xs text-slate-400 dark:text-zinc-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                              <span>{v.channelName}</span>
+                              <span>•</span>
+                              {v.duration === "LIVE" ? (
+                                <span className="text-red-600 dark:text-red-400 font-extrabold flex items-center gap-1 animate-pulse">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-red-600 dark:bg-red-400 animate-ping" />
+                                  LIVE
+                                </span>
+                              ) : (
+                                <span>{v.duration}</span>
+                              )}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -2037,7 +2207,8 @@ export default function App() {
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
                                 <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
-                                <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white">
+                                <span className={`absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white flex items-center gap-1 ${v.duration === "LIVE" ? "bg-red-600 animate-pulse" : "bg-black/80"}`}>
+                                  {v.duration === "LIVE" && <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 animate-ping" />}
                                   {v.duration}
                                 </span>
                               </div>
@@ -2049,7 +2220,9 @@ export default function App() {
                             <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
                               <div className="flex items-center gap-1.5">
                                 <CheckCircle className={`w-3.5 h-3.5 ${v.completed ? "text-emerald-500" : "text-slate-400"}`} />
-                                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">{v.progress}% watched</span>
+                                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">
+                                  {v.duration === "LIVE" ? "Live Stream" : `${v.progress}% watched`}
+                                </span>
                               </div>
                               <button 
                                 onClick={(e) => handleToggleFav("video", v.id, e)}
@@ -2271,18 +2444,34 @@ export default function App() {
                       )}
 
                       {/* Video Info: Title, Channel and Type placed just below the controls */}
-                      <div className="bg-slate-50 dark:bg-zinc-900/45 border border-slate-200/60 dark:border-zinc-800/60 rounded-2xl p-4 shadow-sm select-none">
-                        <h1 className="text-base sm:text-lg font-bold text-slate-950 dark:text-zinc-50 leading-snug" title={activeVideoTitle}>
-                          {activeVideoTitle}
-                        </h1>
-                        <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1.5 flex items-center gap-2">
-                          <span className="font-semibold text-slate-700 dark:text-zinc-300">{activeVideoChannel}</span>
-                          <span>•</span>
-                          <span className="text-blue-600 dark:text-blue-400 font-bold uppercase tracking-wider text-[10px]">
-                            {activeSession?.type === "playlist" ? "Playlist Module" : "Single Lecture"}
-                          </span>
-                        </p>
-                      </div>
+                      {(() => {
+                        const currentVideo = activeSession?.type === "playlist"
+                          ? playlists.find(p => p.id === activeSession.id)?.videos.find(v => v.id === activeVideoId)
+                          : singleVideos.find(v => v.id === activeSession?.id);
+                        
+                        const isLive = currentVideo?.duration === "LIVE";
+
+                        return (
+                          <div className="bg-slate-50 dark:bg-zinc-900/45 border border-slate-200/60 dark:border-zinc-800/60 rounded-2xl p-4 shadow-sm select-none relative overflow-hidden">
+                            {isLive && (
+                              <div className="absolute top-0 right-0 bg-red-600 text-white text-[9px] font-black px-3 py-1.5 rounded-bl-xl uppercase tracking-widest flex items-center gap-1.5 animate-pulse shadow-sm">
+                                <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 animate-ping" />
+                                On-Air Live
+                              </div>
+                            )}
+                            <h1 className="text-base sm:text-lg font-bold text-slate-950 dark:text-zinc-50 leading-snug pr-20" title={activeVideoTitle}>
+                              {activeVideoTitle}
+                            </h1>
+                            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1.5 flex items-center gap-2">
+                              <span className="font-semibold text-slate-700 dark:text-zinc-300">{activeVideoChannel}</span>
+                              <span>•</span>
+                              <span className="text-blue-600 dark:text-blue-400 font-bold uppercase tracking-wider text-[10px]">
+                                {activeSession?.type === "playlist" ? "Playlist Module" : "Single Lecture"}
+                              </span>
+                            </p>
+                          </div>
+                        );
+                      })()}
 
                       {/* Interactive Notes & Bookmarks Grid */}
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2310,40 +2499,17 @@ export default function App() {
                                 className="flex-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-xs px-3 py-2 rounded-lg text-slate-800 dark:text-zinc-50 focus:outline-none"
                               />
                               <button
-                                onClick={handleAddBookmark}
+                                onClick={() => handleAddBookmark()}
                                 className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs px-3 py-2 rounded-lg transition flex items-center gap-1 shrink-0"
                               >
                                 <Plus className="w-3.5 h-3.5" />
                                 Bookmark
                               </button>
                             </div>
-                            {(() => {
-                              const studyLogs = Storage.getStudyLogs();
-                              const todayStr = new Date().toLocaleDateString("en-CA");
-                              const todaySeconds = studyLogs
-                                .filter((l) => l.date === todayStr)
-                                .reduce((sum, l) => sum + l.secondsStudied, 0);
-                              const todayMins = Math.round(todaySeconds / 60);
-                              const remaining = Math.max(0, 60 - todayMins);
-
-                              if (remaining > 0) {
-                                return (
-                                  <div className="mt-2 text-[10px] text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1 bg-amber-50/80 dark:bg-amber-950/20 px-2.5 py-1.5 rounded-lg border border-amber-100 dark:border-amber-900/30">
-                                    <span>⚠️ Study {remaining} more mins today to unlock bookmarks.</span>
-                                  </div>
-                                );
-                              } else {
-                                return (
-                                  <div className="mt-2 text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1 bg-emerald-50/80 dark:bg-emerald-950/20 px-2.5 py-1.5 rounded-lg border border-emerald-100 dark:border-emerald-900/30">
-                                    <span>✅ Daily goal met! Bookmark creation is fully unlocked.</span>
-                                  </div>
-                                );
-                              }
-                            })()}
                           </div>
 
                           {/* Bookmarks list scrollable */}
-                          <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2">
+                          <div className="flex-1 overflow-y-auto  p-3 space-y-2">
                             {activeBookmarks.length === 0 ? (
                               <div className="h-full flex flex-col items-center justify-center text-center">
                                 <Bookmark className="w-8 h-8 text-slate-200 dark:text-zinc-800" />
@@ -2427,7 +2593,7 @@ export default function App() {
                           </div>
 
                           {/* Actual Lecture cards list */}
-                          <div className="space-y-3 max-h-[700px] overflow-y-auto custom-scrollbar pr-1">
+                          <div className="space-y-3 max-h-[700px] overflow-y-auto  pr-1">
                             {activeSession?.type === "playlist" ? (
                               playlists.find(p => p.id === activeSession.id)?.videos.map((v, idx) => (
                                 <div
@@ -2437,7 +2603,8 @@ export default function App() {
                                 >
                                   <div className="relative w-24 aspect-video overflow-hidden rounded-xl bg-slate-100 shrink-0">
                                     <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
-                                    <span className="absolute bottom-1 right-1 text-[9px] bg-black/85 px-1 py-0.2 rounded font-bold text-white">
+                                    <span className={`absolute bottom-1 right-1 text-[9px] px-1 py-0.2 rounded font-bold text-white flex items-center gap-1 ${v.duration === "LIVE" ? "bg-red-600 animate-pulse" : "bg-black/85"}`}>
+                                      {v.duration === "LIVE" && <span className="w-1 h-1 rounded-full bg-white shrink-0 animate-ping" />}
                                       {v.duration}
                                     </span>
                                   </div>
@@ -2450,14 +2617,21 @@ export default function App() {
                                     </div>
                                     
                                     {/* Progress bar info */}
-                                    <div className="flex items-center gap-2 mt-2">
-                                      <div className="flex-1 bg-slate-200 dark:bg-zinc-800 h-1 rounded-full overflow-hidden">
-                                        <div style={{ width: `${v.progress}%` }} className={`h-full ${v.completed ? "bg-emerald-500" : "bg-blue-500"}`} />
+                                    {v.duration === "LIVE" ? (
+                                      <div className="text-[9px] font-bold text-red-500 flex items-center gap-1 mt-1.5 uppercase tracking-wide">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping mr-0.5" />
+                                        On-Air Live
                                       </div>
-                                      <span className="text-[9px] font-semibold text-slate-500 dark:text-zinc-400">
-                                        {v.completed ? "Done" : `${v.progress}%`}
-                                      </span>
-                                    </div>
+                                    ) : (
+                                      <div className="flex items-center gap-2 mt-2">
+                                        <div className="flex-1 bg-slate-200 dark:bg-zinc-800 h-1 rounded-full overflow-hidden">
+                                          <div style={{ width: `${v.progress}%` }} className={`h-full ${v.completed ? "bg-emerald-500" : "bg-blue-500"}`} />
+                                        </div>
+                                        <span className="text-[9px] font-semibold text-slate-500 dark:text-zinc-400">
+                                          {v.completed ? "Done" : `${v.progress}%`}
+                                        </span>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               ))
@@ -2512,91 +2686,111 @@ export default function App() {
                       </p>
                     </div>
                   ) : (
-                    <div className="space-y-4">
-                      {playlists.map((p) => (
-                        <div 
-                          key={p.id}
-                          className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-850 rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm"
+                    <>
+                      <div className="bg-slate-100 dark:bg-zinc-800 p-1 rounded-2xl flex items-center gap-1 self-start w-max">
+                        <button
+                          onClick={() => setHistoryFilter("all")}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition ${historyFilter === "all" ? "bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-50 shadow-sm" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-300"}`}
                         >
-                          <div className="flex items-start gap-4 flex-1">
-                            <img src={p.thumbnail} className="w-24 md:w-28 aspect-video object-cover rounded-xl border border-slate-150 shrink-0" alt="" />
-                            <div className="space-y-1">
-                              <span className="text-[10px] bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 font-bold px-2 py-0.5 rounded-lg uppercase tracking-wider">PLAYLIST MODULE</span>
-                              <h3 className="font-bold text-sm text-slate-900 dark:text-zinc-50">{p.title}</h3>
-                              <p className="text-xs text-slate-400 dark:text-zinc-500">{p.channelName} • {p.totalVideos} Videos</p>
-                              <div className="flex items-center gap-2 mt-2">
-                                <div className="w-28 bg-slate-100 dark:bg-zinc-850 h-1.5 rounded-full overflow-hidden">
-                                  <div style={{ width: `${p.progress}%` }} className="bg-blue-600 h-full rounded-full" />
-                                </div>
-                                <span className="text-[10px] text-slate-500 dark:text-zinc-400">{p.progress}% done</span>
+                          All
+                        </button>
+                        <button
+                          onClick={() => setHistoryFilter("playlist")}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition ${historyFilter === "playlist" ? "bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-50 shadow-sm" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-300"}`}
+                        >
+                          Playlists
+                        </button>
+                        <button
+                          onClick={() => setHistoryFilter("video")}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition ${historyFilter === "video" ? "bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-50 shadow-sm" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-300"}`}
+                        >
+                          Single Lectures
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {(historyFilter === "all" || historyFilter === "playlist") && playlists.map((p) => (
+                          <div 
+                            key={p.id} 
+                            onClick={() => resumeLearningSession(p.id, "playlist")}
+                            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
+                          >
+                            <div>
+                              <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
+                                <img src={p.thumbnail} className="w-full h-full object-cover" alt={p.title} />
+                                <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white flex items-center gap-1">
+                                  Playlist ({p.totalVideos} videos)
+                                </span>
                               </div>
+                              <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
+                                {p.title}
+                              </h3>
+                              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{p.channelName}</p>
+                            </div>
+                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <CheckCircle className="w-3.5 h-3.5 text-blue-500" />
+                                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">{p.progress}% done</span>
+                              </div>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const list = playlists.filter(x => x.id !== p.id);
+                                  Storage.savePlaylists(list);
+                                  setPlaylists(list);
+                                }}
+                                className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition"
+                                title="Remove from history"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </div>
+                        ))}
 
-                          <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
-                            <button
-                              onClick={() => resumeLearningSession(p.id, "playlist")}
-                              className="bg-slate-950 hover:bg-slate-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-white dark:text-zinc-950 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1 transition"
-                            >
-                              <Play className="w-3.5 h-3.5 fill-current" />
-                              Resume Playlist
-                            </button>
-                            <button
-                              onClick={() => {
-                                const list = playlists.filter(x => x.id !== p.id);
-                                Storage.savePlaylists(list);
-                                setPlaylists(list);
-                              }}
-                              className="p-2.5 hover:bg-red-50 dark:hover:bg-red-950/20 text-slate-400 hover:text-red-500 rounded-xl transition"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-
-                      {singleVideos.map((v) => (
-                        <div 
-                          key={v.id}
-                          className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-850 rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm"
-                        >
-                          <div className="flex items-start gap-4 flex-1">
-                            <img src={v.thumbnail} className="w-24 md:w-28 aspect-video object-cover rounded-xl border border-slate-150 shrink-0" alt="" />
-                            <div className="space-y-1">
-                              <span className="text-[10px] bg-slate-50 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 font-bold px-2 py-0.5 rounded-lg uppercase tracking-wider">SINGLE LECTURE</span>
-                              <h3 className="font-bold text-sm text-slate-900 dark:text-zinc-50">{v.title}</h3>
-                              <p className="text-xs text-slate-400 dark:text-zinc-500">{v.channelName} • Duration: {v.duration}</p>
-                              <div className="flex items-center gap-2 mt-2">
-                                <div className="w-28 bg-slate-100 dark:bg-zinc-850 h-1.5 rounded-full overflow-hidden">
-                                  <div style={{ width: `${v.progress}%` }} className="bg-emerald-500 h-full rounded-full" />
-                                </div>
-                                <span className="text-[10px] text-slate-500 dark:text-zinc-400">{v.progress}% watched</span>
+                        {(historyFilter === "all" || historyFilter === "video") && singleVideos.map((v) => (
+                          <div 
+                            key={v.id} 
+                            onClick={() => resumeLearningSession(v.id, "video")}
+                            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
+                          >
+                            <div>
+                              <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
+                                <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
+                                <span className={`absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white flex items-center gap-1 ${v.duration === "LIVE" ? "bg-red-600 animate-pulse" : "bg-black/80"}`}>
+                                  {v.duration === "LIVE" && <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 animate-ping" />}
+                                  {v.duration}
+                                </span>
                               </div>
+                              <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
+                                {v.title}
+                              </h3>
+                              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{v.channelName}</p>
+                            </div>
+                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <CheckCircle className={`w-3.5 h-3.5 ${v.completed ? "text-emerald-500" : "text-slate-400"}`} />
+                                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">
+                                  {v.duration === "LIVE" ? "Live Stream" : `${v.progress}% watched`}
+                                </span>
+                              </div>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const list = singleVideos.filter(x => x.id !== v.id);
+                                  Storage.saveSingleVideos(list);
+                                  setSingleVideos(list);
+                                }}
+                                className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition"
+                                title="Remove from history"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </div>
-
-                          <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
-                            <button
-                              onClick={() => resumeLearningSession(v.id, "video")}
-                              className="bg-slate-950 hover:bg-slate-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-white dark:text-zinc-950 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1 transition"
-                            >
-                              <Play className="w-3.5 h-3.5 fill-current" />
-                              Resume Video
-                            </button>
-                            <button
-                              onClick={() => {
-                                const list = singleVideos.filter(x => x.id !== v.id);
-                                Storage.saveSingleVideos(list);
-                                setSingleVideos(list);
-                              }}
-                              className="p-2.5 hover:bg-red-50 dark:hover:bg-red-950/20 text-slate-400 hover:text-red-500 rounded-xl transition"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               )}

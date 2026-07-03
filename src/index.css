@@ -9,28 +9,44 @@
 /* Enable class-based dark mode selector in Tailwind CSS v4 */
 @variant dark (&:where(.dark, .dark *));
 
-/* Custom minimal scrollbar style for lecture queue and lists */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+/* Minimal, smooth scrollbar for the entire site */
+html {
+  scroll-behavior: smooth;
 }
 
-.custom-scrollbar::-webkit-scrollbar-track {
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(156, 163, 175, 0.35);
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
   border-radius: 9999px;
 }
 
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(156, 163, 175, 0.55);
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
 }
 
-.custom-scrollbar {
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(82, 82, 91, 0.5);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(82, 82, 91, 0.8);
+}
+
+* {
   scrollbar-width: thin;
-  scrollbar-color: rgba(156, 163, 175, 0.35) transparent;
+  scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+}
+
+.dark * {
+  scrollbar-color: rgba(82, 82, 91, 0.5) transparent;
 }
 
 /* Absolute coverage to make sure the dynamically generated YouTube iframe perfectly fits the responsive aspect-video window */
