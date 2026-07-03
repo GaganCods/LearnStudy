@@ -106,6 +106,7 @@ export default function App() {
   // Refs
   const playerRef = useRef<any>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
+  const mainScrollRef = useRef<HTMLElement>(null);
 
   // Sync active lecture title to Pomodoro logs
   const currentPlaylist = useMemo(() => {
@@ -114,6 +115,15 @@ export default function App() {
     }
     return null;
   }, [activeSession, playlists]);
+
+  // Scroll to top when switching tabs
+  useEffect(() => {
+    if (mainScrollRef.current) {
+      mainScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [activeTab, searchQuery]);
 
   useEffect(() => {
     if (activeVideoId && activeVideoTitle) {
@@ -1813,7 +1823,7 @@ export default function App() {
         </aside>
 
         {/* 3. Main Workspace Container */}
-        <main className="flex-1 overflow-y-auto px-4 py-6 md:p-8">
+        <main ref={mainScrollRef} className="flex-1 overflow-y-auto px-4 py-6 md:p-8">
           
           {/* SEARCH RESULTS TAB OVERRIDE */}
           {searchQuery ? (
@@ -2207,8 +2217,7 @@ export default function App() {
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
                                 <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
-                                <span className={`absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white flex items-center gap-1 ${v.duration === "LIVE" ? "bg-red-600 animate-pulse" : "bg-black/80"}`}>
-                                  {v.duration === "LIVE" && <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 animate-ping" />}
+                                <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
                                   {v.duration}
                                 </span>
                               </div>
@@ -2221,7 +2230,7 @@ export default function App() {
                               <div className="flex items-center gap-1.5">
                                 <CheckCircle className={`w-3.5 h-3.5 ${v.completed ? "text-emerald-500" : "text-slate-400"}`} />
                                 <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">
-                                  {v.duration === "LIVE" ? "Live Stream" : `${v.progress}% watched`}
+                                  {v.progress}% watched
                                 </span>
                               </div>
                               <button 
@@ -2757,8 +2766,7 @@ export default function App() {
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
                                 <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
-                                <span className={`absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white flex items-center gap-1 ${v.duration === "LIVE" ? "bg-red-600 animate-pulse" : "bg-black/80"}`}>
-                                  {v.duration === "LIVE" && <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 animate-ping" />}
+                                <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
                                   {v.duration}
                                 </span>
                               </div>
@@ -2771,7 +2779,7 @@ export default function App() {
                               <div className="flex items-center gap-1.5">
                                 <CheckCircle className={`w-3.5 h-3.5 ${v.completed ? "text-emerald-500" : "text-slate-400"}`} />
                                 <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">
-                                  {v.duration === "LIVE" ? "Live Stream" : `${v.progress}% watched`}
+                                  {v.progress}% watched
                                 </span>
                               </div>
                               <button 
