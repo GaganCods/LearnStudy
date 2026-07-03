@@ -606,7 +606,7 @@ export default function App() {
             if (!isLiveVideo) {
               video.progress = percent;
               video.lastWatchedPosition = currentTime;
-              if (video.duration === "0:00" || video.duration === "10:00" || !video.duration) {
+              if (video.duration === "0:00" || video.duration === "10:00" || video.duration === "LIVE" || !video.duration) {
                 video.duration = formattedDur;
               }
               if (isCompleted) {
@@ -614,7 +614,6 @@ export default function App() {
               }
             } else {
               video.progress = 0;
-              video.duration = "LIVE";
               video.lastWatchedPosition = currentTime;
             }
           }
@@ -635,7 +634,7 @@ export default function App() {
             video.progress = percent;
             video.lastWatchedPosition = currentTime;
             video.lastWatchedAt = nowStr;
-            if (video.duration === "0:00" || video.duration === "10:00" || !video.duration) {
+            if (video.duration === "0:00" || video.duration === "10:00" || video.duration === "LIVE" || !video.duration) {
               video.duration = formattedDur;
             }
             if (isCompleted) {
@@ -643,7 +642,6 @@ export default function App() {
             }
           } else {
             video.progress = 0;
-            video.duration = "LIVE";
             video.lastWatchedPosition = currentTime;
             video.lastWatchedAt = nowStr;
           }
@@ -1887,14 +1885,7 @@ export default function App() {
                             <div className="text-xs text-slate-400 dark:text-zinc-500 mt-1 flex items-center gap-1.5 flex-wrap">
                               <span>{v.channelName}</span>
                               <span>•</span>
-                              {v.duration === "LIVE" ? (
-                                <span className="text-red-600 dark:text-red-400 font-extrabold flex items-center gap-1 animate-pulse">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-red-600 dark:bg-red-400 animate-ping" />
-                                  LIVE
-                                </span>
-                              ) : (
-                                <span>{v.duration}</span>
-                              )}
+                              <span>{v.duration !== "LIVE" ? v.duration : ""}</span>
                             </div>
                           </div>
                         ))}
@@ -2217,9 +2208,11 @@ export default function App() {
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
                                 <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
-                                <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
-                                  {v.duration}
-                                </span>
+                                {v.duration !== "LIVE" && (
+                                  <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
+                                    {v.duration}
+                                  </span>
+                                )}
                               </div>
                               <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
                                 {v.title}
@@ -2462,12 +2455,6 @@ export default function App() {
 
                         return (
                           <div className="bg-slate-50 dark:bg-zinc-900/45 border border-slate-200/60 dark:border-zinc-800/60 rounded-2xl p-4 shadow-sm select-none relative overflow-hidden">
-                            {isLive && (
-                              <div className="absolute top-0 right-0 bg-red-600 text-white text-[9px] font-black px-3 py-1.5 rounded-bl-xl uppercase tracking-widest flex items-center gap-1.5 animate-pulse shadow-sm">
-                                <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 animate-ping" />
-                                On-Air Live
-                              </div>
-                            )}
                             <h1 className="text-base sm:text-lg font-bold text-slate-950 dark:text-zinc-50 leading-snug pr-20" title={activeVideoTitle}>
                               {activeVideoTitle}
                             </h1>
@@ -2612,9 +2599,8 @@ export default function App() {
                                 >
                                   <div className="relative w-24 aspect-video overflow-hidden rounded-xl bg-slate-100 shrink-0">
                                     <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
-                                    <span className={`absolute bottom-1 right-1 text-[9px] px-1 py-0.2 rounded font-bold text-white flex items-center gap-1 ${v.duration === "LIVE" ? "bg-red-600 animate-pulse" : "bg-black/85"}`}>
-                                      {v.duration === "LIVE" && <span className="w-1 h-1 rounded-full bg-white shrink-0 animate-ping" />}
-                                      {v.duration}
+                                    <span className="absolute bottom-1 right-1 text-[9px] px-1 py-0.2 rounded font-bold text-white bg-black/85">
+                                      {v.duration !== "LIVE" ? v.duration : ""}
                                     </span>
                                   </div>
                                   <div className="flex-1 space-y-1">
@@ -2625,13 +2611,6 @@ export default function App() {
                                       {v.title}
                                     </div>
                                     
-                                    {/* Progress bar info */}
-                                    {v.duration === "LIVE" ? (
-                                      <div className="text-[9px] font-bold text-red-500 flex items-center gap-1 mt-1.5 uppercase tracking-wide">
-                                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping mr-0.5" />
-                                        On-Air Live
-                                      </div>
-                                    ) : (
                                       <div className="flex items-center gap-2 mt-2">
                                         <div className="flex-1 bg-slate-200 dark:bg-zinc-800 h-1 rounded-full overflow-hidden">
                                           <div style={{ width: `${v.progress}%` }} className={`h-full ${v.completed ? "bg-emerald-500" : "bg-blue-500"}`} />
@@ -2640,7 +2619,6 @@ export default function App() {
                                           {v.completed ? "Done" : `${v.progress}%`}
                                         </span>
                                       </div>
-                                    )}
                                   </div>
                                 </div>
                               ))
@@ -2766,9 +2744,11 @@ export default function App() {
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
                                 <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
-                                <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
-                                  {v.duration}
-                                </span>
+                                {v.duration !== "LIVE" && (
+                                  <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
+                                    {v.duration}
+                                  </span>
+                                )}
                               </div>
                               <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
                                 {v.title}
@@ -2899,9 +2879,11 @@ export default function App() {
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
                                 <img src={v.thumbnail} className="w-full h-full object-cover" alt="" />
-                                <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white">
-                                  {v.duration}
-                                </span>
+                                {v.duration !== "LIVE" && (
+                                  <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white">
+                                    {v.duration}
+                                  </span>
+                                )}
                               </div>
                               <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
                                 {v.title}
