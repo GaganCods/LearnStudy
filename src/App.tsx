@@ -50,6 +50,7 @@ export default function App() {
   const [historyFilter, setHistoryFilter] = useState<"all" | "playlist" | "video">("all");
   const [settings, setSettings] = useState<StudySettings>(Storage.getSettings());
   const [searchQuery, setSearchQuery] = useState("");
+  const [playlistVideoSearchQuery, setPlaylistVideoSearchQuery] = useState("");
   const [pendingSeekSeconds, setPendingSeekSeconds] = useState<number | null>(null);
 
   // Playlists and Single Video state from storage
@@ -107,6 +108,23 @@ export default function App() {
   const playerRef = useRef<any>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const mainScrollRef = useRef<HTMLElement>(null);
+
+  // Refs to keep track of latest state inside player event listeners (avoids stale closures)
+  const activeVideoIdRef = useRef<string>("");
+  const activeSessionRef = useRef<any>(null);
+  const playlistsRef = useRef<any[]>([]);
+
+  useEffect(() => {
+    activeVideoIdRef.current = activeVideoId;
+  }, [activeVideoId]);
+
+  useEffect(() => {
+    activeSessionRef.current = activeSession;
+  }, [activeSession]);
+
+  useEffect(() => {
+    playlistsRef.current = playlists;
+  }, [playlists]);
 
   // Sync active lecture title to Pomodoro logs
   const currentPlaylist = useMemo(() => {
@@ -346,6 +364,56 @@ export default function App() {
               }
             }
 
+            // Extract playlist metadata immediately if available
+            if (activeSession?.type === "playlist") {
+              try {
+                const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
+                if (currentPlaylist && currentPlaylist.videos.length === 0) {
+                  if (typeof event.target.getPlaylist === "function") {
+                    let attempts = 0;
+                    const intervalId = setInterval(() => {
+                      if (isCancelled) {
+                        clearInterval(intervalId);
+                        return;
+                      }
+                      try {
+                        attempts++;
+                        const videoIds = event.target.getPlaylist() || [];
+                        const updatedPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
+                        
+                        if (videoIds.length > 0 && updatedPlaylist && updatedPlaylist.videos.length === 0) {
+                          clearInterval(intervalId);
+                          updatedPlaylist.videos = videoIds.map((vid: string, index: number) => ({
+                            id: vid,
+                            title: `Video ${index + 1}`,
+                            channelName: updatedPlaylist.channelName || "Unknown Channel",
+                            duration: "10:00",
+                            thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                            progress: 0,
+                            lastWatchedPosition: 0,
+                            completed: false
+                          }));
+                          updatedPlaylist.totalVideos = videoIds.length;
+                          Storage.savePlaylist(updatedPlaylist);
+                          setPlaylists(Storage.getPlaylists());
+
+                          // Also kickstart activeVideoId if it is empty
+                          if (!activeVideoIdRef.current) {
+                            setActiveVideoId(videoIds[0]);
+                            setActiveVideoTitle(`Video 1`);
+                          }
+                        } else if (attempts >= 20 || (updatedPlaylist && updatedPlaylist.videos.length > 0)) {
+                          clearInterval(intervalId);
+                        }
+                      } catch (e) {
+                        if (attempts >= 20) clearInterval(intervalId);
+                      }
+                    }, 500);
+                  }
+                }
+              } catch (err) {}
+            }
+
             // Record session progress every 5s
             progressInterval = setInterval(() => {
               if (isCancelled) return;
@@ -396,6 +464,18 @@ export default function App() {
                       const vId = videoData.video_id;
                       const vTitle = videoData.title;
                       const vAuthor = videoData.author;
+                      if (currentPlaylist.title === "YouTube Playlist" && vTitle) {
+                         currentPlaylist.title = `Playlist: ${vTitle} & more`;
+                         modified = true;
+                      }
+                      if (currentPlaylist.channelName === "Unknown Channel" && vAuthor) {
+                         currentPlaylist.channelName = vAuthor;
+                         modified = true;
+                      }
+                      if (!currentPlaylist.thumbnail) {
+                         currentPlaylist.thumbnail = `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
+                         modified = true;
+                      }
                       
                       const videoIndex = currentPlaylist.videos.findIndex(v => v.id === vId);
                       if (videoIndex >= 0) {
@@ -409,10 +489,8 @@ export default function App() {
                         }
                       }
 
-                      // We do NOT call playVideoInSession here because that would trigger a re-render
-                      // and destroy the player since activeVideoId is in the dependency array.
-                      // Instead, we just update the states so the UI reflects the current video.
-                      if (activeVideoId !== vId) {
+                      // Use activeVideoIdRef to prevent stale closure comparison
+                      if (activeVideoIdRef.current !== vId) {
                         setActiveVideoId(vId);
                         setActiveVideoTitle(vTitle || currentPlaylist.videos[videoIndex]?.title || "YouTube Video");
                         setActiveVideoChannel(vAuthor || currentPlaylist.videos[videoIndex]?.channelName || "Unknown Channel");
@@ -832,20 +910,58 @@ export default function App() {
 
       if (type === "playlist") {
         let playlist = Storage.getPlaylists().find(p => p.id === id);
-        if (!playlist) {
-          playlist = {
-            id: id,
-            type: "playlist",
-            title: "YouTube Playlist",
-            channelName: "Unknown Channel",
-            totalVideos: 0,
-            videos: [],
-            thumbnail: "",
-            progress: 0,
-            lastWatchedAt: new Date().toISOString()
-          };
+        
+        if (!playlist || playlist.videos.length === 0) {
+          let fetchedVideos: any[] = [];
+          let channelName = playlist?.channelName || "Unknown Channel";
+          let playlistTitle = playlist?.title || "YouTube Playlist";
+          let totalVideos = playlist?.totalVideos || 0;
+          let thumbnail = playlist?.thumbnail || "";
+
+          try {
+            const apiRes = await fetch(`/api/playlist-info?id=${id}`);
+            if (apiRes.ok) {
+              const data = await apiRes.json();
+              if (data && data.videos && data.videos.length > 0) {
+                fetchedVideos = data.videos;
+                totalVideos = data.videos.length;
+                if (data.videos[0].channelName) {
+                  channelName = data.videos[0].channelName;
+                }
+                thumbnail = data.videos[0].thumbnail || `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg`;
+                playlistTitle = `Playlist: ${data.videos[0].title} & more`;
+              }
+            }
+          } catch (fetchErr) {
+            console.error("Failed fetching playlist-info from server", fetchErr);
+          }
+
+          if (!playlist) {
+            playlist = {
+              id: id,
+              type: "playlist",
+              title: playlistTitle,
+              channelName: channelName,
+              totalVideos: totalVideos,
+              videos: fetchedVideos,
+              thumbnail: thumbnail,
+              progress: 0,
+              lastWatchedAt: new Date().toISOString()
+            };
+          } else {
+            playlist.videos = fetchedVideos;
+            playlist.totalVideos = totalVideos;
+            playlist.channelName = channelName;
+            if (thumbnail) {
+              playlist.thumbnail = thumbnail;
+            }
+            if (playlistTitle && playlist.title === "YouTube Playlist") {
+              playlist.title = playlistTitle;
+            }
+          }
           Storage.savePlaylist(playlist);
         }
+
         setPlaylists(Storage.getPlaylists());
         setActiveSession({ id: playlist.id, type: "playlist" });
         
@@ -855,7 +971,19 @@ export default function App() {
           setActiveVideoTitle(firstVid.title);
           setActiveVideoChannel(firstVid.channelName);
         } else {
-          setActiveVideoId(""); // Will be populated by the iframe player if possible
+          // If the URL has a video ID along with the list ID, use it to kickstart the player.
+          let initialVideoId = "";
+          try {
+            const parsedUrl = new URL(urlStr);
+            if (parsedUrl.searchParams.has("v")) {
+              initialVideoId = parsedUrl.searchParams.get("v")!;
+            }
+          } catch (e) {
+            const vMatch = urlStr.match(/[?&]v=([a-zA-Z0-9_-]+)/);
+            if (vMatch) initialVideoId = vMatch[1];
+          }
+
+          setActiveVideoId(initialVideoId); // Will be populated by the iframe player if possible
           setActiveVideoTitle("YouTube Playlist");
           setActiveVideoChannel("Unknown Channel");
         }
@@ -1735,9 +1863,9 @@ export default function App() {
               
               <button
                 onClick={() => { setActiveTab("study"); setSearchQuery(""); }}
-                disabled={!activeVideoId}
+                disabled={!activeVideoId && !activeSession}
                 className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-11 w-11 mx-auto" : "gap-3 px-3.5 py-2.5"} rounded-xl text-sm font-semibold transition ${
-                  !activeVideoId ? "opacity-50 cursor-not-allowed" : ""
+                  !activeVideoId && !activeSession ? "opacity-50 cursor-not-allowed" : ""
                 } ${
                   activeTab === "study" && !searchQuery
                     ? "bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400" 
@@ -1855,7 +1983,7 @@ export default function App() {
                             }}
                             className="bg-slate-50 dark:bg-zinc-950 border border-slate-200/60 dark:border-zinc-850 p-3.5 rounded-2xl cursor-pointer hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] hover:border-blue-500/30 dark:hover:border-blue-500/20 transition-all duration-250"
                           >
-                            <img src={p.thumbnail} className="w-full aspect-video object-cover rounded-xl mb-3" alt={p.title} />
+                            <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full aspect-video object-cover rounded-xl mb-3" alt={p.title} />
                             <div className="font-bold text-sm text-slate-900 dark:text-zinc-100 line-clamp-1">{p.title}</div>
                             <div className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{p.channelName} • {p.totalVideos} videos</div>
                           </div>
@@ -1880,7 +2008,7 @@ export default function App() {
                             }}
                             className="bg-slate-50 dark:bg-zinc-950 border border-slate-200/60 dark:border-zinc-850 p-3.5 rounded-2xl cursor-pointer hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] hover:border-emerald-500/30 dark:hover:border-emerald-500/20 transition-all duration-250"
                           >
-                            <img src={v.thumbnail} className="w-full aspect-video object-cover rounded-xl mb-3" alt={v.title} />
+                            <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full aspect-video object-cover rounded-xl mb-3" alt={v.title} />
                             <div className="font-bold text-sm text-slate-900 dark:text-zinc-100 line-clamp-1">{v.title}</div>
                             <div className="text-xs text-slate-400 dark:text-zinc-500 mt-1 flex items-center gap-1.5 flex-wrap">
                               <span>{v.channelName}</span>
@@ -2110,7 +2238,7 @@ export default function App() {
                       <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
                         <div className="flex flex-col sm:flex-row items-start gap-4 flex-1">
                           <div className="relative aspect-video w-full sm:w-56 overflow-hidden rounded-2xl border border-slate-200/60 dark:border-zinc-800 shadow-sm shrink-0">
-                            <img src={continueLearningItem.thumbnail} className="w-full h-full object-cover" alt={continueLearningItem.title} />
+                            <img src={continueLearningItem.thumbnail || (continueLearningItem.type === "playlist" ? "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60" : `https://i.ytimg.com/vi/${continueLearningItem.id}/hqdefault.jpg`)} className="w-full h-full object-cover" alt={continueLearningItem.title} />
                             <div className="absolute inset-0 bg-black/10 flex items-center justify-center">
                               <div className="bg-white/95 dark:bg-zinc-900/95 p-3 rounded-full shadow">
                                 <Play className="w-5 h-5 text-blue-600 fill-blue-600 dark:text-blue-400 dark:fill-blue-400" />
@@ -2174,7 +2302,7 @@ export default function App() {
                           >
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={p.thumbnail} className="w-full h-full object-cover" alt={p.title} />
+                                <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full h-full object-cover" alt={p.title} />
                                 <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white flex items-center gap-1">
                                   Playlist ({p.totalVideos} videos)
                                 </span>
@@ -2207,7 +2335,7 @@ export default function App() {
                           >
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
+                                <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt={v.title} />
                                 {v.duration !== "LIVE" && (
                                   <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
                                     {v.duration}
@@ -2242,7 +2370,7 @@ export default function App() {
               )}
 
               {/* STUDY PLAYER TAB */}
-              {activeTab === "study" && activeVideoId && (
+              {activeTab === "study" && (activeVideoId || activeSession) && (
                 <div className={`space-y-6 max-w-7xl mx-auto ${focusMode ? "pb-12" : ""}`}>
                   
                   {/* Focus Mode top bar */}
@@ -2588,17 +2716,38 @@ export default function App() {
                             </span>
                           </div>
 
+                          {/* Playlist search if applicable */}
+                          {activeSession?.type === "playlist" && (
+                            <div className="relative">
+                              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400 dark:text-zinc-500" />
+                              <input
+                                type="text"
+                                placeholder="Search lectures in this playlist..."
+                                value={playlistVideoSearchQuery}
+                                onChange={(e) => setPlaylistVideoSearchQuery(e.target.value)}
+                                className="w-full bg-slate-100 dark:bg-zinc-900 border border-transparent focus:border-slate-300 dark:focus:border-zinc-700 text-xs pl-9 pr-8 py-2.5 rounded-xl text-slate-800 dark:text-zinc-200 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none transition"
+                              />
+                              {playlistVideoSearchQuery && (
+                                <button onClick={() => setPlaylistVideoSearchQuery("")} className="absolute right-3 top-2.5 text-slate-400 dark:text-zinc-500">
+                                  <X className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          )}
+
                           {/* Actual Lecture cards list */}
                           <div className="space-y-3 max-h-[700px] overflow-y-auto  pr-1">
                             {activeSession?.type === "playlist" ? (
-                              playlists.find(p => p.id === activeSession.id)?.videos.map((v, idx) => (
+                              (playlists.find(p => p.id === activeSession.id)?.videos || [])
+                                .filter(v => playlistVideoSearchQuery ? v.title.toLowerCase().includes(playlistVideoSearchQuery.toLowerCase()) : true)
+                                .map((v, idx) => (
                                 <div
                                   key={v.id}
                                   onClick={() => playVideoInSession(v.id, v.title, v.channelName)}
                                   className={`group p-3 rounded-2xl cursor-pointer border transition flex gap-3 ${v.id === activeVideoId ? "bg-blue-50/50 dark:bg-blue-950/20 border-blue-500/50 dark:border-blue-400/40" : "bg-slate-50/50 hover:bg-slate-100/50 dark:bg-zinc-950/30 dark:hover:bg-zinc-950/60 border-slate-200/50 dark:border-zinc-850"}`}
                                 >
                                   <div className="relative w-24 aspect-video overflow-hidden rounded-xl bg-slate-100 shrink-0">
-                                    <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
+                                    <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt={v.title} />
                                     <span className="absolute bottom-1 right-1 text-[9px] px-1 py-0.2 rounded font-bold text-white bg-black/85">
                                       {v.duration !== "LIVE" ? v.duration : ""}
                                     </span>
@@ -2704,7 +2853,7 @@ export default function App() {
                           >
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={p.thumbnail} className="w-full h-full object-cover" alt={p.title} />
+                                <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full h-full object-cover" alt={p.title} />
                                 <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white flex items-center gap-1">
                                   Playlist ({p.totalVideos} videos)
                                 </span>
@@ -2743,7 +2892,7 @@ export default function App() {
                           >
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={v.thumbnail} className="w-full h-full object-cover" alt={v.title} />
+                                <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt={v.title} />
                                 {v.duration !== "LIVE" && (
                                   <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
                                     {v.duration}
@@ -2836,7 +2985,7 @@ export default function App() {
                           >
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={p.thumbnail} className="w-full h-full object-cover" alt="" />
+                                <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full h-full object-cover" alt="" />
                                 <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white">
                                   Playlist
                                 </span>
@@ -2878,7 +3027,7 @@ export default function App() {
                           >
                             <div>
                               <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={v.thumbnail} className="w-full h-full object-cover" alt="" />
+                                <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt="" />
                                 {v.duration !== "LIVE" && (
                                   <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white">
                                     {v.duration}
@@ -3100,8 +3249,8 @@ export default function App() {
 
           <button
             onClick={() => { setActiveTab("study"); setSearchQuery(""); }}
-            disabled={!activeVideoId}
-            className={`flex flex-col items-center gap-1 transition ${!activeVideoId ? "opacity-40 cursor-not-allowed" : ""} ${activeTab === "study" && !searchQuery ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-zinc-500"}`}
+            disabled={!activeVideoId && !activeSession}
+            className={`flex flex-col items-center gap-1 transition ${!activeVideoId && !activeSession ? "opacity-40 cursor-not-allowed" : ""} ${activeTab === "study" && !searchQuery ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-zinc-500"}`}
           >
             <Tv className="w-5 h-5" />
             <span className="text-[10px] font-bold">Study</span>

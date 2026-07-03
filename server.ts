@@ -305,7 +305,42 @@ async function fetchPlaylistFromRss(playlistId: string): Promise<any[] | null> {
   }
 }
 
-// The /api/youtube-info endpoint has been removed to avoid dependency on rate-limited proxies and APIs.
+// Playlist info API using RSS
+app.get("/api/playlist-info", async (req, res) => {
+  const { id } = req.query;
+  if (!id || typeof id !== "string") {
+    return res.status(400).json({ error: "Missing playlist ID" });
+  }
+  
+  try {
+    let videos = await fetchPlaylistFromRss(id);
+    if (videos && videos.length > 0) {
+      return res.json({ videos });
+    }
+    
+    console.log(`RSS failed or empty, trying fallback playlist HTML fetch for ID: ${id}`);
+    const playlistUrl = `https://www.youtube.com/playlist?list=${id}`;
+    const response = await fetchWithTimeout(playlistUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
+      }
+    });
+    if (response.ok) {
+      const html = await response.text();
+      const extracted = extractPlaylistVideosFromHtml(html);
+      if (extracted && extracted.length > 0) {
+        console.log(`Successfully extracted ${extracted.length} videos from fallback HTML scraping`);
+        return res.json({ videos: extracted });
+      }
+    }
+    
+    return res.status(404).json({ error: "Playlist not found, empty, or private" });
+  } catch (e) {
+    console.error("Failed to fetch playlist-info:", e);
+    return res.status(500).json({ error: "Failed to fetch playlist" });
+  }
+});
 
 // Serve static assets in production
 async function setupServer() {
