@@ -854,6 +854,15 @@ export default function App() {
     setActiveVideoChannel(channelName);
   };
 
+  const scrollToWorkspace = () => {
+    setTimeout(() => {
+      const element = document.getElementById("lecture-workspace");
+      if (element) {
+        element.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 100);
+  };
+
   // URL input submission
   const handleUrlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -989,30 +998,53 @@ export default function App() {
         }
       } else {
         let video = Storage.getSingleVideos().find(v => v.id === id);
-        if (!video) {
-          video = {
-            id: id,
-            type: "video",
-            title: "YouTube Video",
-            channelName: "Unknown Channel",
-            duration: "LIVE",
-            thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-            progress: 0,
-            lastWatchedAt: new Date().toISOString(),
-            completed: false
-          };
-          Storage.saveSingleVideo(video);
-        }
-        setSingleVideos(Storage.getSingleVideos());
-        setActiveSession({ id: video.id, type: "video" });
         
-        setActiveVideoId(video.id);
-        setActiveVideoTitle(video.title);
-        setActiveVideoChannel(video.channelName);
+        let initialTitle = video?.title || "YouTube Video";
+        let initialChannelName = video?.channelName || "Unknown Channel";
+        let initialDuration = video?.duration || "LIVE";
+        let initialThumbnail = video?.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+        if (!video || video.title === "YouTube Video" || video.channelName === "Unknown Channel" || video.duration === "LIVE") {
+          try {
+            const apiRes = await fetch(`/api/video-info?id=${id}`);
+            if (apiRes.ok) {
+              const data = await apiRes.json();
+              if (data && data.title) {
+                initialTitle = data.title;
+                initialChannelName = data.channelName || "Unknown Channel";
+                initialDuration = data.duration || "10:00";
+                initialThumbnail = data.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+              }
+            }
+          } catch (fetchErr) {
+            console.error("Failed fetching video-info from server", fetchErr);
+          }
+        }
+
+        const videoToSave: SingleVideoInfo = {
+          id: id,
+          type: "video",
+          title: initialTitle,
+          channelName: initialChannelName,
+          duration: initialDuration,
+          thumbnail: initialThumbnail,
+          progress: video?.progress || 0,
+          lastWatchedAt: new Date().toISOString(),
+          completed: video?.completed || false,
+          isFavorite: video?.isFavorite || false
+        };
+        Storage.saveSingleVideo(videoToSave);
+
+        setSingleVideos(Storage.getSingleVideos());
+        setActiveSession({ id: videoToSave.id, type: "video" });
+        
+        setActiveVideoId(videoToSave.id);
+        setActiveVideoTitle(videoToSave.title);
+        setActiveVideoChannel(videoToSave.channelName);
       }
 
+      scrollToWorkspace();
       setUrlInput("");
-      setActiveTab("study");
     } catch (err: any) {
       setErrorMessage(err.message || "An unexpected error occurred. Please verify your internet connection.");
     } finally {
@@ -1021,7 +1053,7 @@ export default function App() {
   };
 
   // Set active session from history/favorites click
-  const resumeLearningSession = (id: string, type: "playlist" | "video") => {
+  const resumeLearningSession = (id: string, type: "playlist" | "video", shouldSwitchTab = true) => {
     setActiveSession({ id, type });
     if (type === "playlist") {
       const playlist = Storage.getPlaylists().find(p => p.id === id);
@@ -1038,7 +1070,9 @@ export default function App() {
         playVideoInSession(video.id, video.title, video.channelName);
       }
     }
-    setActiveTab("study");
+    if (shouldSwitchTab) {
+      setActiveTab("study");
+    }
   };
 
   // Safe direct play helper for bookmarks, notes, or search items
@@ -2133,7 +2167,7 @@ export default function App() {
                             Analyzing...
                           </>
                         ) : (
-                          "Load Playlist"
+                          "Load Lectures"
                         )}
                       </button>
                     </form>
@@ -2148,6 +2182,227 @@ export default function App() {
                       </div>
                     )}
                   </div>
+
+                  {/* ACTIVE SESSION / SELECTED LECTURE PREVIEW SECTION */}
+                  {activeSession && (() => {
+                    const isPlaylist = activeSession.type === "playlist";
+                    const currentPlaylistObj = isPlaylist ? playlists.find(p => p.id === activeSession.id) : null;
+                    const currentVideoObj = !isPlaylist ? singleVideos.find(v => v.id === activeSession.id) : null;
+
+                    let title = isPlaylist ? (currentPlaylistObj?.title || "YouTube Playlist") : (currentVideoObj?.title || "YouTube Video");
+                    if (!isPlaylist && (title === "YouTube Video" || !currentVideoObj) && activeVideoTitle && activeVideoTitle !== "YouTube Video") {
+                      title = activeVideoTitle;
+                    }
+
+                    let channelName = isPlaylist ? (currentPlaylistObj?.channelName || "Unknown Channel") : (currentVideoObj?.channelName || "Unknown Channel");
+                    if (!isPlaylist && (channelName === "Unknown Channel" || !currentVideoObj) && activeVideoChannel && activeVideoChannel !== "Unknown Channel") {
+                      channelName = activeVideoChannel;
+                    }
+
+                    const thumbnail = isPlaylist 
+                      ? (currentPlaylistObj?.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60") 
+                      : (currentVideoObj?.thumbnail || `https://i.ytimg.com/vi/${activeSession.id}/hqdefault.jpg`);
+                    const progress = isPlaylist ? (currentPlaylistObj?.progress || 0) : (currentVideoObj?.progress || 0);
+                    const completed = isPlaylist ? (progress >= 95) : (currentVideoObj?.completed || false);
+                    const duration = isPlaylist ? "" : (currentVideoObj?.duration || "10:00");
+
+                    return (
+                      <div id="lecture-workspace" className="relative overflow-hidden bg-gradient-to-br from-white via-slate-50/40 to-blue-50/15 dark:from-zinc-900 dark:via-zinc-950/60 dark:to-blue-950/5 border border-slate-200/80 dark:border-zinc-800/80 rounded-3xl p-6 sm:p-7 md:p-8 shadow-xl backdrop-blur-md transition-all duration-300 hover:shadow-2xl hover:border-slate-300 dark:hover:border-zinc-750 group/preview before:absolute before:-top-40 before:-right-40 before:w-80 before:h-80 before:bg-blue-500/5 dark:before:bg-blue-400/5 before:rounded-full before:blur-3xl before:pointer-events-none">
+                        
+                        {/* Clear Selection Button */}
+                        <button 
+                          onClick={() => setActiveSession(null)}
+                          className="absolute top-5 right-5 p-2 rounded-full text-slate-400 hover:text-slate-600 dark:text-zinc-500 dark:hover:text-zinc-300 bg-slate-100/60 hover:bg-slate-200/80 dark:bg-zinc-800/50 dark:hover:bg-zinc-800 border border-slate-200/30 dark:border-zinc-700/30 transition-all duration-200 cursor-pointer z-10 shadow-sm"
+                          title="Clear Selection"
+                        >
+                          <X className="w-4.5 h-4.5" />
+                        </button>
+
+                        <div className="flex flex-col md:flex-row items-start md:items-center gap-6 md:gap-8">
+                          {/* Thumbnail Frame in Perfect 16:9 */}
+                          <div className="relative aspect-video w-full md:w-80 overflow-hidden rounded-2xl border border-slate-200/90 dark:border-zinc-800 shadow-md shrink-0 bg-slate-100 dark:bg-zinc-900 group-hover/preview:shadow-xl transition-all duration-300 ring-4 ring-slate-100/60 dark:ring-zinc-850/40">
+                            <img 
+                              src={thumbnail} 
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover/preview:scale-[1.03]" 
+                              alt={title} 
+                            />
+                            <div className="absolute inset-0 bg-black/20 flex items-center justify-center transition-opacity duration-300 group-hover/preview:bg-black/25">
+                              <div className="bg-white/95 dark:bg-zinc-900/95 p-3.5 rounded-full shadow-xl transform transition-transform duration-300 group-hover/preview:scale-110">
+                                <Play className="w-5 h-5 text-blue-600 fill-blue-600 dark:text-blue-400 dark:fill-blue-400" />
+                              </div>
+                            </div>
+                            {isPlaylist && currentPlaylistObj?.videos?.length && (
+                              <span className="absolute bottom-3 right-3 text-[10px] font-black tracking-wider uppercase px-2.5 py-1 rounded-lg text-white bg-black/85 backdrop-blur-sm border border-white/10">
+                                {currentPlaylistObj.videos.length} Lectures
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Details & CTA */}
+                          <div className="flex-1 space-y-4">
+                            <div className="space-y-3">
+                              {/* Pill Badge */}
+                              <div className="flex flex-wrap gap-2 items-center">
+                                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider border ${
+                                  isPlaylist 
+                                    ? "bg-indigo-50/80 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-900/30" 
+                                    : "bg-blue-50/80 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 border-blue-100 dark:border-blue-900/30"
+                                }`}>
+                                  {isPlaylist ? "📚 Playlist Workspace" : "🎥 Lecture Workspace"}
+                                </span>
+
+                                {completed && (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wide bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-900/20">
+                                    ✓ Completed
+                                  </span>
+                                )}
+                              </div>
+                              
+                              <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-zinc-50 leading-tight tracking-tight max-w-2xl">
+                                {title}
+                              </h2>
+                              
+                              <p className="text-sm text-slate-500 dark:text-zinc-400 font-semibold flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-zinc-600" />
+                                Creator: <span className="text-slate-700 dark:text-zinc-200 font-bold">{channelName}</span>
+                              </p>
+
+                              {/* Progress bar info */}
+                              {(isPlaylist || (currentVideoObj && currentVideoObj.progress > 0)) && (
+                                <div className="space-y-1.5 max-w-sm pt-1">
+                                  <div className="flex justify-between items-center text-xs">
+                                    <span className="text-slate-500 dark:text-zinc-400 font-medium">Overall Progress</span>
+                                    <span className="font-extrabold text-blue-600 dark:text-blue-400">{progress}%</span>
+                                  </div>
+                                  <div className="relative bg-slate-100 dark:bg-zinc-800 h-2.5 rounded-full w-full overflow-hidden">
+                                    <div 
+                                      style={{ width: `${progress}%` }} 
+                                      className="absolute top-0 left-0 bg-gradient-to-r from-blue-500 to-indigo-500 dark:from-blue-400 dark:to-indigo-400 h-full rounded-full transition-all duration-500 ease-out" 
+                                    />
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Single Video Extra Meta Badges */}
+                              {!isPlaylist && (
+                                <div className="flex flex-wrap items-center gap-2 mt-1.5 pt-1 text-xs">
+                                  {duration && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-zinc-800/80 text-slate-600 dark:text-zinc-400 font-semibold border border-slate-200/40 dark:border-zinc-700/30">
+                                      ⏱ {duration}
+                                    </span>
+                                  )}
+                                  {currentVideoObj && currentVideoObj.notesCount > 0 && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 font-semibold border border-amber-100/50 dark:border-amber-900/10">
+                                      📝 {currentVideoObj.notesCount} Notes
+                                    </span>
+                                  )}
+                                  {currentVideoObj && currentVideoObj.bookmarksCount > 0 && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-pink-50 dark:bg-pink-950/20 text-pink-700 dark:text-pink-400 font-semibold border border-pink-100/50 dark:border-pink-900/10">
+                                      🔖 {currentVideoObj.bookmarksCount} Bookmarks
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Start Study Button / Main Action */}
+                            <div className="pt-2">
+                              <button
+                                onClick={() => setActiveTab("study")}
+                                className="w-full sm:w-auto bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 bg-[size:200%_auto] hover:bg-[right_center] text-white font-extrabold text-sm px-10 py-4 rounded-2xl shadow-lg hover:shadow-indigo-500/20 hover:scale-[1.01] active:scale-[0.99] transition-all duration-300 flex items-center justify-center gap-2.5 cursor-pointer"
+                              >
+                                <Play className="w-4.5 h-4.5 fill-current animate-pulse" />
+                                Start Study
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* If it is a playlist, show its videos/lectures list below */}
+                        {isPlaylist && currentPlaylistObj?.videos && currentPlaylistObj.videos.length > 0 && (
+                          <div className="mt-7 pt-6 border-t border-slate-200/80 dark:border-zinc-800/80">
+                            <div className="flex items-center justify-between mb-4">
+                              <h3 className="text-sm font-extrabold text-slate-800 dark:text-zinc-200 flex items-center gap-2">
+                                <BookOpen className="w-4 h-4 text-blue-500" />
+                                Playlist Lectures 
+                                <span className="bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 text-xs px-2.5 py-0.5 rounded-full border border-slate-200/50 dark:border-zinc-700/50 font-bold ml-1.5">
+                                  {currentPlaylistObj.videos.length} total
+                                </span>
+                              </h3>
+                              
+                              <span className="text-[11px] text-slate-400 dark:text-zinc-500 font-medium">
+                                Scroll to view lectures
+                              </span>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5 max-h-72 overflow-y-auto pr-1.5 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+                              {currentPlaylistObj.videos.map((vid, idx) => {
+                                const isSelected = vid.id === activeVideoId;
+                                return (
+                                  <div
+                                    key={vid.id}
+                                    onClick={() => {
+                                      setActiveVideoId(vid.id);
+                                      setActiveVideoTitle(vid.title);
+                                      setActiveVideoChannel(vid.channelName);
+                                    }}
+                                    className={`group p-3 rounded-2xl border transition-all duration-200 cursor-pointer flex gap-3 text-left items-start relative ${
+                                      isSelected
+                                        ? "bg-gradient-to-r from-blue-50/80 to-indigo-50/30 border-blue-500/60 dark:from-blue-950/20 dark:to-indigo-950/5 dark:border-blue-400/50 shadow-md shadow-blue-500/5 scale-[1.01]"
+                                        : "bg-white border-slate-200/60 dark:bg-zinc-900/30 dark:border-zinc-850 hover:bg-slate-100/50 dark:hover:bg-zinc-950/40 hover:border-slate-300 dark:hover:border-zinc-700"
+                                    }`}
+                                  >
+                                    <div className="relative w-16 aspect-video rounded-xl overflow-hidden shrink-0 bg-slate-100 dark:bg-zinc-900 shadow-sm border border-slate-200/30 dark:border-zinc-700/20">
+                                      <img src={vid.thumbnail || `https://i.ytimg.com/vi/${vid.id}/hqdefault.jpg`} className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" alt="" />
+                                      {vid.completed && (
+                                        <div className="absolute inset-0 bg-emerald-500/20 flex items-center justify-center backdrop-blur-[0.5px]">
+                                          <CheckCircle className="w-4.5 h-4.5 text-emerald-500 fill-white dark:fill-zinc-900 shadow-sm" />
+                                        </div>
+                                      )}
+                                      {!vid.completed && isSelected && (
+                                        <div className="absolute inset-0 bg-blue-500/10 flex items-center justify-center">
+                                          <Play className="w-4 h-4 text-blue-600 fill-current dark:text-blue-400" />
+                                        </div>
+                                      )}
+                                    </div>
+                                    
+                                    <div className="min-w-0 flex-1">
+                                      <h4 className={`text-xs font-bold line-clamp-2 leading-tight transition-colors duration-150 ${
+                                        isSelected 
+                                          ? "text-blue-700 dark:text-blue-400" 
+                                          : "text-slate-800 dark:text-zinc-200 group-hover:text-blue-600 dark:group-hover:text-blue-400"
+                                      }`}>
+                                        {vid.title}
+                                      </h4>
+                                      <div className="flex items-center gap-1.5 mt-1 text-[10px] text-slate-400 dark:text-zinc-500 font-medium">
+                                        <span className="font-bold">#{idx + 1}</span>
+                                        <span>•</span>
+                                        <span>{vid.duration || "LIVE"}</span>
+                                        {vid.progress > 0 && (
+                                          <>
+                                            <span>•</span>
+                                            <span className="text-blue-500 dark:text-blue-400 font-bold">{vid.progress}% watched</span>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Active border decorator */}
+                                    {isSelected && (
+                                      <span className="absolute top-3 right-3 flex h-2 w-2">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* STREAKS & STATISTICS CARD */}
                   {(() => {

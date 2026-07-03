@@ -342,6 +342,81 @@ app.get("/api/playlist-info", async (req, res) => {
   }
 });
 
+// Video info API (handles single video, live, shorts, etc.)
+app.get("/api/video-info", async (req, res) => {
+  const { id } = req.query;
+  if (!id || typeof id !== "string") {
+    return res.status(400).json({ error: "Missing video ID" });
+  }
+
+  try {
+    const videoUrl = `https://www.youtube.com/watch?v=${id}`;
+    const response = await fetchWithTimeout(videoUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
+      }
+    });
+
+    let title = "YouTube Video";
+    let channelName = "Unknown Channel";
+    let duration = "LIVE";
+    let thumbnail = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    let isLive = false;
+
+    if (response.ok) {
+      const html = await response.text();
+      const playerResponse = extractPlayerResponseFromHtml(html);
+      if (playerResponse && playerResponse.videoDetails) {
+        const details = playerResponse.videoDetails;
+        title = details.title || title;
+        channelName = details.author || channelName;
+        isLive = !!details.isLiveContent;
+        if (details.lengthSeconds && !isLive) {
+          duration = formatDuration(details.lengthSeconds);
+        } else if (isLive) {
+          duration = "LIVE";
+        } else {
+          duration = "10:00"; // typical video duration fallback
+        }
+        
+        const thumbs = details.thumbnail?.thumbnails;
+        if (thumbs && thumbs.length > 0) {
+          thumbnail = thumbs[thumbs.length - 1].url;
+        }
+      } else {
+        // Fallback to oEmbed if playerResponse wasn't found
+        try {
+          const oembedRes = await fetchWithTimeout(`https://www.youtube.com/oembed?url=${encodeURIComponent(videoUrl)}&format=json`);
+          if (oembedRes.ok) {
+            const oembed = await oembedRes.json();
+            title = oembed.title || title;
+            channelName = oembed.author_name || channelName;
+            if (oembed.thumbnail_url) {
+              thumbnail = oembed.thumbnail_url;
+            }
+            duration = "10:00"; // fallback duration for normal video if we can't extract seconds
+          }
+        } catch (oembedErr) {
+          console.warn("oEmbed fallback failed", oembedErr);
+        }
+      }
+    }
+
+    return res.json({ id, title, channelName, duration, thumbnail, isLive });
+  } catch (e) {
+    console.error("Failed to fetch video-info:", e);
+    // Fallback response instead of failing completely
+    return res.json({
+      id,
+      title: "YouTube Video",
+      channelName: "Unknown Channel",
+      duration: "LIVE",
+      thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+    });
+  }
+});
+
 // Serve static assets in production
 async function setupServer() {
   if (process.env.NODE_ENV !== "production") {
