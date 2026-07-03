@@ -18,6 +18,8 @@ import { usePomodoro } from "./components/PomodoroContext";
 import { PomodoroTimer } from "./components/PomodoroTimer";
 import { CompactStudyTimer } from "./components/CompactStudyTimer";
 import { FullScreenTimer } from "./components/FullScreenTimer";
+import { parseYoutubeUrl } from "./utils/youtubeParser";
+import { PlaylistDb } from "./utils/playlistDb";
 
 declare global {
   interface Window {
@@ -91,6 +93,20 @@ export default function App() {
   const [theatreMode, setTheatreMode] = useState(false);
   const [playerReady, setPlayerReady] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Player retry/error state
+  const [initAttempts, setInitAttempts] = useState(0);
+  const [playerLoadError, setPlayerLoadError] = useState(false);
+  const initAttemptsRef = useRef(0);
+  const playerReadyRef = useRef(false);
+
+  useEffect(() => {
+    initAttemptsRef.current = initAttempts;
+  }, [initAttempts]);
+
+  useEffect(() => {
+    playerReadyRef.current = playerReady;
+  }, [playerReady]);
 
   // Shortcut feedback overlay toast
   const [shortcutToast, setShortcutToast] = useState({ text: "", visible: false });
@@ -291,6 +307,7 @@ export default function App() {
     let isCancelled = false;
     let player: any = null;
     let progressInterval: any = null;
+    let initTimeout: any = null;
     setPlayerReady(false);
 
     // Fetch video's start timestamp if there is progress
@@ -331,222 +348,260 @@ export default function App() {
 
       const isPlaylist = activeSession?.type === "playlist";
 
-      player = new window.YT.Player("yt-player-frame", {
-        width: "100%",
-        height: "100%",
-        videoId: activeVideoId || undefined,
-        playerVars: {
-          autoplay: settings.autoPlay ? 1 : 0,
-          controls: 1,
-          rel: 0,
-          showinfo: 0,
-          modestbranding: 1,
-          playsinline: 1,
-          start: startSeconds,
-          ...(isPlaylist ? { listType: "playlist", list: activeSession.id } : {})
-        },
-        events: {
-          onReady: (event: any) => {
-            if (isCancelled) {
-              try { event.target.destroy(); } catch (e) {}
-              return;
-            }
-            playerRef.current = event.target;
-            setPlayerReady(true);
-            if (event.target && typeof event.target.getDuration === "function") {
-              setPlayerDuration(event.target.getDuration() || 0);
-            }
-            if (event.target && typeof event.target.setPlaybackRate === "function") {
-              try {
-                event.target.setPlaybackRate(settings.playbackSpeed);
-              } catch (e) {
-                console.warn("Could not set playback speed", e);
-              }
-            }
+      // Set a timeout to detect if player fails to trigger onReady
+      const attemptNum = initAttemptsRef.current;
+      initTimeout = setTimeout(() => {
+        if (!playerReadyRef.current && !isCancelled) {
+          console.warn(`onReady took too long for attempt ${attemptNum + 1}`);
+          handleInitFailure();
+        }
+      }, 7000); // 7 seconds timeout
 
-            // Extract playlist metadata immediately if available
-            if (activeSession?.type === "playlist") {
-              try {
-                const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
-                if (currentPlaylist && currentPlaylist.videos.length === 0) {
-                  if (typeof event.target.getPlaylist === "function") {
-                    let attempts = 0;
-                    const intervalId = setInterval(() => {
-                      if (isCancelled) {
-                        clearInterval(intervalId);
-                        return;
-                      }
-                      try {
-                        attempts++;
-                        const videoIds = event.target.getPlaylist() || [];
-                        const updatedPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
-                        
-                        if (videoIds.length > 0 && updatedPlaylist && updatedPlaylist.videos.length === 0) {
-                          clearInterval(intervalId);
-                          updatedPlaylist.videos = videoIds.map((vid: string, index: number) => ({
-                            id: vid,
-                            title: `Video ${index + 1}`,
-                            channelName: updatedPlaylist.channelName || "Unknown Channel",
-                            duration: "10:00",
-                            thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
-                            progress: 0,
-                            lastWatchedPosition: 0,
-                            completed: false
-                          }));
-                          updatedPlaylist.totalVideos = videoIds.length;
-                          Storage.savePlaylist(updatedPlaylist);
-                          setPlaylists(Storage.getPlaylists());
-
-                          // Also kickstart activeVideoId if it is empty
-                          if (!activeVideoIdRef.current) {
-                            setActiveVideoId(videoIds[0]);
-                            setActiveVideoTitle(`Video 1`);
-                          }
-                        } else if (attempts >= 20 || (updatedPlaylist && updatedPlaylist.videos.length > 0)) {
-                          clearInterval(intervalId);
-                        }
-                      } catch (e) {
-                        if (attempts >= 20) clearInterval(intervalId);
-                      }
-                    }, 500);
-                  }
-                }
-              } catch (err) {}
-            }
-
-            // Record session progress every 5s
-            progressInterval = setInterval(() => {
-              if (isCancelled) return;
-              if (playerRef.current && typeof playerRef.current.getCurrentTime === "function" && typeof playerRef.current.getDuration === "function") {
-                try {
-                  const currentTime = playerRef.current.getCurrentTime();
-                  const duration = playerRef.current.getDuration();
-                  const isLive = duration <= 0 || !isFinite(duration) || isNaN(duration);
-                  if (duration > 0 || isLive) {
-                    handleProgressUpdate(currentTime, duration);
-                  }
-                } catch (e) {
-                  console.error("Failed to read playback times", e);
-                }
-              }
-            }, 5000);
+      try {
+        player = new window.YT.Player("yt-player-frame", {
+          width: "100%",
+          height: "100%",
+          videoId: activeVideoId || undefined,
+          playerVars: {
+            autoplay: settings.autoPlay ? 1 : 0,
+            controls: 1,
+            rel: 0,
+            showinfo: 0,
+            modestbranding: 1,
+            playsinline: 1,
+            start: startSeconds,
+            ...(isPlaylist ? { listType: "playlist", list: activeSession.id } : {})
           },
-          onStateChange: (event: any) => {
-            if (isCancelled) return;
+          events: {
+            onReady: (event: any) => {
+              if (isCancelled) {
+                try { event.target.destroy(); } catch (e) {}
+                return;
+              }
+              if (initTimeout) clearTimeout(initTimeout);
+              playerRef.current = event.target;
+              setPlayerReady(true);
+              setPlayerDuration(event.target.getDuration() || 0);
+              
+              if (event.target && typeof event.target.setPlaybackRate === "function") {
+                try {
+                  event.target.setPlaybackRate(settings.playbackSpeed);
+                } catch (e) {
+                  console.warn("Could not set playback speed", e);
+                }
+              }
 
-            // Extract metadata if it's a playlist
-            if (activeSession?.type === "playlist") {
-              try {
-                const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
-                if (currentPlaylist) {
-                  let modified = false;
-                  if (typeof event.target.getPlaylist === "function") {
-                    const videoIds = event.target.getPlaylist() || [];
-                    if (videoIds.length > 0 && currentPlaylist.videos.length === 0) {
-                      currentPlaylist.videos = videoIds.map((vid: string, index: number) => ({
-                        id: vid,
-                        title: `Video ${index + 1}`,
-                        channelName: currentPlaylist.channelName || "Unknown Channel",
-                        duration: "10:00", // Default placeholder
-                        thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
-                        progress: 0,
-                        lastWatchedPosition: 0,
-                        completed: false
-                      }));
-                      currentPlaylist.totalVideos = videoIds.length;
-                      modified = true;
+              // Extract playlist metadata immediately if available
+              if (activeSession?.type === "playlist") {
+                try {
+                  const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
+                  if (currentPlaylist && currentPlaylist.videos.length === 0) {
+                    if (typeof event.target.getPlaylist === "function") {
+                      let attempts = 0;
+                      const intervalId = setInterval(() => {
+                        if (isCancelled) {
+                          clearInterval(intervalId);
+                          return;
+                        }
+                        try {
+                          attempts++;
+                          const videoIds = event.target.getPlaylist() || [];
+                          const updatedPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
+                          
+                          if (videoIds.length > 0 && updatedPlaylist && updatedPlaylist.videos.length === 0) {
+                            clearInterval(intervalId);
+                            updatedPlaylist.videos = videoIds.map((vid: string, index: number) => ({
+                              id: vid,
+                              title: `Video ${index + 1}`,
+                              channelName: updatedPlaylist.channelName || "Unknown Channel",
+                              duration: "10:00",
+                              thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                              progress: 0,
+                              lastWatchedPosition: 0,
+                              completed: false,
+                              lectureNumber: index + 1
+                            }));
+                            updatedPlaylist.totalVideos = videoIds.length;
+                            Storage.savePlaylist(updatedPlaylist);
+                            setPlaylists(Storage.getPlaylists());
+
+                            // Also kickstart activeVideoId if it is empty
+                            if (!activeVideoIdRef.current) {
+                              setActiveVideoId(videoIds[0]);
+                              setActiveVideoTitle(`Video 1`);
+                            }
+                          } else if (attempts >= 20 || (updatedPlaylist && updatedPlaylist.videos.length > 0)) {
+                            clearInterval(intervalId);
+                          }
+                        } catch (e) {
+                          if (attempts >= 20) clearInterval(intervalId);
+                        }
+                      }, 500);
                     }
                   }
+                } catch (err) {}
+              }
 
-                  if (typeof event.target.getVideoData === "function") {
-                    const videoData = event.target.getVideoData();
-                    if (videoData && videoData.video_id) {
-                      const vId = videoData.video_id;
-                      const vTitle = videoData.title;
-                      const vAuthor = videoData.author;
-                      if (currentPlaylist.title === "YouTube Playlist" && vTitle) {
-                         currentPlaylist.title = `Playlist: ${vTitle} & more`;
-                         modified = true;
-                      }
-                      if (currentPlaylist.channelName === "Unknown Channel" && vAuthor) {
-                         currentPlaylist.channelName = vAuthor;
-                         modified = true;
-                      }
-                      if (!currentPlaylist.thumbnail) {
-                         currentPlaylist.thumbnail = `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
-                         modified = true;
-                      }
-                      
-                      const videoIndex = currentPlaylist.videos.findIndex(v => v.id === vId);
-                      if (videoIndex >= 0) {
-                        if (vTitle && currentPlaylist.videos[videoIndex].title !== vTitle) {
-                          currentPlaylist.videos[videoIndex].title = vTitle;
-                          modified = true;
-                        }
-                        if (vAuthor && currentPlaylist.videos[videoIndex].channelName !== vAuthor) {
-                          currentPlaylist.videos[videoIndex].channelName = vAuthor;
-                          modified = true;
-                        }
-                      }
-
-                      // Use activeVideoIdRef to prevent stale closure comparison
-                      if (activeVideoIdRef.current !== vId) {
-                        setActiveVideoId(vId);
-                        setActiveVideoTitle(vTitle || currentPlaylist.videos[videoIndex]?.title || "YouTube Video");
-                        setActiveVideoChannel(vAuthor || currentPlaylist.videos[videoIndex]?.channelName || "Unknown Channel");
-                      }
+              // Record session progress every 5s
+              progressInterval = setInterval(() => {
+                if (isCancelled) return;
+                if (playerRef.current && typeof playerRef.current.getCurrentTime === "function" && typeof playerRef.current.getDuration === "function") {
+                  try {
+                    const currentTime = playerRef.current.getCurrentTime();
+                    const duration = playerRef.current.getDuration();
+                    const isLive = duration <= 0 || !isFinite(duration) || isNaN(duration);
+                    if (duration > 0 || isLive) {
+                      handleProgressUpdate(currentTime, duration);
                     }
-                  }
-
-                  if (modified) {
-                    Storage.savePlaylist(currentPlaylist);
-                    setPlaylists(Storage.getPlaylists());
+                  } catch (e) {
+                    console.error("Failed to read playback times", e);
                   }
                 }
-              } catch (err) {
-                console.warn("Failed to extract playlist metadata", err);
-              }
-            } else if (activeSession?.type === "video") {
-               try {
-                 if (typeof event.target.getVideoData === "function") {
-                    const videoData = event.target.getVideoData();
-                    if (videoData && (videoData.title || videoData.author)) {
-                       const vTitle = videoData.title;
-                       const vAuthor = videoData.author;
-                       let modified = false;
-                       const currentVideo = Storage.getSingleVideos().find(v => v.id === activeSession.id);
-                       if (currentVideo) {
-                          if (vTitle && currentVideo.title === "YouTube Video" && currentVideo.title !== vTitle) {
-                             currentVideo.title = vTitle;
-                             setActiveVideoTitle(vTitle);
-                             modified = true;
-                          }
-                          if (vAuthor && currentVideo.channelName === "Unknown Channel" && currentVideo.channelName !== vAuthor) {
-                             currentVideo.channelName = vAuthor;
-                             setActiveVideoChannel(vAuthor);
-                             modified = true;
-                          }
-                          if (modified) {
-                             Storage.saveSingleVideo(currentVideo);
-                             setSingleVideos(Storage.getSingleVideos());
-                          }
-                       }
-                    }
-                 }
-               } catch (err) {}
-            }
+              }, 5000);
+            },
+            onError: (event: any) => {
+              if (isCancelled) return;
+              console.warn("Player onError triggered:", event.data);
+              if (initTimeout) clearTimeout(initTimeout);
+              handleInitFailure();
+            },
+            onStateChange: (event: any) => {
+              if (isCancelled) return;
 
-            if (event.data === 1) { // Playing
-              setIsPlaying(true);
-            } else if (event.data === 2) { // Paused
-              setIsPlaying(false);
-            } else if (event.data === 0) { // Video ended
-              setIsPlaying(false);
-              handleVideoEnded();
+              // Extract metadata if it's a playlist
+              if (activeSession?.type === "playlist") {
+                try {
+                  const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
+                  if (currentPlaylist) {
+                    let modified = false;
+                    if (typeof event.target.getPlaylist === "function") {
+                      const videoIds = event.target.getPlaylist() || [];
+                      if (videoIds.length > 0 && currentPlaylist.videos.length === 0) {
+                        currentPlaylist.videos = videoIds.map((vid: string, index: number) => ({
+                          id: vid,
+                          title: `Video ${index + 1}`,
+                          channelName: currentPlaylist.channelName || "Unknown Channel",
+                          duration: "10:00", // Default placeholder
+                          thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                          progress: 0,
+                          lastWatchedPosition: 0,
+                          completed: false,
+                          lectureNumber: index + 1
+                        }));
+                        currentPlaylist.totalVideos = videoIds.length;
+                        modified = true;
+                      }
+                    }
+
+                    if (typeof event.target.getVideoData === "function") {
+                      const videoData = event.target.getVideoData();
+                      if (videoData && videoData.video_id) {
+                        const vId = videoData.video_id;
+                        const vTitle = videoData.title;
+                        const vAuthor = videoData.author;
+                        if (currentPlaylist.title === "YouTube Playlist" && vTitle) {
+                           currentPlaylist.title = `Playlist: ${vTitle} & more`;
+                           modified = true;
+                        }
+                        if (currentPlaylist.channelName === "Unknown Channel" && vAuthor) {
+                           currentPlaylist.channelName = vAuthor;
+                           modified = true;
+                        }
+                        if (!currentPlaylist.thumbnail) {
+                           currentPlaylist.thumbnail = `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
+                           modified = true;
+                        }
+                        
+                        const videoIndex = currentPlaylist.videos.findIndex(v => v.id === vId);
+                        if (videoIndex >= 0) {
+                          if (vTitle && currentPlaylist.videos[videoIndex].title !== vTitle) {
+                            currentPlaylist.videos[videoIndex].title = vTitle;
+                            modified = true;
+                          }
+                          if (vAuthor && currentPlaylist.videos[videoIndex].channelName !== vAuthor) {
+                            currentPlaylist.videos[videoIndex].channelName = vAuthor;
+                            modified = true;
+                          }
+                        }
+
+                        // Use activeVideoIdRef to prevent stale closure comparison
+                        if (activeVideoIdRef.current !== vId) {
+                          setActiveVideoId(vId);
+                          setActiveVideoTitle(vTitle || currentPlaylist.videos[videoIndex]?.title || "YouTube Video");
+                          setActiveVideoChannel(vAuthor || currentPlaylist.videos[videoIndex]?.channelName || "Unknown Channel");
+                        }
+                      }
+                    }
+
+                    if (modified) {
+                      Storage.savePlaylist(currentPlaylist);
+                      setPlaylists(Storage.getPlaylists());
+                    }
+                  }
+                } catch (err) {
+                  console.warn("Failed to extract playlist metadata", err);
+                }
+              } else if (activeSession?.type === "video") {
+                 try {
+                   if (typeof event.target.getVideoData === "function") {
+                      const videoData = event.target.getVideoData();
+                      if (videoData && (videoData.title || videoData.author)) {
+                         const vTitle = videoData.title;
+                         const vAuthor = videoData.author;
+                         let modified = false;
+                         const currentVideo = Storage.getSingleVideos().find(v => v.id === activeSession.id);
+                         if (currentVideo) {
+                            if (vTitle && currentVideo.title === "YouTube Video" && currentVideo.title !== vTitle) {
+                               currentVideo.title = vTitle;
+                               setActiveVideoTitle(vTitle);
+                               modified = true;
+                            }
+                            if (vAuthor && currentVideo.channelName === "Unknown Channel" && currentVideo.channelName !== vAuthor) {
+                               currentVideo.channelName = vAuthor;
+                               setActiveVideoChannel(vAuthor);
+                               modified = true;
+                            }
+                            if (modified) {
+                               Storage.saveSingleVideo(currentVideo);
+                               setSingleVideos(Storage.getSingleVideos());
+                            }
+                         }
+                      }
+                   }
+                 } catch (err) {}
+              }
+
+              if (event.data === 1) { // Playing
+                setIsPlaying(true);
+              } else if (event.data === 2) { // Paused
+                setIsPlaying(false);
+              } else if (event.data === 0) { // Video ended
+                setIsPlaying(false);
+                handleVideoEnded();
+              }
             }
           }
-        }
-      });
+        });
+      } catch (err) {
+        console.error("YT Player construction failed:", err);
+        handleInitFailure();
+      }
+    };
+
+    const handleInitFailure = () => {
+      if (isCancelled) return;
+      if (initAttemptsRef.current < 3) {
+        initAttemptsRef.current += 1;
+        setInitAttempts(initAttemptsRef.current);
+        console.log(`YouTube player failed to load. Retrying attempt ${initAttemptsRef.current}/3...`);
+        try {
+          if (player && typeof player.destroy === "function") player.destroy();
+        } catch (e) {}
+        setTimeout(initPlayer, 800);
+      } else {
+        console.error("YouTube player failed to load after 3 retries.");
+        setPlayerLoadError(true);
+      }
     };
 
     initPlayer();
@@ -554,6 +609,7 @@ export default function App() {
     return () => {
       isCancelled = true;
       if (progressInterval) clearInterval(progressInterval);
+      if (initTimeout) clearTimeout(initTimeout);
       try {
         if (player && typeof player.destroy === "function") {
           player.destroy();
@@ -563,7 +619,7 @@ export default function App() {
       }
       playerRef.current = null;
     };
-  }, [activeSession, activeTab]); // REMOVED activeVideoId from dependencies so it doesn't remount the player when tracking playlist progress
+  }, [activeSession, activeTab, initAttempts]); // RE-RUN player if initAttempts changes
 
 
   // Seek to pending timestamp if player is already loaded and ready
@@ -703,6 +759,20 @@ export default function App() {
 
           Storage.savePlaylist(playlist);
           setPlaylists(playlistsFromDb);
+
+          // Sync playlist session to IndexedDB
+          try {
+            PlaylistDb.savePlaylistState({
+              playlistId: playlist.id,
+              playlistUrl: `https://www.youtube.com/playlist?list=${playlist.id}`,
+              lastWatchedVideo: activeVideoId,
+              resumeTimestamp: Math.floor(currentTime),
+              watchProgress: playlist.progress,
+              updatedAt: nowStr
+            });
+          } catch (dbErr) {
+            console.error("Failed to sync playlist session progress to IndexedDB", dbErr);
+          }
         }
       } else {
         const singlesFromDb = Storage.getSingleVideos();
@@ -872,102 +942,43 @@ export default function App() {
     setErrorMessage("");
 
     try {
-      const urlStr = urlInput.trim();
-      let type: "video" | "playlist" | null = null;
-      let id = "";
-
-      try {
-        const url = new URL(urlStr);
-        if (url.searchParams.has("list")) {
-          type = "playlist";
-          id = url.searchParams.get("list")!;
-        } else if (url.hostname.includes("youtube.com") || url.hostname.includes("youtu.be")) {
-          if (url.searchParams.has("v")) {
-            type = "video";
-            id = url.searchParams.get("v")!;
-          } else if (url.pathname.startsWith("/shorts/")) {
-            type = "video";
-            id = url.pathname.split("/")[2];
-          } else if (url.pathname.startsWith("/live/")) {
-            type = "video";
-            id = url.pathname.split("/")[2];
-          } else if (url.pathname.startsWith("/embed/")) {
-            type = "video";
-            id = url.pathname.split("/")[2];
-          } else if (url.hostname === "youtu.be") {
-            type = "video";
-            id = url.pathname.slice(1);
-          }
-        }
-      } catch (e) {
-        const playlistMatch = urlStr.match(/[?&]list=([a-zA-Z0-9_-]+)/);
-        if (playlistMatch) {
-          type = "playlist";
-          id = playlistMatch[1];
-        } else {
-          const videoMatch = urlStr.match(/(?:v=|\/embed\/|\/watch\?v=|\/\d+\/|\/vi\/|youtu\.be\/|shorts\/|live\/)([^#\&\?]+)/);
-          if (videoMatch) {
-            type = "video";
-            id = videoMatch[1];
-          }
-        }
-      }
-
-      if (!type || !id) {
+      const parsed = parseYoutubeUrl(urlInput);
+      if (!parsed) {
         throw new Error("Invalid YouTube URL. Please enter a valid video, shorts, live, or playlist link.");
       }
 
+      const { type, id, videoId: maybeVideoId } = parsed;
+
+      // Reset error state on new link submit
+      setPlayerLoadError(false);
+      setInitAttempts(0);
+
       if (type === "playlist") {
         let playlist = Storage.getPlaylists().find(p => p.id === id);
+        const initialVidId = maybeVideoId || "";
         
         if (!playlist || playlist.videos.length === 0) {
-          let fetchedVideos: any[] = [];
-          let channelName = playlist?.channelName || "Unknown Channel";
-          let playlistTitle = playlist?.title || "YouTube Playlist";
-          let totalVideos = playlist?.totalVideos || 0;
-          let thumbnail = playlist?.thumbnail || "";
-
-          try {
-            const apiRes = await fetch(`/api/playlist-info?id=${id}`);
-            if (apiRes.ok) {
-              const data = await apiRes.json();
-              if (data && data.videos && data.videos.length > 0) {
-                fetchedVideos = data.videos;
-                totalVideos = data.videos.length;
-                if (data.videos[0].channelName) {
-                  channelName = data.videos[0].channelName;
-                }
-                thumbnail = data.videos[0].thumbnail || `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg`;
-                playlistTitle = `Playlist: ${data.videos[0].title} & more`;
-              }
-            }
-          } catch (fetchErr) {
-            console.error("Failed fetching playlist-info from server", fetchErr);
-          }
-
-          if (!playlist) {
-            playlist = {
-              id: id,
-              type: "playlist",
-              title: playlistTitle,
-              channelName: channelName,
-              totalVideos: totalVideos,
-              videos: fetchedVideos,
-              thumbnail: thumbnail,
+          playlist = {
+            id: id,
+            type: "playlist",
+            title: "YouTube Playlist",
+            channelName: "Unknown Channel",
+            totalVideos: initialVidId ? 1 : 0,
+            videos: initialVidId ? [{
+              id: initialVidId,
+              title: "Lecture 1",
+              channelName: "Unknown Channel",
+              duration: "10:00",
+              thumbnail: `https://i.ytimg.com/vi/${initialVidId}/hqdefault.jpg`,
               progress: 0,
-              lastWatchedAt: new Date().toISOString()
-            };
-          } else {
-            playlist.videos = fetchedVideos;
-            playlist.totalVideos = totalVideos;
-            playlist.channelName = channelName;
-            if (thumbnail) {
-              playlist.thumbnail = thumbnail;
-            }
-            if (playlistTitle && playlist.title === "YouTube Playlist") {
-              playlist.title = playlistTitle;
-            }
-          }
+              lastWatchedPosition: 0,
+              completed: false,
+              lectureNumber: 1
+            }] : [],
+            thumbnail: initialVidId ? `https://i.ytimg.com/vi/${initialVidId}/hqdefault.jpg` : "",
+            progress: 0,
+            lastWatchedAt: new Date().toISOString()
+          };
           Storage.savePlaylist(playlist);
         }
 
@@ -980,54 +991,34 @@ export default function App() {
           setActiveVideoTitle(firstVid.title);
           setActiveVideoChannel(firstVid.channelName);
         } else {
-          // If the URL has a video ID along with the list ID, use it to kickstart the player.
-          let initialVideoId = "";
-          try {
-            const parsedUrl = new URL(urlStr);
-            if (parsedUrl.searchParams.has("v")) {
-              initialVideoId = parsedUrl.searchParams.get("v")!;
-            }
-          } catch (e) {
-            const vMatch = urlStr.match(/[?&]v=([a-zA-Z0-9_-]+)/);
-            if (vMatch) initialVideoId = vMatch[1];
-          }
-
-          setActiveVideoId(initialVideoId); // Will be populated by the iframe player if possible
+          setActiveVideoId(initialVidId);
           setActiveVideoTitle("YouTube Playlist");
           setActiveVideoChannel("Unknown Channel");
+        }
+
+        // Save session state to IndexedDB as required
+        try {
+          await PlaylistDb.savePlaylistState({
+            playlistId: id,
+            playlistUrl: `https://www.youtube.com/playlist?list=${id}`,
+            lastWatchedVideo: initialVidId || (playlist.videos[0]?.id || ""),
+            resumeTimestamp: 0,
+            watchProgress: 0,
+            updatedAt: new Date().toISOString()
+          });
+        } catch (dbErr) {
+          console.error("Failed to store playlist in IndexedDB", dbErr);
         }
       } else {
         let video = Storage.getSingleVideos().find(v => v.id === id);
         
-        let initialTitle = video?.title || "YouTube Video";
-        let initialChannelName = video?.channelName || "Unknown Channel";
-        let initialDuration = video?.duration || "LIVE";
-        let initialThumbnail = video?.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
-
-        if (!video || video.title === "YouTube Video" || video.channelName === "Unknown Channel" || video.duration === "LIVE") {
-          try {
-            const apiRes = await fetch(`/api/video-info?id=${id}`);
-            if (apiRes.ok) {
-              const data = await apiRes.json();
-              if (data && data.title) {
-                initialTitle = data.title;
-                initialChannelName = data.channelName || "Unknown Channel";
-                initialDuration = data.duration || "10:00";
-                initialThumbnail = data.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
-              }
-            }
-          } catch (fetchErr) {
-            console.error("Failed fetching video-info from server", fetchErr);
-          }
-        }
-
         const videoToSave: SingleVideoInfo = {
           id: id,
           type: "video",
-          title: initialTitle,
-          channelName: initialChannelName,
-          duration: initialDuration,
-          thumbnail: initialThumbnail,
+          title: video?.title || "YouTube Video",
+          channelName: video?.channelName || "Unknown Channel",
+          duration: video?.duration || "LIVE",
+          thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
           progress: video?.progress || 0,
           lastWatchedAt: new Date().toISOString(),
           completed: video?.completed || false,
@@ -1055,6 +1046,9 @@ export default function App() {
   // Set active session from history/favorites click
   const resumeLearningSession = (id: string, type: "playlist" | "video", shouldSwitchTab = true) => {
     setActiveSession({ id, type });
+    setPlayerLoadError(false);
+    setInitAttempts(0);
+
     if (type === "playlist") {
       const playlist = Storage.getPlaylists().find(p => p.id === id);
       if (playlist) {
@@ -1062,6 +1056,19 @@ export default function App() {
         const lastWatchedVideo = playlist.videos.find(v => v.progress > 0 && v.progress < 95) || playlist.videos[0];
         if (lastWatchedVideo) {
           playVideoInSession(lastWatchedVideo.id, lastWatchedVideo.title, lastWatchedVideo.channelName);
+          // Sync playlist to IndexedDB
+          try {
+            PlaylistDb.savePlaylistState({
+              playlistId: playlist.id,
+              playlistUrl: `https://www.youtube.com/playlist?list=${playlist.id}`,
+              lastWatchedVideo: lastWatchedVideo.id,
+              resumeTimestamp: Math.floor(lastWatchedVideo.lastWatchedPosition || 0),
+              watchProgress: playlist.progress,
+              updatedAt: new Date().toISOString()
+            });
+          } catch (dbErr) {
+            console.error("Failed to store playlist in IndexedDB on resume", dbErr);
+          }
         }
       }
     } else {
@@ -2655,6 +2662,41 @@ export default function App() {
                         ref={playerContainerRef}
                         className={`relative w-full overflow-hidden rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-sm bg-black ${theatreMode ? "aspect-video" : "aspect-video"}`}
                       >
+                        {playerLoadError ? (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-900 text-center select-none z-10">
+                            <div className="p-3 bg-red-500/10 rounded-full text-red-500 mb-4 border border-red-500/20">
+                              <ShieldAlert className="w-8 h-8" />
+                            </div>
+                            <h3 className="text-sm sm:text-base font-bold text-white mb-2">Unable to load the embedded YouTube playlist</h3>
+                            <div className="text-[11px] sm:text-xs text-zinc-400 max-w-md mb-6 leading-relaxed text-left space-y-1 mx-auto bg-slate-950/40 p-3.5 rounded-xl border border-white/5">
+                              <p className="font-semibold text-zinc-300">Please verify that:</p>
+                              <p>• the playlist is public</p>
+                              <p>• the URL is valid</p>
+                              <p>• YouTube is reachable from your network</p>
+                            </div>
+                            <div className="flex gap-3">
+                              <button
+                                onClick={() => {
+                                  setPlayerLoadError(false);
+                                  setInitAttempts(0);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-bold text-xs cursor-pointer transition"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                Retry Loading
+                              </button>
+                              <a
+                                href={activeSession?.type === "playlist" ? `https://www.youtube.com/playlist?list=${activeSession.id}` : `https://www.youtube.com/watch?v=${activeVideoId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-2 px-4 py-2.5 bg-red-600 hover:bg-red-750 text-white rounded-xl font-bold text-xs transition shadow-md shadow-red-900/10"
+                              >
+                                <Youtube className="w-4 h-4" />
+                                Open on YouTube
+                              </a>
+                            </div>
+                          </div>
+                        ) : null}
                         <div id="yt-player-container" className="w-full h-full">
                           <div id="yt-player-frame"></div>
                         </div>
