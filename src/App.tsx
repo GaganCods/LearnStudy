@@ -5,7 +5,7 @@ import {
   Maximize2, Minimize2, ChevronRight, ChevronLeft, BookOpen, GraduationCap, 
   Sparkles, TrendingUp, Plus, Edit2, X, Clock, Flame, 
   ShieldAlert, Share2, Moon, Sun, Laptop, ChevronDown, CheckCircle,
-  Eye, EyeOff, Star, Calendar, Download, Upload, Info, RefreshCw
+  Eye, EyeOff, Star, Calendar, Download, Upload, Info, RefreshCw, ArrowUpDown, Filter
 } from "lucide-react";
 import { Storage } from "./utils/storage";
 import { StudyStats } from "./components/StudyStats";
@@ -18,6 +18,12 @@ import { usePomodoro } from "./components/PomodoroContext";
 import { PomodoroTimer } from "./components/PomodoroTimer";
 import { CompactStudyTimer } from "./components/CompactStudyTimer";
 import { FullScreenTimer } from "./components/FullScreenTimer";
+import { parseYoutubeUrl } from "./utils/youtubeParser";
+import { PlaylistDb } from "./utils/playlistDb";
+import { hasGeminiKey, getGeminiKey, removeGeminiKey, fetchVideoMetadataWithGemini, maskApiKey } from "./utils/gemini";
+import { GeminiOnboardingModal } from "./components/GeminiOnboardingModal";
+import { AIStudyCompanion } from "./components/AIStudyCompanion";
+import { useToast } from "./components/ToastContext";
 
 declare global {
   interface Window {
@@ -27,6 +33,7 @@ declare global {
 }
 
 export default function App() {
+  const { toast, soundEnabled, setSoundEnabled } = useToast();
   // Pomodoro Study Timer Context
   const {
     activeState: pomoState,
@@ -64,6 +71,31 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
+  // Gemini Onboarding & BYOK state
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [hasGeminiKeyInState, setHasGeminiKeyInState] = useState(hasGeminiKey());
+  const [showFullKeyInSettings, setShowFullKeyInSettings] = useState(false);
+  const [settingsKeyTestLoading, setSettingsKeyTestLoading] = useState(false);
+  const [settingsKeyTestResult, setSettingsKeyTestResult] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Trigger Onboarding Modal on launch if no key exists
+  useEffect(() => {
+    if (!hasGeminiKey()) {
+      setOnboardingOpen(true);
+    }
+  }, []);
+
+  // Poll for key presence so UI stays reactive
+  useEffect(() => {
+    const checkInterval = setInterval(() => {
+      const current = hasGeminiKey();
+      if (current !== hasGeminiKeyInState) {
+        setHasGeminiKeyInState(current);
+      }
+    }, 1000);
+    return () => clearInterval(checkInterval);
+  }, [hasGeminiKeyInState]);
+
   // Active study session
   const [activeSession, setActiveSession] = useState<{
     id: string; // playlist ID or single video ID
@@ -80,6 +112,36 @@ export default function App() {
   const [editingBookmarkId, setEditingBookmarkId] = useState<string | null>(null);
   const [editingBookmarkLabel, setEditingBookmarkLabel] = useState("");
 
+  // High Performance Loading Engine States
+  const [isSingleVideoDetailsLoading, setIsSingleVideoDetailsLoading] = useState(false);
+  const [singleVideoMetadata, setSingleVideoMetadata] = useState<{
+    id: string;
+    title: string;
+    channelName: string;
+    duration: string;
+    publishDate: string;
+    description: string;
+    tags: string[];
+    thumbnail?: string;
+  } | null>(null);
+
+  // Progressive Loading State
+  const [progressiveLoading, setProgressiveLoading] = useState(false);
+  const [progressiveLoadedCount, setProgressiveLoadedCount] = useState(0);
+  const [progressiveTotalCount, setProgressiveTotalCount] = useState(0);
+  const [progressivePlaylistId, setProgressivePlaylistId] = useState("");
+  const [fullProgressiveVideos, setFullProgressiveVideos] = useState<any[]>([]);
+
+  // Background Update States for Cached Playlists
+  const [backgroundUpdateAvailable, setBackgroundUpdateAvailable] = useState(false);
+  const [backgroundNewLecturesCount, setBackgroundNewLecturesCount] = useState(0);
+  const [backgroundPlaylistData, setBackgroundPlaylistData] = useState<any | null>(null);
+
+  // Queue sorting/filtering
+  const [queueFilter, setQueueFilter] = useState<"all" | "completed" | "remaining">("all");
+  const [queueSort, setQueueSort] = useState<"number-asc" | "number-desc">("number-asc");
+
+
   // Custom video player control states
   const [isPlaying, setIsPlaying] = useState(false);
   const [playerTime, setPlayerTime] = useState(0);
@@ -91,6 +153,20 @@ export default function App() {
   const [theatreMode, setTheatreMode] = useState(false);
   const [playerReady, setPlayerReady] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Player retry/error state
+  const [initAttempts, setInitAttempts] = useState(0);
+  const [playerLoadError, setPlayerLoadError] = useState(false);
+  const initAttemptsRef = useRef(0);
+  const playerReadyRef = useRef(false);
+
+  useEffect(() => {
+    initAttemptsRef.current = initAttempts;
+  }, [initAttempts]);
+
+  useEffect(() => {
+    playerReadyRef.current = playerReady;
+  }, [playerReady]);
 
   // Shortcut feedback overlay toast
   const [shortcutToast, setShortcutToast] = useState({ text: "", visible: false });
@@ -134,13 +210,14 @@ export default function App() {
     return null;
   }, [activeSession, playlists]);
 
-  // Scroll to top when switching tabs, searching, or changing the active video/lecture
+  // Scroll to top when switching tabs
   useEffect(() => {
     if (mainScrollRef.current) {
-      mainScrollRef.current.scrollTop = 0;
+      mainScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
-    window.scrollTo({ top: 0, behavior: "auto" });
-  }, [activeTab, searchQuery, activeVideoId]);
+  }, [activeTab, searchQuery]);
 
   useEffect(() => {
     if (activeVideoId && activeVideoTitle) {
@@ -330,222 +407,227 @@ export default function App() {
 
       const isPlaylist = activeSession?.type === "playlist";
 
-      player = new window.YT.Player("yt-player-frame", {
-        width: "100%",
-        height: "100%",
-        videoId: activeVideoId || undefined,
-        playerVars: {
-          autoplay: settings.autoPlay ? 1 : 0,
-          controls: 1,
-          rel: 0,
-          showinfo: 0,
-          modestbranding: 1,
-          playsinline: 1,
-          start: startSeconds,
-          ...(isPlaylist ? { listType: "playlist", list: activeSession.id } : {})
-        },
-        events: {
-          onReady: (event: any) => {
-            if (isCancelled) {
-              try { event.target.destroy(); } catch (e) {}
-              return;
-            }
-            playerRef.current = event.target;
-            setPlayerReady(true);
-            if (event.target && typeof event.target.getDuration === "function") {
-              setPlayerDuration(event.target.getDuration() || 0);
-            }
-            if (event.target && typeof event.target.setPlaybackRate === "function") {
-              try {
-                event.target.setPlaybackRate(settings.playbackSpeed);
-              } catch (e) {
-                console.warn("Could not set playback speed", e);
-              }
-            }
-
-            // Extract playlist metadata immediately if available
-            if (activeSession?.type === "playlist") {
-              try {
-                const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
-                if (currentPlaylist && currentPlaylist.videos.length === 0) {
-                  if (typeof event.target.getPlaylist === "function") {
-                    let attempts = 0;
-                    const intervalId = setInterval(() => {
-                      if (isCancelled) {
-                        clearInterval(intervalId);
-                        return;
-                      }
-                      try {
-                        attempts++;
-                        const videoIds = event.target.getPlaylist() || [];
-                        const updatedPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
-                        
-                        if (videoIds.length > 0 && updatedPlaylist && updatedPlaylist.videos.length === 0) {
-                          clearInterval(intervalId);
-                          updatedPlaylist.videos = videoIds.map((vid: string, index: number) => ({
-                            id: vid,
-                            title: `Video ${index + 1}`,
-                            channelName: updatedPlaylist.channelName || "Unknown Channel",
-                            duration: "10:00",
-                            thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
-                            progress: 0,
-                            lastWatchedPosition: 0,
-                            completed: false
-                          }));
-                          updatedPlaylist.totalVideos = videoIds.length;
-                          Storage.savePlaylist(updatedPlaylist);
-                          setPlaylists(Storage.getPlaylists());
-
-                          // Also kickstart activeVideoId if it is empty
-                          if (!activeVideoIdRef.current) {
-                            setActiveVideoId(videoIds[0]);
-                            setActiveVideoTitle(`Video 1`);
-                          }
-                        } else if (attempts >= 20 || (updatedPlaylist && updatedPlaylist.videos.length > 0)) {
-                          clearInterval(intervalId);
-                        }
-                      } catch (e) {
-                        if (attempts >= 20) clearInterval(intervalId);
-                      }
-                    }, 500);
-                  }
-                }
-              } catch (err) {}
-            }
-
-            // Record session progress every 5s
-            progressInterval = setInterval(() => {
-              if (isCancelled) return;
-              if (playerRef.current && typeof playerRef.current.getCurrentTime === "function" && typeof playerRef.current.getDuration === "function") {
-                try {
-                  const currentTime = playerRef.current.getCurrentTime();
-                  const duration = playerRef.current.getDuration();
-                  const isLive = duration <= 0 || !isFinite(duration) || isNaN(duration);
-                  if (duration > 0 || isLive) {
-                    handleProgressUpdate(currentTime, duration);
-                  }
-                } catch (e) {
-                  console.error("Failed to read playback times", e);
-                }
-              }
-            }, 5000);
+      try {
+        player = new window.YT.Player("yt-player-frame", {
+          width: "100%",
+          height: "100%",
+          videoId: activeVideoId || undefined,
+          playerVars: {
+            autoplay: settings.autoPlay ? 1 : 0,
+            controls: 1,
+            rel: 0,
+            showinfo: 0,
+            modestbranding: 1,
+            playsinline: 1,
+            start: startSeconds,
+            ...(isPlaylist ? { listType: "playlist", list: activeSession.id } : {})
           },
-          onStateChange: (event: any) => {
-            if (isCancelled) return;
+          events: {
+            onReady: (event: any) => {
+              if (isCancelled) {
+                try { event.target.destroy(); } catch (e) {}
+                return;
+              }
+              playerRef.current = event.target;
+              setPlayerReady(true);
+              setPlayerDuration(event.target.getDuration() || 0);
+              
+              if (event.target && typeof event.target.setPlaybackRate === "function") {
+                try {
+                  event.target.setPlaybackRate(settings.playbackSpeed);
+                } catch (e) {
+                  console.warn("Could not set playback speed", e);
+                }
+              }
 
-            // Extract metadata if it's a playlist
-            if (activeSession?.type === "playlist") {
-              try {
-                const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
-                if (currentPlaylist) {
-                  let modified = false;
-                  if (typeof event.target.getPlaylist === "function") {
-                    const videoIds = event.target.getPlaylist() || [];
-                    if (videoIds.length > 0 && currentPlaylist.videos.length === 0) {
-                      currentPlaylist.videos = videoIds.map((vid: string, index: number) => ({
-                        id: vid,
-                        title: `Video ${index + 1}`,
-                        channelName: currentPlaylist.channelName || "Unknown Channel",
-                        duration: "10:00", // Default placeholder
-                        thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
-                        progress: 0,
-                        lastWatchedPosition: 0,
-                        completed: false
-                      }));
-                      currentPlaylist.totalVideos = videoIds.length;
-                      modified = true;
+              // Extract playlist metadata immediately if available
+              if (activeSession?.type === "playlist") {
+                try {
+                  const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
+                  if (currentPlaylist && currentPlaylist.videos.length === 0) {
+                    if (typeof event.target.getPlaylist === "function") {
+                      let attempts = 0;
+                      const intervalId = setInterval(() => {
+                        if (isCancelled) {
+                          clearInterval(intervalId);
+                          return;
+                        }
+                        try {
+                          attempts++;
+                          const videoIds = event.target.getPlaylist() || [];
+                          const updatedPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
+                          
+                          if (videoIds.length > 0 && updatedPlaylist && updatedPlaylist.videos.length === 0) {
+                            clearInterval(intervalId);
+                            updatedPlaylist.videos = videoIds.map((vid: string, index: number) => ({
+                              id: vid,
+                              title: `Video ${index + 1}`,
+                              channelName: updatedPlaylist.channelName || "Unknown Channel",
+                              duration: "10:00",
+                              thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                              progress: 0,
+                              lastWatchedPosition: 0,
+                              completed: false,
+                              lectureNumber: index + 1
+                            }));
+                            updatedPlaylist.totalVideos = videoIds.length;
+                            Storage.savePlaylist(updatedPlaylist);
+                            setPlaylists(Storage.getPlaylists());
+
+                            // Also kickstart activeVideoId if it is empty
+                            if (!activeVideoIdRef.current) {
+                              setActiveVideoId(videoIds[0]);
+                              setActiveVideoTitle(`Video 1`);
+                            }
+                          } else if (attempts >= 20 || (updatedPlaylist && updatedPlaylist.videos.length > 0)) {
+                            clearInterval(intervalId);
+                          }
+                        } catch (e) {
+                          if (attempts >= 20) clearInterval(intervalId);
+                        }
+                      }, 500);
                     }
                   }
+                } catch (err) {}
+              }
 
-                  if (typeof event.target.getVideoData === "function") {
-                    const videoData = event.target.getVideoData();
-                    if (videoData && videoData.video_id) {
-                      const vId = videoData.video_id;
-                      const vTitle = videoData.title;
-                      const vAuthor = videoData.author;
-                      if (currentPlaylist.title === "YouTube Playlist" && vTitle) {
-                         currentPlaylist.title = `Playlist: ${vTitle} & more`;
-                         modified = true;
-                      }
-                      if (currentPlaylist.channelName === "Unknown Channel" && vAuthor) {
-                         currentPlaylist.channelName = vAuthor;
-                         modified = true;
-                      }
-                      if (!currentPlaylist.thumbnail) {
-                         currentPlaylist.thumbnail = `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
-                         modified = true;
-                      }
-                      
-                      const videoIndex = currentPlaylist.videos.findIndex(v => v.id === vId);
-                      if (videoIndex >= 0) {
-                        if (vTitle && currentPlaylist.videos[videoIndex].title !== vTitle) {
-                          currentPlaylist.videos[videoIndex].title = vTitle;
-                          modified = true;
-                        }
-                        if (vAuthor && currentPlaylist.videos[videoIndex].channelName !== vAuthor) {
-                          currentPlaylist.videos[videoIndex].channelName = vAuthor;
-                          modified = true;
-                        }
-                      }
-
-                      // Use activeVideoIdRef to prevent stale closure comparison
-                      if (activeVideoIdRef.current !== vId) {
-                        setActiveVideoId(vId);
-                        setActiveVideoTitle(vTitle || currentPlaylist.videos[videoIndex]?.title || "YouTube Video");
-                        setActiveVideoChannel(vAuthor || currentPlaylist.videos[videoIndex]?.channelName || "Unknown Channel");
-                      }
+              // Record session progress every 5s
+              progressInterval = setInterval(() => {
+                if (isCancelled) return;
+                if (playerRef.current && typeof playerRef.current.getCurrentTime === "function" && typeof playerRef.current.getDuration === "function") {
+                  try {
+                    const currentTime = playerRef.current.getCurrentTime();
+                    const duration = playerRef.current.getDuration();
+                    const isLive = duration <= 0 || !isFinite(duration) || isNaN(duration);
+                    if (duration > 0 || isLive) {
+                      handleProgressUpdate(currentTime, duration);
                     }
-                  }
-
-                  if (modified) {
-                    Storage.savePlaylist(currentPlaylist);
-                    setPlaylists(Storage.getPlaylists());
+                  } catch (e) {
+                    console.error("Failed to read playback times", e);
                   }
                 }
-              } catch (err) {
-                console.warn("Failed to extract playlist metadata", err);
-              }
-            } else if (activeSession?.type === "video") {
-               try {
-                 if (typeof event.target.getVideoData === "function") {
-                    const videoData = event.target.getVideoData();
-                    if (videoData && (videoData.title || videoData.author)) {
-                       const vTitle = videoData.title;
-                       const vAuthor = videoData.author;
-                       let modified = false;
-                       const currentVideo = Storage.getSingleVideos().find(v => v.id === activeSession.id);
-                       if (currentVideo) {
-                          if (vTitle && currentVideo.title === "YouTube Video" && currentVideo.title !== vTitle) {
-                             currentVideo.title = vTitle;
-                             setActiveVideoTitle(vTitle);
-                             modified = true;
-                          }
-                          if (vAuthor && currentVideo.channelName === "Unknown Channel" && currentVideo.channelName !== vAuthor) {
-                             currentVideo.channelName = vAuthor;
-                             setActiveVideoChannel(vAuthor);
-                             modified = true;
-                          }
-                          if (modified) {
-                             Storage.saveSingleVideo(currentVideo);
-                             setSingleVideos(Storage.getSingleVideos());
-                          }
-                       }
-                    }
-                 }
-               } catch (err) {}
-            }
+              }, 5000);
+            },
+            onStateChange: (event: any) => {
+              if (isCancelled) return;
 
-            if (event.data === 1) { // Playing
-              setIsPlaying(true);
-            } else if (event.data === 2) { // Paused
-              setIsPlaying(false);
-            } else if (event.data === 0) { // Video ended
-              setIsPlaying(false);
-              handleVideoEnded();
+              // Extract metadata if it's a playlist
+              if (activeSession?.type === "playlist") {
+                try {
+                  const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
+                  if (currentPlaylist) {
+                    let modified = false;
+                    if (typeof event.target.getPlaylist === "function") {
+                      const videoIds = event.target.getPlaylist() || [];
+                      if (videoIds.length > 0 && currentPlaylist.videos.length === 0) {
+                        currentPlaylist.videos = videoIds.map((vid: string, index: number) => ({
+                          id: vid,
+                          title: `Video ${index + 1}`,
+                          channelName: currentPlaylist.channelName || "Unknown Channel",
+                          duration: "10:00", // Default placeholder
+                          thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                          progress: 0,
+                          lastWatchedPosition: 0,
+                          completed: false,
+                          lectureNumber: index + 1
+                        }));
+                        currentPlaylist.totalVideos = videoIds.length;
+                        modified = true;
+                      }
+                    }
+
+                    if (typeof event.target.getVideoData === "function") {
+                      const videoData = event.target.getVideoData();
+                      if (videoData && videoData.video_id) {
+                        const vId = videoData.video_id;
+                        const vTitle = videoData.title;
+                        const vAuthor = videoData.author;
+                        if (currentPlaylist.title === "YouTube Playlist" && vTitle) {
+                           currentPlaylist.title = `Playlist: ${vTitle} & more`;
+                           modified = true;
+                        }
+                        if (currentPlaylist.channelName === "Unknown Channel" && vAuthor) {
+                           currentPlaylist.channelName = vAuthor;
+                           modified = true;
+                        }
+                        if (!currentPlaylist.thumbnail) {
+                           currentPlaylist.thumbnail = `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
+                           modified = true;
+                        }
+                        
+                        const videoIndex = currentPlaylist.videos.findIndex(v => v.id === vId);
+                        if (videoIndex >= 0) {
+                          if (vTitle && currentPlaylist.videos[videoIndex].title !== vTitle) {
+                            currentPlaylist.videos[videoIndex].title = vTitle;
+                            modified = true;
+                          }
+                          if (vAuthor && currentPlaylist.videos[videoIndex].channelName !== vAuthor) {
+                            currentPlaylist.videos[videoIndex].channelName = vAuthor;
+                            modified = true;
+                          }
+                        }
+
+                        // Use activeVideoIdRef to prevent stale closure comparison
+                        if (activeVideoIdRef.current !== vId) {
+                          setActiveVideoId(vId);
+                          setActiveVideoTitle(vTitle || currentPlaylist.videos[videoIndex]?.title || "YouTube Video");
+                          setActiveVideoChannel(vAuthor || currentPlaylist.videos[videoIndex]?.channelName || "Unknown Channel");
+                        }
+                      }
+                    }
+
+                    if (modified) {
+                      Storage.savePlaylist(currentPlaylist);
+                      setPlaylists(Storage.getPlaylists());
+                    }
+                  }
+                } catch (err) {
+                  console.warn("Failed to extract playlist metadata", err);
+                }
+              } else if (activeSession?.type === "video") {
+                 try {
+                   if (typeof event.target.getVideoData === "function") {
+                      const videoData = event.target.getVideoData();
+                      if (videoData && (videoData.title || videoData.author)) {
+                         const vTitle = videoData.title;
+                         const vAuthor = videoData.author;
+                         let modified = false;
+                         const currentVideo = Storage.getSingleVideos().find(v => v.id === activeSession.id);
+                         if (currentVideo) {
+                            if (vTitle && currentVideo.title === "YouTube Video" && currentVideo.title !== vTitle) {
+                               currentVideo.title = vTitle;
+                               setActiveVideoTitle(vTitle);
+                               modified = true;
+                            }
+                            if (vAuthor && currentVideo.channelName === "Unknown Channel" && currentVideo.channelName !== vAuthor) {
+                               currentVideo.channelName = vAuthor;
+                               setActiveVideoChannel(vAuthor);
+                               modified = true;
+                            }
+                            if (modified) {
+                               Storage.saveSingleVideo(currentVideo);
+                               setSingleVideos(Storage.getSingleVideos());
+                            }
+                         }
+                      }
+                   }
+                 } catch (err) {}
+              }
+
+              if (event.data === 1) { // Playing
+                setIsPlaying(true);
+              } else if (event.data === 2) { // Paused
+                setIsPlaying(false);
+              } else if (event.data === 0) { // Video ended
+                setIsPlaying(false);
+                handleVideoEnded();
+              }
             }
           }
-        }
-      });
+        });
+      } catch (err) {
+        console.error("YT Player construction failed:", err);
+      }
     };
 
     initPlayer();
@@ -562,7 +644,7 @@ export default function App() {
       }
       playerRef.current = null;
     };
-  }, [activeSession, activeTab]); // REMOVED activeVideoId from dependencies so it doesn't remount the player when tracking playlist progress
+  }, [activeSession, activeTab]);
 
 
   // Seek to pending timestamp if player is already loaded and ready
@@ -702,6 +784,20 @@ export default function App() {
 
           Storage.savePlaylist(playlist);
           setPlaylists(playlistsFromDb);
+
+          // Sync playlist session to IndexedDB
+          try {
+            PlaylistDb.savePlaylistState({
+              playlistId: playlist.id,
+              playlistUrl: `https://www.youtube.com/playlist?list=${playlist.id}`,
+              lastWatchedVideo: activeVideoId,
+              resumeTimestamp: Math.floor(currentTime),
+              watchProgress: playlist.progress,
+              updatedAt: nowStr
+            });
+          } catch (dbErr) {
+            console.error("Failed to sync playlist session progress to IndexedDB", dbErr);
+          }
         }
       } else {
         const singlesFromDb = Storage.getSingleVideos();
@@ -853,6 +949,34 @@ export default function App() {
     setActiveVideoChannel(channelName);
   };
 
+  // Background Prefetching of upcoming lectures to ensure instant transitions
+  useEffect(() => {
+    if (!activeVideoId || activeSession?.type !== "playlist") return;
+    
+    const currentPlaylist = playlists.find(p => p.id === activeSession.id);
+    if (!currentPlaylist) return;
+
+    const currentIndex = currentPlaylist.videos.findIndex(v => v.id === activeVideoId);
+    if (currentIndex === -1) return;
+
+    // Prefetch next 3 lectures (e.g., current index + 1, + 2, + 3)
+    const videosToPrefetch = currentPlaylist.videos.slice(currentIndex + 1, currentIndex + 4);
+    
+    videosToPrefetch.forEach(video => {
+      // 1. Prefetch images to browser memory
+      if (video.thumbnail) {
+        const img = new Image();
+        img.src = video.thumbnail;
+      }
+
+      // 2. Warm up browser cache by calling the metadata endpoint silently
+      if (video.id) {
+        fetch(`/api/video-metadata?id=${video.id}`).catch(() => {});
+      }
+    });
+  }, [activeVideoId, activeSession, playlists]);
+
+
   const scrollToWorkspace = () => {
     setTimeout(() => {
       const element = document.getElementById("lecture-workspace");
@@ -869,177 +993,255 @@ export default function App() {
 
     setIsLoading(true);
     setErrorMessage("");
+    setBackgroundUpdateAvailable(false);
+    setBackgroundNewLecturesCount(0);
+    setBackgroundPlaylistData(null);
 
     try {
-      const urlStr = urlInput.trim();
-      let type: "video" | "playlist" | null = null;
-      let id = "";
-
-      try {
-        const url = new URL(urlStr);
-        if (url.searchParams.has("list")) {
-          type = "playlist";
-          id = url.searchParams.get("list")!;
-        } else if (url.hostname.includes("youtube.com") || url.hostname.includes("youtu.be")) {
-          if (url.searchParams.has("v")) {
-            type = "video";
-            id = url.searchParams.get("v")!;
-          } else if (url.pathname.startsWith("/shorts/")) {
-            type = "video";
-            id = url.pathname.split("/")[2];
-          } else if (url.pathname.startsWith("/live/")) {
-            type = "video";
-            id = url.pathname.split("/")[2];
-          } else if (url.pathname.startsWith("/embed/")) {
-            type = "video";
-            id = url.pathname.split("/")[2];
-          } else if (url.hostname === "youtu.be") {
-            type = "video";
-            id = url.pathname.slice(1);
-          }
-        }
-      } catch (e) {
-        const playlistMatch = urlStr.match(/[?&]list=([a-zA-Z0-9_-]+)/);
-        if (playlistMatch) {
-          type = "playlist";
-          id = playlistMatch[1];
-        } else {
-          const videoMatch = urlStr.match(/(?:v=|\/embed\/|\/watch\?v=|\/\d+\/|\/vi\/|youtu\.be\/|shorts\/|live\/)([^#\&\?]+)/);
-          if (videoMatch) {
-            type = "video";
-            id = videoMatch[1];
-          }
-        }
-      }
-
-      if (!type || !id) {
+      const parsed = parseYoutubeUrl(urlInput);
+      if (!parsed) {
         throw new Error("Invalid YouTube URL. Please enter a valid video, shorts, live, or playlist link.");
       }
 
+      const { type, id, videoId: maybeVideoId } = parsed;
+
+      // Reset error state on new link submit
+      setPlayerLoadError(false);
+      setInitAttempts(0);
+
       if (type === "playlist") {
-        let playlist = Storage.getPlaylists().find(p => p.id === id);
+        let cachedPlaylist = Storage.getPlaylists().find(p => p.id === id);
+        const initialVidId = maybeVideoId || "";
         
-        if (!playlist || playlist.videos.length === 0) {
-          let fetchedVideos: any[] = [];
-          let channelName = playlist?.channelName || "Unknown Channel";
-          let playlistTitle = playlist?.title || "YouTube Playlist";
-          let totalVideos = playlist?.totalVideos || 0;
-          let thumbnail = playlist?.thumbnail || "";
+        // --- SMART CACHING & INSTANT RESUME ---
+        if (cachedPlaylist && cachedPlaylist.videos.length > 0) {
+          // Immediately display cached version! Instant loading (<500ms)
+          setPlaylists(Storage.getPlaylists());
+          setActiveSession({ id: cachedPlaylist.id, type: "playlist" });
+          
+          const lastWatchedVideo = cachedPlaylist.videos.find(v => v.progress > 0 && v.progress < 95) || cachedPlaylist.videos[0];
+          if (lastWatchedVideo) {
+            playVideoInSession(lastWatchedVideo.id, lastWatchedVideo.title, lastWatchedVideo.channelName);
+          } else if (initialVidId) {
+            const initialVid = cachedPlaylist.videos.find(v => v.id === initialVidId);
+            if (initialVid) {
+              playVideoInSession(initialVid.id, initialVid.title, initialVid.channelName);
+            } else {
+              playVideoInSession(cachedPlaylist.videos[0].id, cachedPlaylist.videos[0].title, cachedPlaylist.videos[0].channelName);
+            }
+          }
+          
+          setIsLoading(false);
+          scrollToWorkspace();
+          setUrlInput("");
 
-          try {
-            const apiRes = await fetch(`/api/playlist-info?id=${id}`);
-            if (apiRes.ok) {
-              const data = await apiRes.json();
-              if (data && data.videos && data.videos.length > 0) {
-                fetchedVideos = data.videos;
-                totalVideos = data.videos.length;
-                if (data.videos[0].channelName) {
-                  channelName = data.videos[0].channelName;
+          // --- BACKGROUND REFRESH ---
+          // Quietly update in background without freezing the UI or interrupting the user
+          fetch(`/api/playlist?id=${id}`)
+            .then(async (res) => {
+              if (res.ok) {
+                const data = await res.json();
+                if (data && data.videos && data.videos.length > 0) {
+                  // Find any new videos not present in cache
+                  const cachedIds = new Set(cachedPlaylist!.videos.map(v => v.id));
+                  const newVideos = data.videos.filter((v: any) => !cachedIds.has(v.id));
+
+                  if (newVideos.length > 0) {
+                    // Update detected! Show toast banner in UI
+                    setBackgroundUpdateAvailable(true);
+                    setBackgroundNewLecturesCount(newVideos.length);
+                    setBackgroundPlaylistData(data);
+                  } else {
+                    // Silent update of metadata/title if changed, merge non-destructively
+                    const updated = {
+                      ...cachedPlaylist!,
+                      title: data.title || cachedPlaylist!.title,
+                      channelName: data.channelName || cachedPlaylist!.channelName,
+                      thumbnail: data.thumbnail || cachedPlaylist!.thumbnail,
+                    };
+                    Storage.savePlaylist(updated);
+                    setPlaylists(Storage.getPlaylists());
+                  }
                 }
-                thumbnail = data.videos[0].thumbnail || `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg`;
-                playlistTitle = `Playlist: ${data.videos[0].title} & more`;
               }
-            }
-          } catch (fetchErr) {
-            console.error("Failed fetching playlist-info from server", fetchErr);
-          }
+            })
+            .catch((bgErr) => console.warn("Background playlist sync failed silently", bgErr));
 
-          if (!playlist) {
-            playlist = {
-              id: id,
-              type: "playlist",
-              title: playlistTitle,
-              channelName: channelName,
-              totalVideos: totalVideos,
-              videos: fetchedVideos,
-              thumbnail: thumbnail,
-              progress: 0,
-              lastWatchedAt: new Date().toISOString()
-            };
-          } else {
-            playlist.videos = fetchedVideos;
-            playlist.totalVideos = totalVideos;
-            playlist.channelName = channelName;
-            if (thumbnail) {
-              playlist.thumbnail = thumbnail;
-            }
-            if (playlistTitle && playlist.title === "YouTube Playlist") {
-              playlist.title = playlistTitle;
-            }
-          }
-          Storage.savePlaylist(playlist);
+          return;
         }
 
+        // --- NEW PLAYLIST / FIRST LOAD (WITH PROGRESSIVE CHUNK LOADING) ---
+        let playlist: PlaylistInfo | null = null;
+        try {
+          const res = await fetch(`/api/playlist?id=${id}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.videos && data.videos.length > 0) {
+              const totalVids = data.totalVideos || data.videos.length;
+              
+              if (totalVids > 20) {
+                // progressive loading trigger! Take first 20 first
+                const initialChunk = data.videos.slice(0, 20);
+                playlist = {
+                  id: id,
+                  type: "playlist",
+                  title: data.title || "YouTube Playlist",
+                  channelName: data.channelName || "Unknown Channel",
+                  totalVideos: totalVids,
+                  videos: initialChunk,
+                  thumbnail: data.thumbnail || `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg`,
+                  progress: 0,
+                  lastWatchedAt: new Date().toISOString()
+                };
+
+                // Store progressive state to continue importing in background
+                setFullProgressiveVideos(data.videos);
+                setProgressiveTotalCount(totalVids);
+                setProgressiveLoadedCount(20);
+                setProgressivePlaylistId(id);
+                setProgressiveLoading(true);
+
+              } else {
+                playlist = {
+                  id: id,
+                  type: "playlist",
+                  title: data.title || "YouTube Playlist",
+                  channelName: data.channelName || "Unknown Channel",
+                  totalVideos: totalVids,
+                  videos: data.videos,
+                  thumbnail: data.thumbnail || `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg`,
+                  progress: 0,
+                  lastWatchedAt: new Date().toISOString()
+                };
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Failed to load playlist from server, using fallback:", e);
+        }
+
+        // Fallback if scraping is totally down or returns empty
+        if (!playlist) {
+          playlist = {
+            id: id,
+            type: "playlist",
+            title: "YouTube Playlist",
+            channelName: "Unknown Channel",
+            totalVideos: initialVidId ? 1 : 0,
+            videos: initialVidId ? [{
+              id: initialVidId,
+              title: "Lecture 1",
+              channelName: "Unknown Channel",
+              duration: "10:00",
+              thumbnail: `https://i.ytimg.com/vi/${initialVidId}/hqdefault.jpg`,
+              progress: 0,
+              lastWatchedPosition: 0,
+              completed: false,
+              lectureNumber: 1
+            }] : [],
+            thumbnail: initialVidId ? `https://i.ytimg.com/vi/${initialVidId}/hqdefault.jpg` : "",
+            progress: 0,
+            lastWatchedAt: new Date().toISOString()
+          };
+        }
+
+        Storage.savePlaylist(playlist);
         setPlaylists(Storage.getPlaylists());
         setActiveSession({ id: playlist.id, type: "playlist" });
         
         if (playlist.videos.length > 0) {
           const firstVid = playlist.videos[0];
-          setActiveVideoId(firstVid.id);
-          setActiveVideoTitle(firstVid.title);
-          setActiveVideoChannel(firstVid.channelName);
+          playVideoInSession(firstVid.id, firstVid.title, firstVid.channelName);
         } else {
-          // If the URL has a video ID along with the list ID, use it to kickstart the player.
-          let initialVideoId = "";
-          try {
-            const parsedUrl = new URL(urlStr);
-            if (parsedUrl.searchParams.has("v")) {
-              initialVideoId = parsedUrl.searchParams.get("v")!;
-            }
-          } catch (e) {
-            const vMatch = urlStr.match(/[?&]v=([a-zA-Z0-9_-]+)/);
-            if (vMatch) initialVideoId = vMatch[1];
-          }
-
-          setActiveVideoId(initialVideoId); // Will be populated by the iframe player if possible
-          setActiveVideoTitle("YouTube Playlist");
-          setActiveVideoChannel("Unknown Channel");
+          playVideoInSession(initialVidId || "", "YouTube Playlist", "Unknown Channel");
         }
+
+        // Save session state to IndexedDB
+        try {
+          await PlaylistDb.savePlaylistState({
+            playlistId: id,
+            playlistUrl: `https://www.youtube.com/playlist?list=${id}`,
+            lastWatchedVideo: initialVidId || (playlist.videos[0]?.id || ""),
+            resumeTimestamp: 0,
+            watchProgress: 0,
+            updatedAt: new Date().toISOString()
+          });
+        } catch (dbErr) {
+          console.error("Failed to store playlist in IndexedDB", dbErr);
+        }
+
       } else {
+        // --- SINGLE VIDEO LOAD (WITH PARALLEL GEMINI METADATA FETCH) ---
         let video = Storage.getSingleVideos().find(v => v.id === id);
         
-        let initialTitle = video?.title || "YouTube Video";
-        let initialChannelName = video?.channelName || "Unknown Channel";
-        let initialDuration = video?.duration || "LIVE";
-        let initialThumbnail = video?.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+        // Set immediately to render skeleton and start player frame immediately
+        setIsSingleVideoDetailsLoading(true);
+        setSingleVideoMetadata(null);
+        setActiveSession({ id, type: "video" });
+        setActiveVideoId(id);
+        setActiveVideoTitle(video?.title || "Loading lecture details...");
+        setActiveVideoChannel(video?.channelName || "Connecting...");
 
-        if (!video || video.title === "YouTube Video" || video.channelName === "Unknown Channel" || video.duration === "LIVE") {
-          try {
-            const apiRes = await fetch(`/api/video-info?id=${id}`);
-            if (apiRes.ok) {
-              const data = await apiRes.json();
-              if (data && data.title) {
-                initialTitle = data.title;
-                initialChannelName = data.channelName || "Unknown Channel";
-                initialDuration = data.duration || "10:00";
-                initialThumbnail = data.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
-              }
-            }
-          } catch (fetchErr) {
-            console.error("Failed fetching video-info from server", fetchErr);
-          }
-        }
+        scrollToWorkspace();
+        setUrlInput("");
+        setIsLoading(false); // Stop loading spinner, the player is interactive now!
 
-        const videoToSave: SingleVideoInfo = {
-          id: id,
-          type: "video",
-          title: initialTitle,
-          channelName: initialChannelName,
-          duration: initialDuration,
-          thumbnail: initialThumbnail,
-          progress: video?.progress || 0,
-          lastWatchedAt: new Date().toISOString(),
-          completed: video?.completed || false,
-          isFavorite: video?.isFavorite || false
-        };
-        Storage.saveSingleVideo(videoToSave);
+        // Parallel metadata requests: Scraper & Gemini
+        const scrapePromise = fetch(`/api/video-metadata?id=${id}`)
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null);
 
-        setSingleVideos(Storage.getSingleVideos());
-        setActiveSession({ id: videoToSave.id, type: "video" });
-        
-        setActiveVideoId(videoToSave.id);
-        setActiveVideoTitle(videoToSave.title);
-        setActiveVideoChannel(videoToSave.channelName);
+        const geminiPromise = hasGeminiKey()
+          ? fetchVideoMetadataWithGemini(id).catch((err) => {
+              console.warn("Gemini metadata failed, falling back to basic scraping:", err);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        Promise.all([scrapePromise, geminiPromise]).then(([scraped, gemini]) => {
+          const mergedTitle = gemini?.title || scraped?.title || video?.title || "YouTube Lecture";
+          const mergedChannel = gemini?.channelName || scraped?.channelName || video?.channelName || "Unknown Creator";
+          const mergedDuration = scraped?.duration || video?.duration || "10:00";
+          const mergedDesc = gemini?.description || scraped?.description || "";
+          const mergedPublishDate = scraped?.publishDate || "";
+          const mergedTags = gemini?.tags || [];
+
+          const videoToSave: SingleVideoInfo = {
+            id: id,
+            type: "video",
+            title: mergedTitle,
+            channelName: mergedChannel,
+            duration: mergedDuration,
+            thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+            progress: video?.progress || 0,
+            lastWatchedAt: new Date().toISOString(),
+            completed: video?.completed || false,
+            isFavorite: video?.isFavorite || false
+          };
+
+          Storage.saveSingleVideo(videoToSave);
+          setSingleVideos(Storage.getSingleVideos());
+          
+          setActiveVideoTitle(mergedTitle);
+          setActiveVideoChannel(mergedChannel);
+
+          setSingleVideoMetadata({
+            id,
+            title: mergedTitle,
+            channelName: mergedChannel,
+            duration: mergedDuration,
+            publishDate: mergedPublishDate,
+            description: mergedDesc,
+            tags: mergedTags
+          });
+
+          setIsSingleVideoDetailsLoading(false);
+        }).catch(err => {
+          console.error("Parallel single video metadata fetch failed", err);
+          setIsSingleVideoDetailsLoading(false);
+        });
+
+        return; // Early return because single video details are fetched asynchronously
       }
 
       scrollToWorkspace();
@@ -1051,9 +1253,94 @@ export default function App() {
     }
   };
 
+  // Background Progressive Chunk Loading Effect
+  useEffect(() => {
+    if (!progressiveLoading || !progressivePlaylistId || fullProgressiveVideos.length === 0) return;
+
+    const timer = setTimeout(() => {
+      const playlistsFromDb = Storage.getPlaylists();
+      const plIndex = playlistsFromDb.findIndex(p => p.id === progressivePlaylistId);
+      if (plIndex === -1) {
+        setProgressiveLoading(false);
+        return;
+      }
+
+      const pl = playlistsFromDb[plIndex];
+      const nextCount = Math.min(progressiveLoadedCount + 20, progressiveTotalCount);
+      
+      // Slice the next set of videos
+      const chunk = fullProgressiveVideos.slice(0, nextCount);
+      
+      pl.videos = chunk;
+      pl.totalVideos = progressiveTotalCount; // Keep total videos accurate
+
+      // Calculate correct progress
+      const completedCount = pl.videos.filter(v => v.completed).length;
+      pl.progress = Math.round((completedCount / progressiveTotalCount) * 100) || 0;
+
+      playlistsFromDb[plIndex] = pl;
+      Storage.savePlaylist(pl);
+      setPlaylists(playlistsFromDb);
+      setProgressiveLoadedCount(nextCount);
+
+      if (nextCount >= progressiveTotalCount) {
+        setProgressiveLoading(false);
+      }
+    }, 400); // 400ms interval for super smooth animation and rendering
+
+    return () => clearTimeout(timer);
+  }, [progressiveLoading, progressivePlaylistId, progressiveLoadedCount, progressiveTotalCount, fullProgressiveVideos]);
+
+  // Merge Background Refresh Playlist updates
+  const handleApplyBackgroundUpdate = () => {
+    if (!backgroundPlaylistData || !activeSession || activeSession.type !== "playlist") return;
+
+    const playlistsFromDb = Storage.getPlaylists();
+    const plIndex = playlistsFromDb.findIndex(p => p.id === activeSession.id);
+    if (plIndex === -1) return;
+
+    const currentPl = playlistsFromDb[plIndex];
+    const incomingVideos = backgroundPlaylistData.videos || [];
+
+    // Merge incoming videos, keeping user's progress and notes intact!
+    const mergedVideos = incomingVideos.map((v: any, index: number) => {
+      const existing = currentPl.videos.find(x => x.id === v.id);
+      return {
+        ...v,
+        progress: existing?.progress || 0,
+        lastWatchedPosition: existing?.lastWatchedPosition || 0,
+        completed: existing?.completed || false,
+        lectureNumber: index + 1
+      };
+    });
+
+    currentPl.videos = mergedVideos;
+    currentPl.totalVideos = mergedVideos.length;
+    currentPl.title = backgroundPlaylistData.title || currentPl.title;
+    currentPl.channelName = backgroundPlaylistData.channelName || currentPl.channelName;
+    currentPl.thumbnail = backgroundPlaylistData.thumbnail || currentPl.thumbnail;
+
+    // Recalculate progress
+    const completedCount = mergedVideos.filter((v: any) => v.completed).length;
+    currentPl.progress = Math.round((completedCount / mergedVideos.length) * 100) || 0;
+
+    playlistsFromDb[plIndex] = currentPl;
+    Storage.savePlaylist(currentPl);
+    setPlaylists(playlistsFromDb);
+
+    // Reset background update state
+    setBackgroundUpdateAvailable(false);
+    setBackgroundNewLecturesCount(0);
+    setBackgroundPlaylistData(null);
+  };
+
+
   // Set active session from history/favorites click
   const resumeLearningSession = (id: string, type: "playlist" | "video", shouldSwitchTab = true) => {
     setActiveSession({ id, type });
+    setPlayerLoadError(false);
+    setInitAttempts(0);
+
     if (type === "playlist") {
       const playlist = Storage.getPlaylists().find(p => p.id === id);
       if (playlist) {
@@ -1061,6 +1348,19 @@ export default function App() {
         const lastWatchedVideo = playlist.videos.find(v => v.progress > 0 && v.progress < 95) || playlist.videos[0];
         if (lastWatchedVideo) {
           playVideoInSession(lastWatchedVideo.id, lastWatchedVideo.title, lastWatchedVideo.channelName);
+          // Sync playlist to IndexedDB
+          try {
+            PlaylistDb.savePlaylistState({
+              playlistId: playlist.id,
+              playlistUrl: `https://www.youtube.com/playlist?list=${playlist.id}`,
+              lastWatchedVideo: lastWatchedVideo.id,
+              resumeTimestamp: Math.floor(lastWatchedVideo.lastWatchedPosition || 0),
+              watchProgress: playlist.progress,
+              updatedAt: new Date().toISOString()
+            });
+          } catch (dbErr) {
+            console.error("Failed to store playlist in IndexedDB on resume", dbErr);
+          }
         }
       }
     } else {
@@ -1245,13 +1545,13 @@ export default function App() {
       if (typeof content === "string") {
         const ok = Storage.importData(content);
         if (ok) {
-          alert("All backup data restored successfully!");
+          toast.success("Backup Restored", "All backup data restored successfully!");
           setPlaylists(Storage.getPlaylists());
           setSingleVideos(Storage.getSingleVideos());
           setFavorites(Storage.getFavorites());
           setSettings(Storage.getSettings());
         } else {
-          alert("Invalid file format. Please upload a valid LearnStudy backup JSON file.");
+          toast.error("Restore Failed", "Invalid file format. Please upload a valid LearnStudy backup JSON file.");
         }
       }
     };
@@ -1259,17 +1559,28 @@ export default function App() {
   };
 
   const handleResetData = () => {
-    if (confirm("Are you absolutely sure you want to clear all notes, bookmarks, playlists, and histories? This action is permanent!")) {
-      Storage.resetAllData();
-      setPlaylists([]);
-      setSingleVideos([]);
-      setFavorites({ playlists: [], videos: [] });
-      setActiveSession(null);
-      setActiveVideoId("");
-      setActiveVideoTitle("");
-      alert("All local data has been successfully cleared.");
-      setActiveTab("home");
-    }
+    toast.warning(
+      "Reset All Local Data?",
+      "This action is permanent and will clear all notes, bookmarks, playlists, and histories!",
+      {
+        duration: 10000,
+        action: {
+          label: "Reset Data",
+          primary: true,
+          onClick: () => {
+            Storage.resetAllData();
+            setPlaylists([]);
+            setSingleVideos([]);
+            setFavorites({ playlists: [], videos: [] });
+            setActiveSession(null);
+            setActiveVideoId("");
+            setActiveVideoTitle("");
+            toast.success("Data Reset Complete", "All local data has been successfully cleared.");
+            setActiveTab("home");
+          }
+        }
+      }
+    );
   };
 
   // Keyboard Shortcuts system listener
@@ -1806,6 +2117,19 @@ export default function App() {
                   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
                 })()}
               </span>
+            </button>
+
+            {/* Mobile Statistics Button */}
+            <button
+              onClick={() => { setActiveTab("stats"); setSearchQuery(""); }}
+              className={`p-2 sm:p-2.5 rounded-xl border cursor-pointer transition-all duration-200 hover:scale-[1.04] active:scale-[0.96] shadow-sm hover:shadow-md flex md:hidden items-center justify-center ${
+                activeTab === "stats"
+                  ? "bg-blue-500/15 border-blue-500/40 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25 hover:border-blue-500/60"
+                  : "bg-slate-100 hover:bg-slate-200/80 border-slate-200/50 hover:border-slate-300 text-slate-700 hover:text-slate-900 dark:bg-zinc-900 dark:hover:bg-zinc-800 border-zinc-800 dark:border-zinc-800/80 dark:hover:border-zinc-700 dark:text-zinc-300 dark:hover:text-white"
+              }`}
+              title="Study Statistics"
+            >
+              <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
 
             {/* Theme Single Switch Toggle */}
@@ -2717,7 +3041,7 @@ export default function App() {
                             onClick={() => {
                               if (activeSession) {
                                 handleProgressUpdate(9999, 10000); // Trigger finish
-                                alert("Lesson marked as Completed!");
+                                toast.success("Lesson Completed", "Great job! This lecture has been marked as finished.");
                               }
                             }}
                             className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition shadow-sm shrink-0"
@@ -2835,18 +3159,64 @@ export default function App() {
                         
                         const isLive = currentVideo?.duration === "LIVE";
 
+                        if (isSingleVideoDetailsLoading) {
+                          return (
+                            <div className="bg-slate-50 dark:bg-zinc-900/45 border border-slate-200/60 dark:border-zinc-800/60 rounded-2xl p-4 shadow-sm animate-pulse space-y-3">
+                              <div className="h-5 bg-slate-200 dark:bg-zinc-800 rounded-lg w-3/4" />
+                              <div className="flex items-center gap-2">
+                                <div className="h-3 bg-slate-200 dark:bg-zinc-800 rounded-md w-1/4" />
+                                <div className="h-3 bg-slate-200 dark:bg-zinc-800 rounded-md w-12" />
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        const hasMetadata = singleVideoMetadata && singleVideoMetadata.id === activeVideoId;
+                        const publishDate = hasMetadata ? singleVideoMetadata.publishDate : "";
+                        const description = hasMetadata ? singleVideoMetadata.description : "";
+                        const tags = hasMetadata ? singleVideoMetadata.tags : [];
+
                         return (
-                          <div className="bg-slate-50 dark:bg-zinc-900/45 border border-slate-200/60 dark:border-zinc-800/60 rounded-2xl p-4 shadow-sm select-none relative overflow-hidden">
-                            <h1 className="text-base sm:text-lg font-bold text-slate-950 dark:text-zinc-50 leading-snug pr-20" title={activeVideoTitle}>
-                              {activeVideoTitle}
-                            </h1>
-                            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1.5 flex items-center gap-2">
-                              <span className="font-semibold text-slate-700 dark:text-zinc-300">{activeVideoChannel}</span>
-                              <span>•</span>
-                              <span className="text-blue-600 dark:text-blue-400 font-bold uppercase tracking-wider text-[10px]">
-                                {activeSession?.type === "playlist" ? "Playlist Module" : "Single Lecture"}
-                              </span>
-                            </p>
+                          <div className="bg-slate-50 dark:bg-zinc-900/45 border border-slate-200/60 dark:border-zinc-800/60 rounded-2xl p-4 sm:p-5 shadow-sm relative overflow-hidden space-y-3">
+                            <div>
+                              <h1 className="text-base sm:text-lg font-bold text-slate-950 dark:text-zinc-50 leading-snug pr-20" title={activeVideoTitle}>
+                                {activeVideoTitle}
+                              </h1>
+                              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1.5 flex flex-wrap items-center gap-2">
+                                <span className="font-semibold text-slate-700 dark:text-zinc-300">{activeVideoChannel}</span>
+                                <span>•</span>
+                                <span className="text-blue-600 dark:text-blue-400 font-bold uppercase tracking-wider text-[10px]">
+                                  {activeSession?.type === "playlist" ? "Playlist Module" : "Single Lecture"}
+                                </span>
+                                {publishDate && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="text-slate-500 dark:text-zinc-400">{publishDate}</span>
+                                  </>
+                                )}
+                              </p>
+                            </div>
+
+                            {/* Academic curriculum tags / topics */}
+                            {tags && tags.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 pt-1">
+                                {tags.map((tag, idx) => (
+                                  <span key={idx} className="text-[10px] bg-slate-200/50 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 font-semibold px-2.5 py-0.5 rounded-md">
+                                    #{tag.toLowerCase().replace(/[^a-zA-Z0-9]/g, "")}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Lecture syllabus description */}
+                            {description && (
+                              <div className="text-xs text-slate-600 dark:text-zinc-400 border-t border-slate-200/45 dark:border-zinc-800/45 pt-3">
+                                <div className="font-semibold text-[10px] uppercase tracking-wider text-slate-400 dark:text-zinc-500 mb-1.5">Lecture Syllabus & Overview</div>
+                                <p className="line-clamp-4 leading-relaxed whitespace-pre-wrap text-slate-600 dark:text-zinc-400">
+                                  {description}
+                                </p>
+                              </div>
+                            )}
                           </div>
                         );
                       })()}
@@ -2951,6 +3321,14 @@ export default function App() {
 
                       </div>
 
+                      {/* AI Study Companion Section */}
+                      <AIStudyCompanion 
+                        videoId={activeVideoId} 
+                        videoTitle={activeVideoTitle} 
+                        channelName={activeVideoChannel} 
+                        onOpenKeyModal={() => setOnboardingOpen(true)} 
+                      />
+
                     </div>
 
                     {/* Left/Right scrollable Lecture list (Unless inside theatre mode) */}
@@ -2970,50 +3348,157 @@ export default function App() {
                             </span>
                           </div>
 
-                          {/* Playlist search if applicable */}
+                          {/* --- PROGRESSIVE LOADING STATUS PANEL --- */}
+                          {progressiveLoading && progressivePlaylistId === activeSession?.id && (
+                            <div className="bg-blue-50/50 dark:bg-blue-950/10 border border-blue-100 dark:border-blue-950/30 p-3 rounded-2xl space-y-2">
+                              <div className="flex items-center justify-between text-[11px] font-bold text-blue-600 dark:text-blue-400">
+                                <span className="flex items-center gap-1.5 animate-pulse">
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                  Importing lectures...
+                                </span>
+                                <span>{progressiveLoadedCount} / {progressiveTotalCount}</span>
+                              </div>
+                              <div className="w-full bg-slate-100 dark:bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+                                <div style={{ width: `${(progressiveLoadedCount / progressiveTotalCount) * 100}%` }} className="h-full bg-blue-500 rounded-full transition-all duration-350" />
+                              </div>
+                              <p className="text-[10px] text-slate-400 dark:text-zinc-500">Study loaded lectures immediately. Remaining syllabus loads in background.</p>
+                            </div>
+                          )}
+
+                          {/* --- BACKGROUND UPDATE BANNER --- */}
+                          {backgroundUpdateAvailable && (
+                            <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30 p-3 rounded-2xl flex items-center justify-between gap-3 animate-in fade-in duration-300">
+                              <div className="flex items-start gap-2">
+                                <Sparkles className="w-4 h-4 text-emerald-500 mt-0.5 shrink-0" />
+                                <div>
+                                  <div className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300">{backgroundNewLecturesCount} new lectures found!</div>
+                                  <p className="text-[9px] text-emerald-600/80 dark:text-emerald-400/80 leading-tight">Sync the updated YouTube queue.</p>
+                                </div>
+                              </div>
+                              <button 
+                                onClick={handleApplyBackgroundUpdate}
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[9px] uppercase tracking-wider px-2 py-1 rounded-lg transition shadow-sm shrink-0"
+                              >
+                                Sync
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Playlist search, filters & sorting if applicable */}
                           {activeSession?.type === "playlist" && (
-                            <div className="relative">
-                              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400 dark:text-zinc-500" />
-                              <input
-                                type="text"
-                                placeholder="Search lectures in this playlist..."
-                                value={playlistVideoSearchQuery}
-                                onChange={(e) => setPlaylistVideoSearchQuery(e.target.value)}
-                                className="w-full bg-slate-100 dark:bg-zinc-900 border border-transparent focus:border-slate-300 dark:focus:border-zinc-700 text-xs pl-9 pr-8 py-2.5 rounded-xl text-slate-800 dark:text-zinc-200 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none transition"
-                              />
-                              {playlistVideoSearchQuery && (
-                                <button onClick={() => setPlaylistVideoSearchQuery("")} className="absolute right-3 top-2.5 text-slate-400 dark:text-zinc-500">
-                                  <X className="w-4 h-4" />
+                            <div className="space-y-3">
+                              {/* Search */}
+                              <div className="relative">
+                                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400 dark:text-zinc-500" />
+                                <input
+                                  type="text"
+                                  placeholder="Search lectures in this playlist..."
+                                  value={playlistVideoSearchQuery}
+                                  onChange={(e) => setPlaylistVideoSearchQuery(e.target.value)}
+                                  className="w-full bg-slate-100 dark:bg-zinc-900 border border-transparent focus:border-slate-300 dark:focus:border-zinc-700 text-xs pl-9 pr-8 py-2.5 rounded-xl text-slate-800 dark:text-zinc-200 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none transition"
+                                />
+                                {playlistVideoSearchQuery && (
+                                  <button onClick={() => setPlaylistVideoSearchQuery("")} className="absolute right-3 top-2.5 text-slate-400 dark:text-zinc-500">
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+
+                              {/* Filters & Sorting controls */}
+                              <div className="flex items-center justify-between gap-2 border-t border-slate-100 dark:border-zinc-800/80 pt-2 pb-1">
+                                <div className="flex gap-1 bg-slate-100/80 dark:bg-zinc-950/40 p-0.5 rounded-lg border border-slate-200/20">
+                                  {(["all", "completed", "remaining"] as const).map((f) => (
+                                    <button
+                                      key={f}
+                                      onClick={() => setQueueFilter(f)}
+                                      className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-md transition ${queueFilter === f ? "bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-sm" : "text-slate-500 dark:text-zinc-500 hover:text-slate-800 dark:hover:text-zinc-350"}`}
+                                    >
+                                      {f}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                <button
+                                  onClick={() => setQueueSort(p => p === "number-asc" ? "number-desc" : "number-asc")}
+                                  className="p-1 rounded-lg border border-slate-200/60 dark:border-zinc-850 hover:bg-slate-100 dark:hover:bg-zinc-950 text-slate-500 dark:text-zinc-400 transition flex items-center gap-1"
+                                  title={queueSort === "number-asc" ? "Sorted Oldest to Newest" : "Sorted Newest to Oldest"}
+                                >
+                                  <ArrowUpDown className="w-3.5 h-3.5" />
+                                  <span className="text-[9px] font-bold uppercase tracking-wider hidden sm:inline">
+                                    {queueSort === "number-asc" ? "Asc" : "Desc"}
+                                  </span>
                                 </button>
-                              )}
+                              </div>
                             </div>
                           )}
 
                           {/* Actual Lecture cards list */}
                           <div className="space-y-3 max-h-[700px] overflow-y-auto  pr-1">
-                            {activeSession?.type === "playlist" ? (
-                              (playlists.find(p => p.id === activeSession.id)?.videos || [])
-                                .filter(v => playlistVideoSearchQuery ? v.title.toLowerCase().includes(playlistVideoSearchQuery.toLowerCase()) : true)
-                                .map((v, idx) => (
-                                <div
-                                  key={v.id}
-                                  onClick={() => playVideoInSession(v.id, v.title, v.channelName)}
-                                  className={`group p-3 rounded-2xl cursor-pointer border transition flex gap-3 ${v.id === activeVideoId ? "bg-blue-50/50 dark:bg-blue-950/20 border-blue-500/50 dark:border-blue-400/40" : "bg-slate-50/50 hover:bg-slate-100/50 dark:bg-zinc-950/30 dark:hover:bg-zinc-950/60 border-slate-200/50 dark:border-zinc-850"}`}
-                                >
-                                  <div className="relative w-24 aspect-video overflow-hidden rounded-xl bg-slate-100 shrink-0">
-                                    <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt={v.title} />
-                                    <span className="absolute bottom-1 right-1 text-[9px] px-1 py-0.2 rounded font-bold text-white bg-black/85">
-                                      {v.duration !== "LIVE" ? v.duration : ""}
-                                    </span>
+                            {activeSession?.type === "playlist" ? (() => {
+                              const rawVideos = playlists.find(p => p.id === activeSession.id)?.videos || [];
+                              let processedVideos = rawVideos.filter(v => 
+                                playlistVideoSearchQuery ? v.title.toLowerCase().includes(playlistVideoSearchQuery.toLowerCase()) : true
+                              );
+
+                              if (queueFilter === "completed") {
+                                processedVideos = processedVideos.filter(v => v.completed);
+                              } else if (queueFilter === "remaining") {
+                                processedVideos = processedVideos.filter(v => !v.completed);
+                              }
+
+                              processedVideos = [...processedVideos].sort((a, b) => {
+                                const numA = a.lectureNumber || 0;
+                                const numB = b.lectureNumber || 0;
+                                return queueSort === "number-asc" ? numA - numB : numB - numA;
+                              });
+
+                              if (processedVideos.length === 0) {
+                                return (
+                                  <div className="text-center py-8 text-slate-400 dark:text-zinc-500 text-xs">
+                                    No lectures match your criteria.
                                   </div>
-                                  <div className="flex-1 space-y-1">
-                                    <div className="text-[9px] font-bold text-blue-600 dark:text-blue-400">
-                                      LECTURE {idx + 1}
+                                );
+                              }
+
+                              return processedVideos.map((v, idx) => {
+                                const isSelected = v.id === activeVideoId;
+                                return (
+                                  <div
+                                    key={v.id}
+                                    onClick={() => playVideoInSession(v.id, v.title, v.channelName)}
+                                    className={`group p-3 rounded-2xl cursor-pointer border transition flex gap-3 ${isSelected ? "bg-blue-50/50 dark:bg-blue-950/20 border-blue-500/50 dark:border-blue-400/40" : "bg-slate-50/50 hover:bg-slate-100/50 dark:bg-zinc-950/30 dark:hover:bg-zinc-950/60 border-slate-200/50 dark:border-zinc-850"}`}
+                                  >
+                                    {/* Thumbnail Frame with CLS Prevention & Low-res Transition */}
+                                    <div className="relative w-24 aspect-video overflow-hidden rounded-xl bg-slate-150 dark:bg-zinc-800 shrink-0 border border-slate-200/10">
+                                      {/* Low-res Thumbnail */}
+                                      <img 
+                                        src={`https://img.youtube.com/vi/${v.id}/default.jpg`} 
+                                        className="absolute inset-0 w-full h-full object-cover blur-md opacity-60 scale-105 pointer-events-none" 
+                                        alt="" 
+                                      />
+                                      {/* HD Thumbnail */}
+                                      <img 
+                                        src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} 
+                                        onLoad={(e) => {
+                                          (e.currentTarget as HTMLImageElement).classList.remove("opacity-0");
+                                          (e.currentTarget as HTMLImageElement).classList.add("opacity-100");
+                                        }}
+                                        className="absolute inset-0 w-full h-full object-cover opacity-0 transition-opacity duration-300 ease-in-out" 
+                                        alt={v.title} 
+                                      />
+                                      <span className="absolute bottom-1 right-1 text-[9px] px-1 py-0.2 rounded font-bold text-white bg-black/85">
+                                        {v.duration !== "LIVE" ? v.duration : ""}
+                                      </span>
                                     </div>
-                                    <div className={`text-xs font-bold line-clamp-2 ${v.id === activeVideoId ? "text-slate-950 dark:text-white" : "text-slate-700 dark:text-zinc-300"}`}>
-                                      {v.title}
-                                    </div>
-                                    
+                                    <div className="flex-1 space-y-1">
+                                      <div className="text-[9px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest flex items-center justify-between">
+                                        <span>LECTURE {v.lectureNumber || idx + 1}</span>
+                                        {v.completed && <CheckCircle className="w-3 h-3 text-emerald-500 fill-current bg-white dark:bg-zinc-900 rounded-full" />}
+                                      </div>
+                                      <div className={`text-xs font-bold line-clamp-2 ${isSelected ? "text-slate-950 dark:text-white" : "text-slate-700 dark:text-zinc-300"}`}>
+                                        {v.title}
+                                      </div>
+                                      
                                       <div className="flex items-center gap-2 mt-2">
                                         <div className="flex-1 bg-slate-200 dark:bg-zinc-800 h-1 rounded-full overflow-hidden">
                                           <div style={{ width: `${v.progress}%` }} className={`h-full ${v.completed ? "bg-emerald-500" : "bg-blue-500"}`} />
@@ -3022,10 +3507,11 @@ export default function App() {
                                           {v.completed ? "Done" : `${v.progress}%`}
                                         </span>
                                       </div>
+                                    </div>
                                   </div>
-                                </div>
-                              ))
-                            ) : (
+                                );
+                              });
+                            })() : (
                               <div className="p-4 bg-slate-50 dark:bg-zinc-950/50 border border-dashed border-slate-200 dark:border-zinc-850 rounded-2xl text-center">
                                 <Youtube className="w-8 h-8 text-slate-300 mx-auto" />
                                 <div className="text-xs font-bold text-slate-700 dark:text-zinc-300 mt-2">Single Lecture Active</div>
@@ -3401,6 +3887,20 @@ export default function App() {
                       </button>
                     </div>
 
+                    {/* Notification Sound toggle */}
+                    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
+                      <div>
+                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Notification Sound Effects</div>
+                        <div className="text-xs text-slate-500 dark:text-zinc-400">Play a very subtle dual-tone chime when notifications appear</div>
+                      </div>
+                      <button
+                        onClick={() => setSoundEnabled(!soundEnabled)}
+                        className={`w-11 h-6 rounded-full transition relative flex items-center px-1 ${soundEnabled ? "bg-blue-600" : "bg-slate-200 dark:bg-zinc-800"}`}
+                      >
+                        <div className={`w-4 h-4 bg-white rounded-full shadow transition-all transform ${soundEnabled ? "translate-x-5" : ""}`} />
+                      </button>
+                    </div>
+
                     {/* Shortcut Cheat Sheet */}
                     {settings.enableShortcuts && (
                       <div className="pt-2">
@@ -3481,6 +3981,151 @@ export default function App() {
                         Reset All Cached Data
                       </button>
                     </div>
+                  </div>
+
+                  {/* Gemini AI Settings Card */}
+                  <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm space-y-6">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50 flex items-center gap-1.5 uppercase tracking-wide">
+                          <Sparkles className="w-4 h-4 text-blue-500 animate-pulse" />
+                          Gemini AI Settings
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-zinc-400 mt-1">Manage your custom API key which powers the study companion, summaries, tutor chat, and mastery quizzes.</div>
+                      </div>
+                      
+                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${hasGeminiKeyInState ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-450" : "bg-red-500/10 text-red-600 dark:text-red-400"}`}>
+                        {hasGeminiKeyInState ? "Connected" : "Disconnected"}
+                      </span>
+                    </div>
+
+                    {hasGeminiKeyInState ? (
+                      <div className="space-y-4">
+                        {/* Connected layout */}
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase text-slate-500 dark:text-zinc-400 tracking-wider">Connected API Key</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              readOnly
+                              value={showFullKeyInSettings ? (getGeminiKey() || "") : maskApiKey(getGeminiKey() || "")}
+                              className="flex-1 bg-slate-100 dark:bg-zinc-950 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-800 text-xs px-3.5 py-2.5 rounded-xl font-mono focus:outline-none select-all"
+                            />
+                            
+                            <button
+                              onClick={() => {
+                                const fullKey = getGeminiKey();
+                                if (fullKey) {
+                                  navigator.clipboard.writeText(fullKey);
+                                  toast.success("API Key Copied", "Full API key copied to clipboard!");
+                                }
+                              }}
+                              className="p-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-850 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-slate-700 dark:text-zinc-300 transition text-xs font-bold"
+                              title="Copy API Key"
+                            >
+                              Copy
+                            </button>
+
+                            <button
+                              onClick={() => setShowFullKeyInSettings(!showFullKeyInSettings)}
+                              className="p-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-850 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-slate-700 dark:text-zinc-300 transition text-xs font-bold"
+                              title={showFullKeyInSettings ? "Hide Key" : "Show Key"}
+                            >
+                              {showFullKeyInSettings ? "Hide" : "Show"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {settingsKeyTestResult && (
+                          <div className={`text-xs p-3.5 rounded-xl border font-semibold ${settingsKeyTestResult.type === "success" ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-600 dark:text-emerald-450" : "bg-red-500/10 border-red-500/25 text-red-600 dark:text-red-450"}`}>
+                            {settingsKeyTestResult.text}
+                          </div>
+                        )}
+
+                        <div className="flex flex-wrap items-center gap-3 pt-2">
+                          <button
+                            onClick={async () => {
+                              setSettingsKeyTestLoading(true);
+                              setSettingsKeyTestResult(null);
+                              try {
+                                const currentKey = getGeminiKey();
+                                if (!currentKey) throw new Error("No connected key found");
+                                const { validateGeminiKey } = await import("./utils/gemini");
+                                const isValid = await validateGeminiKey(currentKey);
+                                if (isValid) {
+                                  setSettingsKeyTestResult({ type: "success", text: "✅ API key validated and working perfectly. Direct connection to Google GenAI is active." });
+                                }
+                              } catch (err: any) {
+                                setSettingsKeyTestResult({ type: "error", text: `❌ Validation Failed: ${err.message || "Invalid Key configuration or bad connection."}` });
+                              } finally {
+                                setSettingsKeyTestLoading(false);
+                              }
+                            }}
+                            disabled={settingsKeyTestLoading}
+                            className="bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs px-4 py-2.5 rounded-xl transition flex items-center gap-2 cursor-pointer shadow-md shadow-blue-500/10"
+                          >
+                            {settingsKeyTestLoading ? "Testing..." : "Test Connection"}
+                          </button>
+
+                          <button
+                            onClick={() => setOnboardingOpen(true)}
+                            className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-850 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-200 border border-slate-200 dark:border-zinc-800 font-bold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer"
+                          >
+                            Replace API Key
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              toast.warning(
+                                "Remove API Key?",
+                                "This will disable all AI-powered features like Summarizer, Doubt Solver, and Quizzes.",
+                                {
+                                  duration: 10000,
+                                  action: {
+                                    label: "Remove",
+                                    primary: true,
+                                    onClick: () => {
+                                      removeGeminiKey();
+                                      setHasGeminiKeyInState(false);
+                                      setSettingsKeyTestResult(null);
+                                      toast.success("API Key Removed", "Gemini API key has been removed successfully.");
+                                    }
+                                  }
+                                }
+                              );
+                            }}
+                            className="bg-red-50 hover:bg-red-100 dark:bg-red-950/20 text-red-600 border border-red-200 dark:border-red-900/30 font-bold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer"
+                          >
+                            Remove Key
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {/* Disconnected layout */}
+                        <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
+                          Your Gemini API key is currently disconnected. Connecting your own key is free, takes less than 30 seconds, and unlocks all the AI lecture analysis engines.
+                        </p>
+
+                        <div className="flex flex-wrap items-center gap-3">
+                          <button
+                            onClick={() => setOnboardingOpen(true)}
+                            className="bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs px-5 py-2.5 rounded-xl transition shadow cursor-pointer"
+                          >
+                            Connect API Key
+                          </button>
+
+                          <a
+                            href="https://aistudio.google.com/api-keys"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-bold text-xs px-5 py-2.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                          >
+                            Generate Free API Key
+                          </a>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -3594,6 +4239,17 @@ export default function App() {
           <span className="font-sans">{shortcutToast.text}</span>
         </div>
       )}
+
+      {/* 8. Gemini BYOK Onboarding Modal */}
+      <GeminiOnboardingModal 
+        isOpen={onboardingOpen} 
+        onSuccess={() => {
+          setOnboardingOpen(false);
+          setHasGeminiKeyInState(true);
+        }}
+        allowClose={hasGeminiKey()}
+        onClose={() => setOnboardingOpen(false)}
+      />
 
     </div>
   );

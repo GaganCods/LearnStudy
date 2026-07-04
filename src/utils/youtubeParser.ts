@@ -22,8 +22,8 @@ export function parseYoutubeUrl(urlStr: string): ParsedYoutubeUrl | null {
       };
     }
 
-    // Check for youtube.com watch path
-    if (url.hostname.includes("youtube.com") || url.hostname.includes("youtu.be")) {
+    // Check for youtube.com, youtu.be, or youtube-nocookie.com hostnames
+    if (url.hostname.includes("youtube.com") || url.hostname.includes("youtu.be") || url.hostname.includes("youtube-nocookie.com")) {
       if (url.hostname.includes("youtu.be")) {
         const videoId = url.pathname.slice(1).split("/")[0];
         if (videoId) {
@@ -61,13 +61,13 @@ export function parseYoutubeUrl(urlStr: string): ParsedYoutubeUrl | null {
     // Fall back to manual regex matching if URL parsing fails or if it is just a plain ID
   }
 
-  // Regex for playlist matching
+  // Regex for playlist matching (support list parameter in any context)
   const playlistMatch = cleaned.match(/[?&]list=([a-zA-Z0-9_-]+)/);
   if (playlistMatch && playlistMatch[1]) {
     return { type: "playlist", id: playlistMatch[1] };
   }
 
-  // Regex for various video ID matches
+  // Regex for various video ID matches (including shorts, live, embed, etc.)
   const videoMatch = cleaned.match(/(?:v=|\/embed\/|\/watch\?v=|\/\d+\/|\/vi\/|youtu\.be\/|shorts\/|live\/)([a-zA-Z0-9_-]{11})/);
   if (videoMatch && videoMatch[1]) {
     return { type: "video", id: videoMatch[1] };
@@ -78,8 +78,8 @@ export function parseYoutubeUrl(urlStr: string): ParsedYoutubeUrl | null {
     return { type: "video", id: cleaned };
   }
 
-  // If it's a playlist ID start (typically PL...), it could be a raw playlist ID
-  if (/^PL[a-zA-Z0-9_-]+$/.test(cleaned)) {
+  // If it's a playlist ID start (PL, UU, FL, WL, RD, OLAK5uy_ etc.), or a long string (>= 18 chars)
+  if (/^(PL|UU|FL|WL|RD|OLAK5uy_)[a-zA-Z0-9_-]+$/.test(cleaned) || (cleaned.length >= 18 && /^[a-zA-Z0-9_-]+$/.test(cleaned))) {
     return { type: "playlist", id: cleaned };
   }
 

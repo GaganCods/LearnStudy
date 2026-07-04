@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Storage } from "../utils/storage";
+import { useToast } from "./ToastContext";
 import { 
   FileText, Save, CheckCircle, Bold, Italic, Heading1, 
   List, Code, CheckSquare, Download, Clipboard, Sparkles 
@@ -11,6 +12,7 @@ interface InteractiveNotesProps {
 }
 
 export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps) {
+  const { toast } = useToast();
   const [noteText, setNoteText] = useState("");
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "idle">("idle");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -48,11 +50,23 @@ export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps)
     };
 
     const handleDeleteShortcut = () => {
-      if (window.confirm("Are you sure you want to delete all notes for this lecture? This action cannot be undone.")) {
-        setNoteText("");
-        Storage.saveNoteForVideo(videoId, "");
-        setSaveStatus("saved");
-      }
+      toast.warning(
+        "Clear Lecture Notes?",
+        "Are you sure you want to delete all notes for this lecture?",
+        {
+          duration: 10000,
+          action: {
+            label: "Delete",
+            primary: true,
+            onClick: () => {
+              setNoteText("");
+              Storage.saveNoteForVideo(videoId, "");
+              setSaveStatus("saved");
+              toast.success("Notes Saved", "Changes saved automatically.");
+            }
+          }
+        }
+      );
     };
 
     window.addEventListener("studytube-save-notes", handleSaveShortcut);
@@ -62,7 +76,7 @@ export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps)
       window.removeEventListener("studytube-save-notes", handleSaveShortcut);
       window.removeEventListener("studytube-delete-notes", handleDeleteShortcut);
     };
-  }, [videoId, noteText]);
+  }, [videoId, noteText, toast]);
 
   const insertText = (before: string, after: string = "") => {
     const textarea = textareaRef.current;
@@ -106,7 +120,7 @@ export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps)
 
   const handleCopyToClipboard = () => {
     navigator.clipboard.writeText(noteText);
-    alert("Notes copied to clipboard!");
+    toast.success("Notes Copied", "Your lecture notes have been copied to the clipboard.");
   };
 
   const wordCount = noteText.trim() === "" ? 0 : noteText.trim().split(/\s+/).length;

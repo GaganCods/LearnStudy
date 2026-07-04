@@ -7,417 +7,430 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// Helper to extract JSON block balancing braces
-function extractJsonBlock(html: string, keyword: string): any {
-  const index = html.indexOf(keyword);
-  if (index === -1) return null;
-  
-  const startIndex = html.indexOf("{", index);
-  if (startIndex === -1) return null;
-  
-  let braceCount = 0;
-  let inString = false;
-  let escape = false;
-  
-  for (let i = startIndex; i < html.length; i++) {
-    const char = html[i];
-    
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    
-    if (char === "\\") {
-      escape = true;
-      continue;
-    }
-    
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    
-    if (!inString) {
-      if (char === "{") {
-        braceCount++;
-      } else if (char === "}") {
-        braceCount--;
-        if (braceCount === 0) {
-          const jsonStr = html.substring(startIndex, i + 1);
-          try {
-            return JSON.parse(jsonStr);
-          } catch (e) {
-            console.error("JSON parse failed in extractJsonBlock for " + keyword, e);
-            return null;
-          }
-        }
-      }
-    }
-  }
-  return null;
-}
-
-// Fetch with a strict timeout to avoid Gateway Timeout errors
-async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 6000): Promise<Response> {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-    clearTimeout(id);
-    return response;
-  } catch (error) {
-    clearTimeout(id);
-    throw error;
-  }
-}
-
-// Parse YouTube URL to extract playlist ID or video ID
-function parseYoutubeUrl(urlStr: string) {
-  try {
-    const url = new URL(urlStr);
-    if (url.hostname.includes("youtube.com") || url.hostname.includes("youtu.be")) {
-      if (url.hostname.includes("youtu.be")) {
-        const videoId = url.pathname.slice(1);
-        return { type: "video" as const, id: videoId };
-      }
-      
-      const playlistId = url.searchParams.get("list");
-      if (playlistId) {
-        return { type: "playlist" as const, id: playlistId };
-      }
-      
-      const videoId = url.searchParams.get("v");
-      if (videoId) {
-        return { type: "video" as const, id: videoId };
-      }
-
-      if (url.pathname.startsWith("/embed/")) {
-        return { type: "video" as const, id: url.pathname.split("/")[2] };
-      }
-
-      if (url.pathname.startsWith("/live/")) {
-        const parts = url.pathname.split("/");
-        if (parts[2]) {
-          return { type: "video" as const, id: parts[2] };
-        }
-      }
-    }
-  } catch (e) {
-    // try regex
-  }
-  
-  const playlistMatch = urlStr.match(/[?&]list=([^#\&\?]+)/);
-  if (playlistMatch) {
-    return { type: "playlist" as const, id: playlistMatch[1] };
-  }
-  
-  const videoMatch = urlStr.match(/(?:v=|\/embed\/|\/watch\?v=|\/\d+\/|\/vi\/|youtu\.be\/|shorts\/|live\/)([^#\&\?]+)/);
-  if (videoMatch) {
-    return { type: "video" as const, id: videoMatch[1] };
-  }
-  
-  return null;
-}
-
-// Convert seconds to MM:SS or HH:MM:SS
-function formatDuration(secondsStr: string | number): string {
-  const totalSeconds = parseInt(String(secondsStr), 10);
-  if (isNaN(totalSeconds)) return "0:00";
-  
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  
-  const sStr = s < 10 ? `0${s}` : `${s}`;
-  if (h > 0) {
-    const mStr = m < 10 ? `0${m}` : `${m}`;
-    return `${h}:${mStr}:${sStr}`;
-  }
-  return `${m}:${sStr}`;
-}
-
-// Parse ISO 8601 duration string (e.g., PT1H15M30S or PT5M)
+// ISO 8601 Duration Parser helper
 function parseISO8601Duration(durationStr: string): string {
-  const matches = durationStr.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!matches) return "0:00";
+  const match = durationStr.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return "10:00";
+  const hours = parseInt(match[1] || "0", 10);
+  const minutes = parseInt(match[2] || "0", 10);
+  const seconds = parseInt(match[3] || "0", 10);
   
-  const h = parseInt(matches[1] || "0", 10);
-  const m = parseInt(matches[2] || "0", 10);
-  const s = parseInt(matches[3] || "0", 10);
-  
-  const sStr = s < 10 ? `0${s}` : `${s}`;
-  if (h > 0) {
-    const mStr = m < 10 ? `0${m}` : `${m}`;
-    return `${h}:${mStr}:${sStr}`;
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  } else {
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   }
-  return `${m}:${sStr}`;
 }
 
-// Extract Player Response block with multiple fallback keys
-function extractPlayerResponseFromHtml(html: string): any {
-  const keys = [
-    "ytInitialPlayerResponse = ",
-    "ytInitialPlayerResponse=",
-    "window['ytInitialPlayerResponse'] = ",
-    "window['ytInitialPlayerResponse']="
-  ];
-  for (const key of keys) {
-    const block = extractJsonBlock(html, key);
-    if (block) return block;
+// API route to proxy and parse public YouTube playlists (with optional YouTube Data API key and scraper fallback)
+app.get("/api/playlist", async (req, res) => {
+  const { id } = req.query;
+  if (!id || typeof id !== "string") {
+    return res.status(400).json({ error: "Missing or invalid playlist ID" });
   }
-  return null;
-}
 
-// Extract Video Renderers individually from raw HTML if whole page JSON parsing failed
-function extractPlaylistVideosFromHtml(html: string): any[] {
-  const videos: any[] = [];
-  const keyword = "playlistVideoRenderer";
-  let pos = 0;
-  
-  while (true) {
-    pos = html.indexOf(keyword, pos);
-    if (pos === -1) break;
-    
-    const colonIndex = html.indexOf(":", pos);
-    if (colonIndex !== -1) {
-      const startIndex = html.indexOf("{", colonIndex);
-      if (startIndex !== -1 && startIndex - colonIndex < 5) {
-        let braceCount = 0;
-        let inString = false;
-        let escape = false;
-        let foundBlock = false;
-        let endIdx = startIndex;
-        
-        for (let i = startIndex; i < html.length; i++) {
-          const char = html[i];
-          if (escape) {
-            escape = false;
-            continue;
-          }
-          if (char === "\\") {
-            escape = true;
-            continue;
-          }
-          if (char === '"') {
-            inString = !inString;
-            continue;
-          }
-          if (!inString) {
-            if (char === "{") {
-              braceCount++;
-            } else if (char === "}") {
-              braceCount--;
-              if (braceCount === 0) {
-                endIdx = i;
-                foundBlock = true;
-                break;
-              }
-            }
-          }
+  const apiKey = process.env.YOUTUBE_API_KEY;
+
+  if (apiKey && apiKey !== "MY_YOUTUBE_API_KEY" && apiKey.trim() !== "") {
+    try {
+      console.log(`[YouTube API] Fetching playlist metadata for ID: ${id}`);
+      
+      let playlistTitle = "YouTube Playlist";
+      let playlistChannel = "Unknown Channel";
+      let playlistThumbnail = "";
+
+      // 1. Fetch playlist snippet
+      const plRes = await fetch(`https://youtube.googleapis.com/youtube/v3/playlists?part=snippet&id=${id}&key=${apiKey}`);
+      if (plRes.ok) {
+        const plData = await plRes.json();
+        if (plData.items && plData.items[0]) {
+          const item = plData.items[0];
+          playlistTitle = item.snippet?.title || playlistTitle;
+          playlistChannel = item.snippet?.channelTitle || playlistChannel;
+          playlistThumbnail = item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.default?.url || "";
         }
-        
-        if (foundBlock) {
-          const blockStr = html.substring(startIndex, endIdx + 1);
+      }
+
+      // 2. Fetch all playlist items (handling pagination with nextPageToken)
+      let videos: any[] = [];
+      let nextPageToken = "";
+      let page = 0;
+
+      do {
+        const itemsUrl = `https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${id}&maxResults=50&pageToken=${nextPageToken}&key=${apiKey}`;
+        const itemsRes = await fetch(itemsUrl);
+        if (!itemsRes.ok) {
+          throw new Error(`Failed to fetch playlist items: ${itemsRes.statusText}`);
+        }
+        const itemsData = await itemsRes.json();
+        if (!itemsData.items || itemsData.items.length === 0) break;
+
+        const pageVideos = itemsData.items.map((item: any, index: number) => {
+          const vidId = item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
+          const title = item.snippet?.title || "Video";
+          const channelName = item.snippet?.videoOwnerChannelTitle || item.snippet?.channelTitle || "Unknown Channel";
+          const thumbnail = item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`;
+          
+          return {
+            id: vidId,
+            title,
+            channelName,
+            duration: "10:00", // Default, will update in batch below
+            thumbnail,
+            progress: 0,
+            lastWatchedPosition: 0,
+            completed: false,
+            lectureNumber: (page * 50) + index + 1
+          };
+        });
+
+        videos.push(...pageVideos);
+        nextPageToken = itemsData.nextPageToken || "";
+        page++;
+      } while (nextPageToken && page < 20); // Safe limit of 1000 items
+
+      // 3. Batch fetch durations for all retrieved videos (in chunks of 50)
+      if (videos.length > 0) {
+        const batchSize = 50;
+        for (let i = 0; i < videos.length; i += batchSize) {
+          const batch = videos.slice(i, i + batchSize);
+          const ids = batch.map(v => v.id).join(",");
           try {
-            const vr = JSON.parse(blockStr);
-            if (vr && vr.videoId) {
-              const vId = vr.videoId;
-              const title = vr.title?.simpleText || vr.title?.runs?.[0]?.text || "Untitled Video";
-              const durText = vr.lengthText?.simpleText || vr.lengthText?.runs?.[0]?.text || "0:00";
-              let thumb = `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
-              const thumbs = vr.thumbnail?.thumbnails;
-              if (thumbs && thumbs.length > 0) {
-                thumb = thumbs[thumbs.length - 1].url;
-              }
-              
-              if (!videos.some(v => v.id === vId)) {
-                videos.push({
-                  id: vId,
-                  title,
-                  duration: durText,
-                  thumbnail: thumb,
-                  lectureNumber: videos.length + 1,
-                  completed: false,
-                  progress: 0,
-                  channelName: vr.shortBylineText?.runs?.[0]?.text || "YouTube"
+            const vidRes = await fetch(`https://youtube.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${apiKey}`);
+            if (vidRes.ok) {
+              const vidData = await vidRes.json();
+              if (vidData.items) {
+                const durationMap = new Map<string, string>();
+                vidData.items.forEach((item: any) => {
+                  if (item.contentDetails?.duration) {
+                    durationMap.set(item.id, parseISO8601Duration(item.contentDetails.duration));
+                  }
+                });
+                
+                batch.forEach(v => {
+                  if (durationMap.has(v.id)) {
+                    v.duration = durationMap.get(v.id);
+                  }
                 });
               }
             }
-          } catch (e) {
-            // ignore
+          } catch (batchErr) {
+            console.error("[YouTube API] Batch duration fetch failed:", batchErr);
+          }
+        }
+      }
+
+      if (videos.length > 0) {
+        if (!playlistThumbnail) {
+          playlistThumbnail = videos[0].thumbnail;
+        }
+
+        return res.json({
+          id,
+          title: playlistTitle,
+          channelName: playlistChannel,
+          thumbnail: playlistThumbnail,
+          videos,
+          totalVideos: videos.length
+        });
+      }
+    } catch (apiErr) {
+      console.warn("[YouTube API] API key failed or quota limit hit. Falling back to scraping:", apiErr);
+      // Fall through to scraping below
+    }
+  }
+
+  // --- SCRAPER FALLBACK ---
+  try {
+    const url = `https://www.youtube.com/playlist?list=${id}&hl=en`;
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch playlist page: ${response.statusText}`);
+    }
+
+    const html = await response.text();
+    
+    // Extract ytInitialData variable
+    const startStr = "ytInitialData = ";
+    let ytInitialData: any = null;
+    const startIdx = html.indexOf(startStr);
+    if (startIdx !== -1) {
+      let depth = 0;
+      let jsonStart = startIdx + startStr.length;
+      while (jsonStart < html.length && html[jsonStart] !== "{") {
+        jsonStart++;
+      }
+      
+      if (jsonStart < html.length) {
+        for (let i = jsonStart; i < html.length; i++) {
+          if (html[i] === "{") depth++;
+          else if (html[i] === "}") {
+            depth--;
+            if (depth === 0) {
+              const jsonStr = html.slice(jsonStart, i + 1);
+              try {
+                ytInitialData = JSON.parse(jsonStr);
+              } catch (e) {
+                console.error("Failed to parse extracted JSON:", e);
+              }
+              break;
+            }
           }
         }
       }
     }
-    pos += keyword.length;
-  }
-  return videos;
-}
 
-// Fetch public playlist details from YouTube RSS feed (fully bypasses block screens / scrape issues)
-async function fetchPlaylistFromRss(playlistId: string): Promise<any[] | null> {
-  try {
-    const rssUrl = `https://www.youtube.com/feeds/videos.xml?playlist_id=${playlistId}`;
-    console.log(`Fetching playlist RSS: ${rssUrl}`);
-    const response = await fetchWithTimeout(rssUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    if (!ytInitialData) {
+      return res.status(404).json({ error: "Could not find playlist data on YouTube page" });
+    }
+
+    // Recursive search helpers to find nested data
+    const findVideosRecursive = (obj: any, results: any[] = []): any[] => {
+      if (!obj || typeof obj !== "object") return results;
+      if (obj.playlistVideoRenderer) {
+        results.push(obj.playlistVideoRenderer);
+        return results;
       }
-    });
-    if (!response.ok) return null;
-    const xml = await response.text();
-    
-    const entries: any[] = [];
-    const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
-    let match;
-    let idx = 1;
-    
-    while ((match = entryRegex.exec(xml)) !== null) {
-      const entryContent = match[1];
-      const idMatch = entryContent.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
-      const titleMatch = entryContent.match(/<title>([^<]+)<\/title>/);
-      const authorMatch = entryContent.match(/<name>([^<]+)<\/name>/);
+      for (const key of Object.keys(obj)) {
+        findVideosRecursive(obj[key], results);
+      }
+      return results;
+    };
+
+    const findPlaylistHeaderRecursive = (obj: any): any => {
+      if (!obj || typeof obj !== "object") return null;
+      if (obj.playlistHeaderRenderer) return obj.playlistHeaderRenderer;
+      if (obj.playlistSidebarPrimaryInfoRenderer) return obj.playlistSidebarPrimaryInfoRenderer;
+      for (const key of Object.keys(obj)) {
+        const res = findPlaylistHeaderRecursive(obj[key]);
+        if (res) return res;
+      }
+      return null;
+    };
+
+    const getText = (textObj: any): string => {
+      if (!textObj) return "";
+      if (typeof textObj === "string") return textObj;
+      if (textObj.simpleText) return textObj.simpleText;
+      if (Array.isArray(textObj.runs) && textObj.runs[0]) {
+        return textObj.runs.map((r: any) => r.text).join("");
+      }
+      return "";
+    };
+
+    const playlistVideoRenderers = findVideosRecursive(ytInitialData);
+    const videos = playlistVideoRenderers.map((item: any, idx: number) => {
+      const vidId = item.videoId;
+      const title = getText(item.title) || `Video ${idx + 1}`;
+      const channelName = getText(item.shortBylineText) || "Unknown Channel";
+      const duration = item.lengthText ? getText(item.lengthText) : "10:00";
+      const thumbnail = item.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`;
       
-      if (idMatch && titleMatch) {
-        const vId = idMatch[1];
-        const title = titleMatch[1];
-        const channelName = authorMatch ? authorMatch[1] : "YouTube Creator";
-        
-        entries.push({
-          id: vId,
-          title,
-          duration: "10:00", // Default study chunk duration, will be corrected on play
-          thumbnail: `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`,
-          lectureNumber: idx++,
-          completed: false,
-          progress: 0,
-          channelName
-        });
-      }
-    }
-    return entries.length > 0 ? entries : null;
-  } catch (e) {
-    console.error("Failed to fetch/parse playlist RSS feed:", e);
-    return null;
-  }
-}
-
-// Playlist info API using RSS
-app.get("/api/playlist-info", async (req, res) => {
-  const { id } = req.query;
-  if (!id || typeof id !== "string") {
-    return res.status(400).json({ error: "Missing playlist ID" });
-  }
-  
-  try {
-    let videos = await fetchPlaylistFromRss(id);
-    if (videos && videos.length > 0) {
-      return res.json({ videos });
-    }
-    
-    console.log(`RSS failed or empty, trying fallback playlist HTML fetch for ID: ${id}`);
-    const playlistUrl = `https://www.youtube.com/playlist?list=${id}`;
-    const response = await fetchWithTimeout(playlistUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
-      }
+      return {
+        id: vidId,
+        title,
+        channelName,
+        duration,
+        thumbnail,
+        progress: 0,
+        lastWatchedPosition: 0,
+        completed: false,
+        lectureNumber: idx + 1
+      };
     });
-    if (response.ok) {
-      const html = await response.text();
-      const extracted = extractPlaylistVideosFromHtml(html);
-      if (extracted && extracted.length > 0) {
-        console.log(`Successfully extracted ${extracted.length} videos from fallback HTML scraping`);
-        return res.json({ videos: extracted });
+
+    let title = "YouTube Playlist";
+    let channelName = "Unknown Channel";
+    let thumbnail = "";
+
+    const header = findPlaylistHeaderRecursive(ytInitialData);
+    if (header) {
+      title = getText(header.title) || title;
+      const owner = header.ownerText || header.shortBylineText;
+      if (owner) {
+        channelName = getText(owner) || channelName;
       }
     }
-    
-    return res.status(404).json({ error: "Playlist not found, empty, or private" });
-  } catch (e) {
-    console.error("Failed to fetch playlist-info:", e);
-    return res.status(500).json({ error: "Failed to fetch playlist" });
+
+    if (videos.length > 0) {
+      if (channelName === "Unknown Channel" && videos[0].channelName) {
+        channelName = videos[0].channelName;
+      }
+      thumbnail = videos[0].thumbnail;
+    }
+
+    return res.json({
+      id,
+      title,
+      channelName,
+      thumbnail,
+      videos,
+      totalVideos: videos.length
+    });
+  } catch (err: any) {
+    console.error("Error scraping playlist:", err);
+    return res.status(500).json({ error: err.message || "Failed to fetch and parse playlist" });
   }
 });
 
-// Video info API (handles single video, live, shorts, etc.)
-app.get("/api/video-info", async (req, res) => {
+// API route to proxy and parse single YouTube video metadata
+app.get("/api/video-metadata", async (req, res) => {
   const { id } = req.query;
   if (!id || typeof id !== "string") {
     return res.status(400).json({ error: "Missing video ID" });
   }
 
+  const apiKey = process.env.YOUTUBE_API_KEY;
+
+  if (apiKey && apiKey !== "MY_YOUTUBE_API_KEY" && apiKey.trim() !== "") {
+    try {
+      console.log(`[YouTube API] Fetching video details for ID: ${id}`);
+      const url = `https://youtube.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${id}&key=${apiKey}`;
+      const apiRes = await fetch(url);
+      if (apiRes.ok) {
+        const data = await apiRes.json();
+        if (data.items && data.items[0]) {
+          const item = data.items[0];
+          const snippet = item.snippet || {};
+          const contentDetails = item.contentDetails || {};
+
+          const title = snippet.title || "YouTube Video";
+          const channelName = snippet.channelTitle || "Unknown Channel";
+          const duration = contentDetails.duration ? parseISO8601Duration(contentDetails.duration) : "10:00";
+          const description = snippet.description || "No description available.";
+          let publishDate = "Unknown date";
+          if (snippet.publishedAt) {
+            try {
+              publishDate = new Date(snippet.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+            } catch (e) {
+              publishDate = snippet.publishedAt;
+            }
+          }
+          const thumbnail = snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+          return res.json({
+            id,
+            title,
+            channelName,
+            duration,
+            description,
+            publishDate,
+            thumbnail
+          });
+        }
+      }
+    } catch (apiErr) {
+      console.warn("[YouTube API] Single video details API call failed. Falling back to scraper:", apiErr);
+      // Fall through to scraping below
+    }
+  }
+
+  // --- SCRAPER FALLBACK ---
   try {
-    const videoUrl = `https://www.youtube.com/watch?v=${id}`;
-    const response = await fetchWithTimeout(videoUrl, {
+    const url = `https://www.youtube.com/watch?v=${id}&hl=en`;
+    const response = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9"
       }
     });
 
-    let title = "YouTube Video";
-    let channelName = "Unknown Channel";
-    let duration = "LIVE";
-    let thumbnail = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
-    let isLive = false;
+    if (!response.ok) {
+      throw new Error(`Failed to fetch video page: ${response.statusText}`);
+    }
 
-    if (response.ok) {
-      const html = await response.text();
-      const playerResponse = extractPlayerResponseFromHtml(html);
-      if (playerResponse && playerResponse.videoDetails) {
-        const details = playerResponse.videoDetails;
-        title = details.title || title;
-        channelName = details.author || channelName;
-        isLive = !!details.isLiveContent;
-        if (details.lengthSeconds && !isLive) {
-          duration = formatDuration(details.lengthSeconds);
-        } else if (isLive) {
-          duration = "LIVE";
-        } else {
-          duration = "10:00"; // typical video duration fallback
-        }
-        
-        const thumbs = details.thumbnail?.thumbnails;
-        if (thumbs && thumbs.length > 0) {
-          thumbnail = thumbs[thumbs.length - 1].url;
-        }
+    const html = await response.text();
+
+    // Extract title
+    let title = "";
+    const titleMatch = html.match(/<meta name="title" content="([^"]+)"/) || html.match(/<meta property="og:title" content="([^"]+)"/);
+    if (titleMatch) {
+      title = titleMatch[1]
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">");
+    }
+
+    // Extract channel name
+    let channelName = "";
+    const channelMatch = html.match(/<link itemprop="name" content="([^"]+)"/) || html.match(/"author":"([^"]+)"/);
+    if (channelMatch) {
+      channelName = channelMatch[1];
+    }
+
+    // Extract description
+    let description = "";
+    const descMatch = html.match(/<meta name="description" content="([^"]+)"/) || html.match(/<meta property="og:description" content="([^"]+)"/);
+    if (descMatch) {
+      description = descMatch[1]
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">");
+    }
+
+    // Attempt to extract duration (lengthSeconds is sometimes in ytInitialPlayerResponse)
+    let duration = "10:00";
+    const durationMatch = html.match(/"lengthSeconds":"(\d+)"/);
+    if (durationMatch && durationMatch[1]) {
+      const totalSecs = parseInt(durationMatch[1], 10);
+      const hrs = Math.floor(totalSecs / 3600);
+      const mins = Math.floor((totalSecs % 3600) / 60);
+      const secs = totalSecs % 60;
+      
+      if (hrs > 0) {
+        duration = `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
       } else {
-        // Fallback to oEmbed if playerResponse wasn't found
-        try {
-          const oembedRes = await fetchWithTimeout(`https://www.youtube.com/oembed?url=${encodeURIComponent(videoUrl)}&format=json`);
-          if (oembedRes.ok) {
-            const oembed = await oembedRes.json();
-            title = oembed.title || title;
-            channelName = oembed.author_name || channelName;
-            if (oembed.thumbnail_url) {
-              thumbnail = oembed.thumbnail_url;
-            }
-            duration = "10:00"; // fallback duration for normal video if we can't extract seconds
-          }
-        } catch (oembedErr) {
-          console.warn("oEmbed fallback failed", oembedErr);
-        }
+        duration = `${mins}:${secs.toString().padStart(2, "0")}`;
       }
     }
 
-    return res.json({ id, title, channelName, duration, thumbnail, isLive });
-  } catch (e) {
-    console.error("Failed to fetch video-info:", e);
-    // Fallback response instead of failing completely
+    // Extracted publish date helper
+    let publishDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    const dateMatch = html.match(/"publishDate":"([^"]+)"/) || html.match(/itemprop="datePublished" content="([^"]+)"/);
+    if (dateMatch && dateMatch[1]) {
+      try {
+        publishDate = new Date(dateMatch[1]).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      } catch (e) {
+        publishDate = dateMatch[1];
+      }
+    }
+
+    return res.json({
+      id,
+      title: title || "YouTube Video",
+      channelName: channelName || "Unknown Channel",
+      duration,
+      description: description || "No video description available.",
+      publishDate,
+      thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+    });
+
+  } catch (err: any) {
+    console.error("Error scraping video details:", err);
     return res.json({
       id,
       title: "YouTube Video",
       channelName: "Unknown Channel",
-      duration: "LIVE",
+      duration: "10:00",
+      description: "Failed to scrape details, but player will initialize.",
+      publishDate: "Unknown date",
       thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
     });
   }
 });
 
-// Serve static assets in production
+
+// Serve static assets in production or run Vite dev server
 async function setupServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

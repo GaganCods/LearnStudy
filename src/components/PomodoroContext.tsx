@@ -3,6 +3,7 @@ import {
   PomodoroDb, PomodoroSettings, PomodoroHistoryItem, PomodoroStats, RunningSessionState 
 } from "../utils/pomodoroDb";
 import { playPomodoroSound } from "../utils/pomodoroSounds";
+import { useToast } from "./ToastContext";
 
 interface PomodoroContextType {
   settings: PomodoroSettings;
@@ -41,6 +42,7 @@ export const usePomodoro = () => {
 };
 
 export const PomodoroProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { toast } = useToast();
   // DB States
   const [settings, setSettings] = useState<PomodoroSettings | null>(null);
   const [activeState, setActiveState] = useState<RunningSessionState | null>(null);
@@ -238,13 +240,13 @@ export const PomodoroProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     playAlert(currentSettings.notificationSound);
     triggerVibration();
 
-    // Browser Notification & Alert
+    // Browser Notification & Toast
     if (isFocus) {
       showNotification("Focus Session Done!", "Great job! Time for a well-deserved break.");
-      alert("Great job! Time for a break.");
+      toast.success("Focus Session Done!", "Great job! Time for a well-deserved break.");
     } else {
       showNotification("Break Finished!", "Time to continue studying!");
-      alert("Break finished. Let's continue studying!");
+      toast.info("Break Finished!", "Time to continue studying!");
     }
 
     // 1. Log Session to History
