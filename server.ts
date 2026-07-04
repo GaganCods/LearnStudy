@@ -31,7 +31,7 @@ app.get("/api/playlist", async (req, res) => {
 
   const apiKey = process.env.YOUTUBE_API_KEY;
 
-  if (apiKey && apiKey !== "MY_YOUTUBE_API_KEY" && apiKey.trim() !== "") {
+  if (apiKey && apiKey !== "AIzaSyAHYW-4Q4wTBvdk1EyHFzp9EX9RBDwWr7E" && apiKey.trim() !== "") {
     try {
       console.log(`[YouTube API] Fetching playlist metadata for ID: ${id}`);
       
