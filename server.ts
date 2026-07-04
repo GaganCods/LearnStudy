@@ -30,6 +30,109 @@ function parseISO8601Duration(durationStr: string): string {
   }
 }
 
+// Global Diagnostics Memory to power the real-time Debug/Diagnostics Panel
+const ytDiagnostics: any = {
+  lastChecked: null,
+  apiKeyLoaded: false,
+  apiKeySource: "NONE",
+  apiKeyMasked: "None",
+  lastRequest: null,
+  lastStatus: null,
+  lastError: null,
+  suggestedAction: null
+};
+
+// Update diagnostics state
+function updateDiagnostics(status: string, details: { apiKey?: string; error?: string; requestUrl?: string; responseStatus?: number; suggestedAction?: string }) {
+  const apiKey = details.apiKey || DIRECT_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY || "";
+  ytDiagnostics.lastChecked = new Date().toISOString();
+  ytDiagnostics.apiKeyLoaded = apiKey.trim().length > 0;
+  ytDiagnostics.apiKeySource = DIRECT_YOUTUBE_API_KEY ? "DIRECT_CODE" : (process.env.YOUTUBE_API_KEY ? "ENV_VAR" : "NONE");
+  ytDiagnostics.apiKeyMasked = apiKey.trim().length > 8 
+    ? `${apiKey.trim().substring(0, 6)}...${apiKey.trim().substring(apiKey.trim().length - 4)}` 
+    : (apiKey.trim() ? "Invalid Key Length" : "None");
+  if (details.requestUrl) ytDiagnostics.lastRequest = details.requestUrl;
+  if (details.responseStatus !== undefined) ytDiagnostics.lastStatus = details.responseStatus;
+  if (details.error) ytDiagnostics.lastError = details.error;
+  if (details.suggestedAction) ytDiagnostics.suggestedAction = details.suggestedAction;
+  console.log(`[Diagnostics Update] Status: ${status} | Result: ${details.error ? "Failed with: " + details.error : "Success"}`);
+}
+
+// Fetch helper with Exponential Backoff retry logic for temporary network issues
+async function fetchWithRetry(url: string, options: any = {}, maxRetries = 3, initialDelay = 500): Promise<Response> {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      const response = await fetch(url, options);
+      // Retry on Server Errors (5xx) or Rate Limiting (429)
+      // Do not retry on client errors (400, 401, 403, 404) unless it's a transient 429
+      if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
+        return response;
+      }
+      attempt++;
+      if (attempt < maxRetries) {
+        const backoffDelay = initialDelay * Math.pow(2, attempt);
+        console.warn(`[YouTube API Retry] HTTP ${response.status} on attempt ${attempt}. Retrying in ${backoffDelay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, backoffDelay));
+      } else {
+        return response;
+      }
+    } catch (err: any) {
+      attempt++;
+      if (attempt < maxRetries) {
+        const backoffDelay = initialDelay * Math.pow(2, attempt);
+        console.warn(`[YouTube API Retry] Network/Fetch error on attempt ${attempt}: ${err.message || err}. Retrying in ${backoffDelay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, backoffDelay));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw new Error("Maximum fetch retry attempts reached");
+}
+
+// Detailed YouTube Error Extractor and Analyzer
+async function analyzeYoutubeApiError(response: Response, actionContext: string): Promise<{ message: string; suggestedAction: string; rawError: any }> {
+  let rawError = null;
+  let message = `Failed to ${actionContext} (HTTP ${response.status})`;
+  let suggestedAction = "Check your internet connection and verify that the YouTube Playlist/Video ID is public.";
+
+  try {
+    const errorData = await response.json();
+    rawError = errorData;
+    if (errorData.error) {
+      const apiErr = errorData.error;
+      const firstError = apiErr.errors?.[0] || {};
+      const reason = firstError.reason || "";
+      const apiMsg = apiErr.message || "";
+      
+      message = `YouTube API Error (${response.status}): ${apiMsg}`;
+
+      if (reason === "keyInvalid" || apiMsg.toLowerCase().includes("key is not valid")) {
+        message = "Invalid YouTube API Key.";
+        suggestedAction = "The API key being sent is invalid or has typos. If you pasted the key directly in server.ts, verify that the quotes don't contain extra spaces. Check that you copied the complete API key from Google Cloud Console.";
+      } else if (reason === "quotaExceeded") {
+        message = "YouTube API Quota Exceeded.";
+        suggestedAction = "This API key has exceeded its daily limit (usually 10,000 units). You can request more quota in Google Cloud Console or create a new API key on a different Google Cloud project to resume immediately.";
+      } else if (reason === "ipRefererBlocked" || apiMsg.toLowerCase().includes("referer") || apiMsg.toLowerCase().includes("restriction")) {
+        message = "API Key Referrer / IP Restriction Blocked.";
+        suggestedAction = "Your Google Cloud API Key is restricted (HTTP referrers or IP addresses) and is blocking requests from this live server. GO TO Google Cloud Console -> APIs & Services -> Credentials -> Edit your API key -> Set Restrictions to 'None' (recommended for server-side endpoints), or make sure to allow the live domain: " + (process.env.APP_URL || "your live site domain");
+      } else if (reason === "playlistNotFound" || reason === "notFound") {
+        message = "Playlist / Video Not Found or Private.";
+        suggestedAction = "The requested YouTube item could not be found. Please double check that the Playlist/Video ID is correct, and that its visibility is set to 'Public' or 'Unlisted' rather than 'Private'.";
+      } else if (reason === "accessNotConfigured" || apiMsg.toLowerCase().includes("not enabled")) {
+        message = "YouTube Data API v3 is not enabled.";
+        suggestedAction = "You must enable the 'YouTube Data API v3' in your Google Cloud Console project. Go to APIs & Services -> Library -> Search for 'YouTube Data API v3' -> Click 'Enable'.";
+      }
+    }
+  } catch (e) {
+    // If not JSON, use default status text
+    message = `HTTP Error ${response.status}: ${response.statusText || "Forbidden"}`;
+  }
+
+  return { message, suggestedAction, rawError };
+}
+
 // API route to proxy and parse public YouTube playlists (with optional YouTube Data API key and scraper fallback)
 app.get("/api/playlist", async (req, res) => {
   const { id } = req.query;
@@ -48,15 +151,26 @@ app.get("/api/playlist", async (req, res) => {
       let playlistThumbnail = "";
 
       // 1. Fetch playlist snippet
-      const plRes = await fetch(`https://youtube.googleapis.com/youtube/v3/playlists?part=snippet&id=${id}&key=${apiKey}`);
-      if (plRes.ok) {
-        const plData = await plRes.json();
-        if (plData.items && plData.items[0]) {
-          const item = plData.items[0];
-          playlistTitle = item.snippet?.title || playlistTitle;
-          playlistChannel = item.snippet?.channelTitle || playlistChannel;
-          playlistThumbnail = item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.default?.url || "";
-        }
+      const plUrl = `https://youtube.googleapis.com/youtube/v3/playlists?part=snippet&id=${id}&key=${apiKey}`;
+      const plRes = await fetchWithRetry(plUrl);
+      if (!plRes.ok) {
+        const errDetails = await analyzeYoutubeApiError(plRes, "fetch playlist metadata");
+        updateDiagnostics("PLAYLIST_METADATA_API_ERROR", {
+          apiKey,
+          error: errDetails.message,
+          requestUrl: plUrl,
+          responseStatus: plRes.status,
+          suggestedAction: errDetails.suggestedAction
+        });
+        throw new Error(errDetails.message);
+      }
+      
+      const plData = await plRes.json();
+      if (plData.items && plData.items[0]) {
+        const item = plData.items[0];
+        playlistTitle = item.snippet?.title || playlistTitle;
+        playlistChannel = item.snippet?.channelTitle || playlistChannel;
+        playlistThumbnail = item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.default?.url || "";
       }
 
       // 2. Fetch all playlist items (handling pagination with nextPageToken)
@@ -66,10 +180,19 @@ app.get("/api/playlist", async (req, res) => {
 
       do {
         const itemsUrl = `https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${id}&maxResults=50&pageToken=${nextPageToken}&key=${apiKey}`;
-        const itemsRes = await fetch(itemsUrl);
+        const itemsRes = await fetchWithRetry(itemsUrl);
         if (!itemsRes.ok) {
-          throw new Error(`Failed to fetch playlist items: ${itemsRes.statusText}`);
+          const errDetails = await analyzeYoutubeApiError(itemsRes, "fetch playlist items");
+          updateDiagnostics("PLAYLIST_ITEMS_API_ERROR", {
+            apiKey,
+            error: errDetails.message,
+            requestUrl: itemsUrl,
+            responseStatus: itemsRes.status,
+            suggestedAction: errDetails.suggestedAction
+          });
+          throw new Error(errDetails.message);
         }
+        
         const itemsData = await itemsRes.json();
         if (!itemsData.items || itemsData.items.length === 0) break;
 
@@ -104,7 +227,8 @@ app.get("/api/playlist", async (req, res) => {
           const batch = videos.slice(i, i + batchSize);
           const ids = batch.map(v => v.id).join(",");
           try {
-            const vidRes = await fetch(`https://youtube.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${apiKey}`);
+            const vidUrl = `https://youtube.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${apiKey}`;
+            const vidRes = await fetchWithRetry(vidUrl);
             if (vidRes.ok) {
               const vidData = await vidRes.json();
               if (vidData.items) {
@@ -133,6 +257,12 @@ app.get("/api/playlist", async (req, res) => {
           playlistThumbnail = videos[0].thumbnail;
         }
 
+        // Update diagnostics on successful retrieval
+        updateDiagnostics("PLAYLIST_LOAD_SUCCESS", {
+          apiKey,
+          requestUrl: `https://youtube.googleapis.com/youtube/v3/playlists?id=${id}`
+        });
+
         return res.json({
           id,
           title: playlistTitle,
@@ -142,9 +272,16 @@ app.get("/api/playlist", async (req, res) => {
           totalVideos: videos.length
         });
       }
-    } catch (apiErr) {
-      console.warn("[YouTube API] API key failed or quota limit hit. Falling back to scraping:", apiErr);
-      // Fall through to scraping below
+    } catch (apiErr: any) {
+      console.warn("[YouTube API] API key failed or quota limit hit. Falling back to scraping:", apiErr.message || apiErr);
+      // Ensure diagnostics are populated with the error before falling back to scraper
+      const errMsg = apiErr.message || String(apiErr);
+      if (!ytDiagnostics.lastError) {
+        updateDiagnostics("API_FALLBACK_TRIGGERED", {
+          apiKey,
+          error: errMsg
+        });
+      }
     }
   }
 
@@ -300,42 +437,63 @@ app.get("/api/video-metadata", async (req, res) => {
     try {
       console.log(`[YouTube API] Fetching video details for ID: ${id}`);
       const url = `https://youtube.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${id}&key=${apiKey}`;
-      const apiRes = await fetch(url);
-      if (apiRes.ok) {
-        const data = await apiRes.json();
-        if (data.items && data.items[0]) {
-          const item = data.items[0];
-          const snippet = item.snippet || {};
-          const contentDetails = item.contentDetails || {};
-
-          const title = snippet.title || "YouTube Video";
-          const channelName = snippet.channelTitle || "Unknown Channel";
-          const duration = contentDetails.duration ? parseISO8601Duration(contentDetails.duration) : "10:00";
-          const description = snippet.description || "No description available.";
-          let publishDate = "Unknown date";
-          if (snippet.publishedAt) {
-            try {
-              publishDate = new Date(snippet.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-            } catch (e) {
-              publishDate = snippet.publishedAt;
-            }
-          }
-          const thumbnail = snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
-
-          return res.json({
-            id,
-            title,
-            channelName,
-            duration,
-            description,
-            publishDate,
-            thumbnail
-          });
-        }
+      const apiRes = await fetchWithRetry(url);
+      if (!apiRes.ok) {
+        const errDetails = await analyzeYoutubeApiError(apiRes, "fetch video details");
+        updateDiagnostics("VIDEO_METADATA_API_ERROR", {
+          apiKey,
+          error: errDetails.message,
+          requestUrl: url,
+          responseStatus: apiRes.status,
+          suggestedAction: errDetails.suggestedAction
+        });
+        throw new Error(errDetails.message);
       }
-    } catch (apiErr) {
-      console.warn("[YouTube API] Single video details API call failed. Falling back to scraper:", apiErr);
-      // Fall through to scraping below
+      
+      const data = await apiRes.json();
+      if (data.items && data.items[0]) {
+        const item = data.items[0];
+        const snippet = item.snippet || {};
+        const contentDetails = item.contentDetails || {};
+
+        const title = snippet.title || "YouTube Video";
+        const channelName = snippet.channelTitle || "Unknown Channel";
+        const duration = contentDetails.duration ? parseISO8601Duration(contentDetails.duration) : "10:00";
+        const description = snippet.description || "No description available.";
+        let publishDate = "Unknown date";
+        if (snippet.publishedAt) {
+          try {
+            publishDate = new Date(snippet.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+          } catch (e) {
+            publishDate = snippet.publishedAt;
+          }
+        }
+        const thumbnail = snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+        updateDiagnostics("VIDEO_LOAD_SUCCESS", {
+          apiKey,
+          requestUrl: url
+        });
+
+        return res.json({
+          id,
+          title,
+          channelName,
+          duration,
+          description,
+          publishDate,
+          thumbnail
+        });
+      }
+    } catch (apiErr: any) {
+      console.warn("[YouTube API] Single video details API call failed. Falling back to scraper:", apiErr.message || apiErr);
+      const errMsg = apiErr.message || String(apiErr);
+      if (!ytDiagnostics.lastError) {
+        updateDiagnostics("API_FALLBACK_TRIGGERED", {
+          apiKey,
+          error: errMsg
+        });
+      }
     }
   }
 
@@ -435,6 +593,15 @@ app.get("/api/video-metadata", async (req, res) => {
       thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
     });
   }
+});
+
+// API route to get real-time YouTube Data API diagnostic info
+app.get("/api/youtube-diagnostics", (req, res) => {
+  res.json({
+    ...ytDiagnostics,
+    nodeEnv: process.env.NODE_ENV || "development",
+    appUrl: process.env.APP_URL || "Not Configured"
+  });
 });
 
 

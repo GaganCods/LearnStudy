@@ -70,6 +70,9 @@ export default function App() {
   const [urlInput, setUrlInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [diagnosticsData, setDiagnosticsData] = useState<any>(null);
+  const [isTestingDiagnostics, setIsTestingDiagnostics] = useState(false);
 
   // Gemini Onboarding & BYOK state
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -987,6 +990,23 @@ export default function App() {
     }, 100);
   };
 
+  const fetchDiagnostics = async () => {
+    setIsTestingDiagnostics(true);
+    try {
+      const res = await fetch("/api/youtube-diagnostics");
+      if (res.ok) {
+        const data = await res.json();
+        setDiagnosticsData(data);
+      } else {
+        setDiagnosticsData({ error: `Failed to fetch diagnostics: ${res.statusText}` });
+      }
+    } catch (e: any) {
+      setDiagnosticsData({ error: e.message || "Failed to reach server diagnostics" });
+    } finally {
+      setIsTestingDiagnostics(false);
+    }
+  };
+
   // URL input submission
   const handleUrlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1116,9 +1136,16 @@ export default function App() {
                 };
               }
             }
+          } else {
+            const errData = await res.json().catch(() => ({}));
+            const errMsg = errData.error || `HTTP ${res.status} ${res.statusText}`;
+            const details = errData.details ? ` (${errData.details})` : "";
+            const suggested = errData.suggestedAction ? `\n\nSolution suggestion:\n${errData.suggestedAction}` : "";
+            throw new Error(`${errMsg}${details}${suggested}`);
           }
-        } catch (e) {
-          console.error("Failed to load playlist from server, using fallback:", e);
+        } catch (e: any) {
+          console.error("Failed to load playlist from server:", e);
+          throw e; // Bubble up to handleUrlSubmit catch block so it shows in the UI error banner
         }
 
         // Fallback if scraping is totally down or returns empty
@@ -2513,11 +2540,121 @@ export default function App() {
                     </form>
 
                     {errorMessage && (
-                      <div className="mt-4 p-4 bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/30 rounded-2xl flex items-start gap-3 text-left">
-                        <ShieldAlert className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-                        <div>
-                          <div className="text-xs font-bold text-red-800 dark:text-red-300">Could Not Load URL</div>
-                          <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">{errorMessage}</p>
+                      <div className="mt-4 p-4 bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/30 rounded-2xl flex flex-col gap-3 text-left">
+                        <div className="flex items-start gap-3">
+                          <ShieldAlert className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                          <div>
+                            <div className="text-xs font-bold text-red-800 dark:text-red-300">Could Not Load URL</div>
+                            <p className="text-xs text-red-600 dark:text-red-400 mt-0.5 whitespace-pre-wrap">{errorMessage}</p>
+                          </div>
+                        </div>
+                        
+                        <div className="border-t border-red-100 dark:border-red-900/30 pt-3 flex flex-col gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowDiagnostics(!showDiagnostics);
+                              if (!showDiagnostics) {
+                                fetchDiagnostics();
+                              }
+                            }}
+                            className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1.5 w-fit"
+                          >
+                            <Settings className="w-3.5 h-3.5" />
+                            {showDiagnostics ? "Hide Production Debug Panel" : "Open Production Debug Panel & Diagnostics"}
+                          </button>
+
+                          {showDiagnostics && (
+                            <div className="mt-2 bg-white dark:bg-zinc-900 p-4 rounded-xl border border-slate-200 dark:border-zinc-800 text-xs text-slate-700 dark:text-zinc-300">
+                              <div className="flex justify-between items-center border-b border-slate-100 dark:border-zinc-800 pb-2 mb-3">
+                                <span className="font-bold text-slate-900 dark:text-white">YouTube API Live Debugger</span>
+                                <button
+                                  type="button"
+                                  onClick={fetchDiagnostics}
+                                  disabled={isTestingDiagnostics}
+                                  className="text-[10px] bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 px-2 py-1 rounded text-slate-600 dark:text-zinc-300 flex items-center gap-1 transition"
+                                >
+                                  <RefreshCw className={`w-2.5 h-2.5 ${isTestingDiagnostics ? "animate-spin" : ""}`} />
+                                  Refresh diagnostics
+                                </button>
+                              </div>
+
+                              {isTestingDiagnostics && !diagnosticsData ? (
+                                <div className="py-4 text-center text-slate-500 flex items-center justify-center gap-2">
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                  Contacting production server for diagnostics...
+                                </div>
+                              ) : diagnosticsData ? (
+                                <div className="space-y-3">
+                                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                                    <div className="bg-slate-50 dark:bg-zinc-950 p-2 rounded">
+                                      <span className="text-slate-400 block text-[9px] uppercase font-sans font-semibold">API Key Loaded</span>
+                                      <span className={diagnosticsData.apiKeyLoaded ? "text-emerald-600 font-bold" : "text-rose-600 font-bold"}>
+                                        {diagnosticsData.apiKeyLoaded ? "YES" : "NO"}
+                                      </span>
+                                    </div>
+                                    <div className="bg-slate-50 dark:bg-zinc-950 p-2 rounded">
+                                      <span className="text-slate-400 block text-[9px] uppercase font-sans font-semibold">API Key Source</span>
+                                      <span className="font-bold text-slate-800 dark:text-zinc-200">{diagnosticsData.apiKeySource}</span>
+                                    </div>
+                                    <div className="bg-slate-50 dark:bg-zinc-950 p-2 rounded">
+                                      <span className="text-slate-400 block text-[9px] uppercase font-sans font-semibold">API Key (Masked)</span>
+                                      <span className="text-slate-600 dark:text-zinc-400">{diagnosticsData.apiKeyMasked}</span>
+                                    </div>
+                                    <div className="bg-slate-50 dark:bg-zinc-950 p-2 rounded">
+                                      <span className="text-slate-400 block text-[9px] uppercase font-sans font-semibold">Node Environment</span>
+                                      <span className="text-slate-600 dark:text-zinc-400">{diagnosticsData.nodeEnv}</span>
+                                    </div>
+                                  </div>
+
+                                  {diagnosticsData.lastRequest && (
+                                    <div className="bg-slate-50 dark:bg-zinc-950 p-2 rounded text-[11px] font-mono overflow-x-auto">
+                                      <span className="text-slate-400 block text-[9px] uppercase font-sans font-semibold">Last Outgoing API URL</span>
+                                      <span className="text-slate-600 dark:text-zinc-400 select-all">{diagnosticsData.lastRequest}</span>
+                                    </div>
+                                  )}
+
+                                  {diagnosticsData.lastStatus !== null && (
+                                    <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                                      <div className="bg-slate-50 dark:bg-zinc-950 p-2 rounded">
+                                        <span className="text-slate-400 block text-[9px] uppercase font-sans font-semibold">API Response Status</span>
+                                        <span className={diagnosticsData.lastStatus >= 200 && diagnosticsData.lastStatus < 300 ? "text-emerald-600 font-bold" : "text-rose-600 font-bold"}>
+                                          {diagnosticsData.lastStatus}
+                                        </span>
+                                      </div>
+                                      <div className="bg-slate-50 dark:bg-zinc-950 p-2 rounded">
+                                        <span className="text-slate-400 block text-[9px] uppercase font-sans font-semibold">Error Event Category</span>
+                                        <span className="font-bold text-slate-800 dark:text-zinc-200">{diagnosticsData.lastError ? "API_FAILED" : "NONE"}</span>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {diagnosticsData.lastError && (
+                                    <div className="bg-rose-50/50 dark:bg-rose-950/10 border border-rose-100 dark:border-rose-950 p-3 rounded-lg text-[11px]">
+                                      <span className="text-rose-500 font-bold block mb-1">Last API Error Message:</span>
+                                      <p className="font-mono text-rose-700 dark:text-rose-300">{diagnosticsData.lastError}</p>
+                                    </div>
+                                  )}
+
+                                  {diagnosticsData.suggestedAction && (
+                                    <div className="bg-blue-50/50 dark:bg-blue-950/10 border border-blue-100 dark:border-blue-950 p-3 rounded-lg text-[11px]">
+                                      <span className="text-blue-600 dark:text-blue-400 font-bold block mb-1">Recommended Solution:</span>
+                                      <p className="text-slate-700 dark:text-zinc-300 whitespace-pre-wrap">{diagnosticsData.suggestedAction}</p>
+                                    </div>
+                                  )}
+
+                                  <div className="border-t border-slate-100 dark:border-zinc-800 pt-3 text-[10px] text-slate-500 leading-relaxed">
+                                    <span className="font-semibold block text-slate-700 dark:text-zinc-300 mb-1">💡 Most Common Solution on GitHub Deployments:</span>
+                                    If this playlist doesn't load but works inside AI Studio, it is usually because the Google Cloud key is restricted to HTTP referrers of AI Studio, but you are visiting a different URL. Verify that you have allowed your live URL (e.g. <span className="font-mono text-blue-600 dark:text-blue-400 select-all">{window.location.origin}</span>) in Google Cloud Console Credentials page, or set key restrictions to "None".
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-center py-4 text-slate-500">
+                                  No previous API load event captured. Enter a playlist link above to record a diagnostic run.
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
