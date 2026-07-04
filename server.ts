@@ -2,6 +2,14 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 
+// =========================================================================
+// 🔑 PASTE YOUR YOUTUBE API KEY HERE DIRECTLY:
+// If you're deploying to GitHub / Live sites and don't want to deal with .env files,
+// simply paste your API key inside the quotes below!
+// Example: const DIRECT_YOUTUBE_API_KEY = "AIzaSyA1B2C3D4...";
+// =========================================================================
+const DIRECT_YOUTUBE_API_KEY = "";
+
 const app = express();
 const PORT = 3000;
 
@@ -29,9 +37,9 @@ app.get("/api/playlist", async (req, res) => {
     return res.status(400).json({ error: "Missing or invalid playlist ID" });
   }
 
-  const apiKey = process.env.YOUTUBE_API_KEY;
+  const apiKey = DIRECT_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY;
 
-  if (apiKey && apiKey !== "AIzaSyAHYW-4Q4wTBvdk1EyHFzp9EX9RBDwWr7E" && apiKey.trim() !== "") {
+  if (apiKey && apiKey !== "MY_YOUTUBE_API_KEY" && apiKey.trim() !== "") {
     try {
       console.log(`[YouTube API] Fetching playlist metadata for ID: ${id}`);
       
@@ -286,7 +294,7 @@ app.get("/api/video-metadata", async (req, res) => {
     return res.status(400).json({ error: "Missing video ID" });
   }
 
-  const apiKey = process.env.YOUTUBE_API_KEY;
+  const apiKey = DIRECT_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY;
 
   if (apiKey && apiKey !== "MY_YOUTUBE_API_KEY" && apiKey.trim() !== "") {
     try {

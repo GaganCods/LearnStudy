@@ -230,6 +230,16 @@ export function GeminiOnboardingModal({
               <ExternalLink className="w-3.5 h-3.5 text-zinc-400" />
               Generate Free API Key
             </a>
+
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full border border-dashed border-zinc-850 hover:bg-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 font-bold text-xs py-3.5 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                Skip & Enter Key Later
+              </button>
+            )}
           </div>
 
           {/* Note disclaimer at bottom */}

@@ -210,14 +210,15 @@ export default function App() {
     return null;
   }, [activeSession, playlists]);
 
-  // Scroll to top when switching tabs
+  // Scroll to top when switching tabs or study sessions
   useEffect(() => {
     if (mainScrollRef.current) {
-      mainScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
-    } else {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      mainScrollRef.current.scrollTo({ top: 0 });
     }
-  }, [activeTab, searchQuery]);
+    window.scrollTo({ top: 0 });
+    document.documentElement.scrollTo({ top: 0 });
+    document.body.scrollTo({ top: 0 });
+  }, [activeTab, searchQuery, activeSession]);
 
   useEffect(() => {
     if (activeVideoId && activeVideoTitle) {
@@ -1997,6 +1998,22 @@ export default function App() {
     return all.sort((a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime())[0];
   }, [playlists, singleVideos]);
 
+  // Sorted and filtered watch history items (most recently watched first)
+  const sortedHistoryItems = useMemo(() => {
+    let items: Array<PlaylistInfo | SingleVideoInfo> = [];
+    if (historyFilter === "all" || historyFilter === "playlist") {
+      items = [...items, ...playlists];
+    }
+    if (historyFilter === "all" || historyFilter === "video") {
+      items = [...items, ...singleVideos];
+    }
+    return items.sort((a, b) => {
+      const timeA = a.lastWatchedAt ? new Date(a.lastWatchedAt).getTime() : 0;
+      const timeB = b.lastWatchedAt ? new Date(b.lastWatchedAt).getTime() : 0;
+      return timeB - timeA;
+    });
+  }, [playlists, singleVideos, historyFilter]);
+
   // Unified global search across playlists, videos, notes, bookmarks
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return null;
@@ -3585,87 +3602,93 @@ export default function App() {
                       </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {(historyFilter === "all" || historyFilter === "playlist") && playlists.map((p) => (
-                          <div 
-                            key={p.id} 
-                            onClick={() => resumeLearningSession(p.id, "playlist")}
-                            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
-                          >
-                            <div>
-                              <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full h-full object-cover" alt={p.title} />
-                                <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white flex items-center gap-1">
-                                  Playlist ({p.totalVideos} videos)
-                                </span>
-                              </div>
-                              <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
-                                {p.title}
-                              </h3>
-                              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{p.channelName}</p>
-                            </div>
-                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
-                              <div className="flex items-center gap-1.5">
-                                <CheckCircle className="w-3.5 h-3.5 text-blue-500" />
-                                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">{p.progress}% done</span>
-                              </div>
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const list = playlists.filter(x => x.id !== p.id);
-                                  Storage.savePlaylists(list);
-                                  setPlaylists(list);
-                                }}
-                                className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition"
-                                title="Remove from history"
+                        {sortedHistoryItems.map((item) => {
+                          if (item.type === "playlist") {
+                            const p = item;
+                            return (
+                              <div 
+                                key={p.id} 
+                                onClick={() => resumeLearningSession(p.id, "playlist")}
+                                className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
                               >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-
-                        {(historyFilter === "all" || historyFilter === "video") && singleVideos.map((v) => (
-                          <div 
-                            key={v.id} 
-                            onClick={() => resumeLearningSession(v.id, "video")}
-                            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
-                          >
-                            <div>
-                              <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt={v.title} />
-                                {v.duration !== "LIVE" && (
-                                  <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
-                                    {v.duration}
-                                  </span>
-                                )}
+                                <div>
+                                  <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
+                                    <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full h-full object-cover" alt={p.title} />
+                                    <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white flex items-center gap-1">
+                                      Playlist ({p.totalVideos} videos)
+                                    </span>
+                                  </div>
+                                  <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
+                                    {p.title}
+                                  </h3>
+                                  <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{p.channelName}</p>
+                                </div>
+                                <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
+                                  <div className="flex items-center gap-1.5">
+                                    <CheckCircle className="w-3.5 h-3.5 text-blue-500" />
+                                    <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">{p.progress}% done</span>
+                                  </div>
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const list = playlists.filter(x => x.id !== p.id);
+                                      Storage.savePlaylists(list);
+                                      setPlaylists(list);
+                                    }}
+                                    className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition"
+                                    title="Remove from history"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
                               </div>
-                              <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
-                                {v.title}
-                              </h3>
-                              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{v.channelName}</p>
-                            </div>
-                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
-                              <div className="flex items-center gap-1.5">
-                                <CheckCircle className={`w-3.5 h-3.5 ${v.completed ? "text-emerald-500" : "text-slate-400"}`} />
-                                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">
-                                  {v.progress}% watched
-                                </span>
-                              </div>
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const list = singleVideos.filter(x => x.id !== v.id);
-                                  Storage.saveSingleVideos(list);
-                                  setSingleVideos(list);
-                                }}
-                                className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition"
-                                title="Remove from history"
+                            );
+                          } else {
+                            const v = item;
+                            return (
+                              <div 
+                                key={v.id} 
+                                onClick={() => resumeLearningSession(v.id, "video")}
+                                className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
                               >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                                <div>
+                                  <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
+                                    <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt={v.title} />
+                                    {v.duration !== "LIVE" && (
+                                      <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
+                                        {v.duration}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
+                                    {v.title}
+                                  </h3>
+                                  <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{v.channelName}</p>
+                                </div>
+                                <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
+                                  <div className="flex items-center gap-1.5">
+                                    <CheckCircle className={`w-3.5 h-3.5 ${v.completed ? "text-emerald-500" : "text-slate-400"}`} />
+                                    <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">
+                                      {v.progress}% watched
+                                    </span>
+                                  </div>
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const list = singleVideos.filter(x => x.id !== v.id);
+                                      Storage.saveSingleVideos(list);
+                                      setSingleVideos(list);
+                                    }}
+                                    className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition"
+                                    title="Remove from history"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+                        })}
                       </div>
                     </>
                   )}
@@ -4247,7 +4270,7 @@ export default function App() {
           setOnboardingOpen(false);
           setHasGeminiKeyInState(true);
         }}
-        allowClose={hasGeminiKey()}
+        allowClose={true}
         onClose={() => setOnboardingOpen(false)}
       />
 
