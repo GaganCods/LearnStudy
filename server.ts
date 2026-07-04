@@ -8,7 +8,7 @@ import { createServer as createViteServer } from "vite";
 // simply paste your API key inside the quotes below!
 // Example: const DIRECT_YOUTUBE_API_KEY = "AIzaSyA1B2C3D4...";
 // =========================================================================
-const DIRECT_YOUTUBE_API_KEY = "";
+const DIRECT_YOUTUBE_API_KEY = "AIzaSyAHYW-4Q4wTBvdk1EyHFzp9EX9RBDwWr7E";
 
 const app = express();
 const PORT = 3000;
