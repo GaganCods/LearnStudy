@@ -32,6 +32,174 @@ declare global {
   }
 }
 
+const CLIENT_YOUTUBE_API_KEY = "AIzaSyAHYW-4Q4wTBvdk1EyHFzp9EX9RBDwWr7E";
+
+function parseISO8601DurationClient(durationStr: string): string {
+  const match = durationStr.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return "10:00";
+  const hours = parseInt(match[1] || "0", 10);
+  const minutes = parseInt(match[2] || "0", 10);
+  const seconds = parseInt(match[3] || "0", 10);
+  
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  } else {
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
+}
+
+async function fetchPlaylistFromYouTubeClient(id: string): Promise<any> {
+  const apiKey = CLIENT_YOUTUBE_API_KEY;
+  if (!apiKey) throw new Error("Client API Key is empty");
+
+  // 1. Fetch playlist metadata
+  const plUrl = `https://youtube.googleapis.com/youtube/v3/playlists?part=snippet&id=${id}&key=${apiKey}`;
+  const plRes = await fetch(plUrl);
+  if (!plRes.ok) {
+    const errorData = await plRes.json().catch(() => ({}));
+    const apiMsg = errorData.error?.message || `HTTP Error ${plRes.status}`;
+    throw new Error(`YouTube API Error: ${apiMsg}`);
+  }
+  const plData = await plRes.json();
+  const playlistItem = plData.items?.[0];
+  if (!playlistItem) {
+    throw new Error("Playlist not found on YouTube");
+  }
+  const playlistTitle = playlistItem.snippet?.title || "YouTube Playlist";
+  const playlistChannel = playlistItem.snippet?.channelTitle || "Unknown Channel";
+  const playlistThumbnail = playlistItem.snippet?.thumbnails?.high?.url || playlistItem.snippet?.thumbnails?.default?.url || "";
+
+  // 2. Fetch playlist items
+  const videos: any[] = [];
+  let nextPageToken = "";
+  do {
+    const itemsUrl = `https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${id}&maxResults=50&pageToken=${nextPageToken}&key=${apiKey}`;
+    const itemsRes = await fetch(itemsUrl);
+    if (!itemsRes.ok) {
+      const errorData = await itemsRes.json().catch(() => ({}));
+      const apiMsg = errorData.error?.message || `HTTP Error ${itemsRes.status}`;
+      throw new Error(`YouTube API Error (playlistItems): ${apiMsg}`);
+    }
+    const itemsData = await itemsRes.json();
+    if (!itemsData.items || itemsData.items.length === 0) break;
+
+    for (const item of itemsData.items) {
+      const snippet = item.snippet || {};
+      const videoId = item.contentDetails?.videoId || snippet.resourceId?.videoId;
+      if (!videoId) continue;
+
+      const title = snippet.title || "No Title";
+      const channelName = snippet.videoOwnerChannelTitle || snippet.channelTitle || playlistChannel;
+      const thumbnail = snippet.thumbnails?.high?.url || snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+      const description = snippet.description || "";
+      const position = snippet.position !== undefined ? snippet.position : videos.length;
+
+      videos.push({
+        id: videoId,
+        title,
+        channelName,
+        duration: "10:00", // placeholder
+        thumbnail,
+        description,
+        position,
+        progress: 0,
+        completed: false,
+        notes: [],
+        bookmarks: []
+      });
+    }
+    nextPageToken = itemsData.nextPageToken || "";
+  } while (nextPageToken);
+
+  // 3. Fetch video details in batches of 50 to get real durations
+  const batchSize = 50;
+  for (let i = 0; i < videos.length; i += batchSize) {
+    const batch = videos.slice(i, i + batchSize);
+    const ids = batch.map(v => v.id).join(",");
+    try {
+      const vidUrl = `https://youtube.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${apiKey}`;
+      const vidRes = await fetch(vidUrl);
+      if (vidRes.ok) {
+        const vidData = await vidRes.json();
+        if (vidData.items) {
+          const durationMap = new Map();
+          for (const item of vidData.items) {
+            if (item.contentDetails?.duration) {
+              durationMap.set(item.id, parseISO8601DurationClient(item.contentDetails.duration));
+            }
+          }
+          for (const v of batch) {
+            if (durationMap.has(v.id)) {
+              v.duration = durationMap.get(v.id);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Client batch duration fetch failed:", e);
+    }
+  }
+
+  let finalThumbnail = playlistThumbnail;
+  if (!finalThumbnail && videos.length > 0) {
+    finalThumbnail = videos[0].thumbnail;
+  }
+
+  return {
+    id,
+    title: playlistTitle,
+    channelName: playlistChannel,
+    thumbnail: finalThumbnail,
+    videos,
+    totalVideos: videos.length
+  };
+}
+
+async function fetchVideoFromYouTubeClient(id: string): Promise<any> {
+  const apiKey = CLIENT_YOUTUBE_API_KEY;
+  if (!apiKey) throw new Error("Client API Key is empty");
+
+  const url = `https://youtube.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${id}&key=${apiKey}`;
+  const apiRes = await fetch(url);
+  if (!apiRes.ok) {
+    const errorData = await apiRes.json().catch(() => ({}));
+    const apiMsg = errorData.error?.message || `HTTP Error ${apiRes.status}`;
+    throw new Error(`YouTube API Error: ${apiMsg}`);
+  }
+  const data = await apiRes.json();
+  const item = data.items?.[0];
+  if (!item) {
+    throw new Error("Video not found on YouTube");
+  }
+
+  const snippet = item.snippet || {};
+  const contentDetails = item.contentDetails || {};
+
+  const title = snippet.title || "YouTube Video";
+  const channelName = snippet.channelTitle || "Unknown Channel";
+  const duration = contentDetails.duration ? parseISO8601DurationClient(contentDetails.duration) : "10:00";
+  const description = snippet.description || "No description available.";
+  let publishDate = "Unknown date";
+  if (snippet.publishedAt) {
+    try {
+      publishDate = new Date(snippet.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    } catch (e) {
+      publishDate = snippet.publishedAt;
+    }
+  }
+  const thumbnail = snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+  return {
+    id,
+    title,
+    channelName,
+    duration,
+    description,
+    publishDate,
+    thumbnail
+  };
+}
+
 export default function App() {
   const { toast, soundEnabled, setSoundEnabled } = useToast();
   // Pomodoro Study Timer Context
@@ -1094,57 +1262,61 @@ export default function App() {
         // --- NEW PLAYLIST / FIRST LOAD (WITH PROGRESSIVE CHUNK LOADING) ---
         let playlist: PlaylistInfo | null = null;
         try {
-          const res = await fetch(`/api/playlist?id=${id}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data && data.videos && data.videos.length > 0) {
-              const totalVids = data.totalVideos || data.videos.length;
-              
-              if (totalVids > 20) {
-                // progressive loading trigger! Take first 20 first
-                const initialChunk = data.videos.slice(0, 20);
-                playlist = {
-                  id: id,
-                  type: "playlist",
-                  title: data.title || "YouTube Playlist",
-                  channelName: data.channelName || "Unknown Channel",
-                  totalVideos: totalVids,
-                  videos: initialChunk,
-                  thumbnail: data.thumbnail || `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg`,
-                  progress: 0,
-                  lastWatchedAt: new Date().toISOString()
-                };
-
-                // Store progressive state to continue importing in background
-                setFullProgressiveVideos(data.videos);
-                setProgressiveTotalCount(totalVids);
-                setProgressiveLoadedCount(20);
-                setProgressivePlaylistId(id);
-                setProgressiveLoading(true);
-
-              } else {
-                playlist = {
-                  id: id,
-                  type: "playlist",
-                  title: data.title || "YouTube Playlist",
-                  channelName: data.channelName || "Unknown Channel",
-                  totalVideos: totalVids,
-                  videos: data.videos,
-                  thumbnail: data.thumbnail || `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg`,
-                  progress: 0,
-                  lastWatchedAt: new Date().toISOString()
-                };
-              }
+          let data: any = null;
+          try {
+            const res = await fetch(`/api/playlist?id=${id}`);
+            if (res.ok) {
+              data = await res.ok ? await res.json() : null;
+            } else {
+              console.warn(`Server playlist endpoint returned ${res.status}. Falling back to client-side YouTube Data API...`);
+              data = await fetchPlaylistFromYouTubeClient(id);
             }
-          } else {
-            const errData = await res.json().catch(() => ({}));
-            const errMsg = errData.error || `HTTP ${res.status} ${res.statusText}`;
-            const details = errData.details ? ` (${errData.details})` : "";
-            const suggested = errData.suggestedAction ? `\n\nSolution suggestion:\n${errData.suggestedAction}` : "";
-            throw new Error(`${errMsg}${details}${suggested}`);
+          } catch (serverErr) {
+            console.warn("Server playlist fetch failed. Falling back to client-side YouTube Data API...", serverErr);
+            data = await fetchPlaylistFromYouTubeClient(id);
+          }
+
+          if (data && data.videos && data.videos.length > 0) {
+            const totalVids = data.totalVideos || data.videos.length;
+            
+            if (totalVids > 20) {
+              // progressive loading trigger! Take first 20 first
+              const initialChunk = data.videos.slice(0, 20);
+              playlist = {
+                id: id,
+                type: "playlist",
+                title: data.title || "YouTube Playlist",
+                channelName: data.channelName || "Unknown Channel",
+                totalVideos: totalVids,
+                videos: initialChunk,
+                thumbnail: data.thumbnail || `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg`,
+                progress: 0,
+                lastWatchedAt: new Date().toISOString()
+              };
+
+              // Store progressive state to continue importing in background
+              setFullProgressiveVideos(data.videos);
+              setProgressiveTotalCount(totalVids);
+              setProgressiveLoadedCount(20);
+              setProgressivePlaylistId(id);
+              setProgressiveLoading(true);
+
+            } else {
+              playlist = {
+                id: id,
+                type: "playlist",
+                title: data.title || "YouTube Playlist",
+                channelName: data.channelName || "Unknown Channel",
+                totalVideos: totalVids,
+                videos: data.videos,
+                thumbnail: data.thumbnail || `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg`,
+                progress: 0,
+                lastWatchedAt: new Date().toISOString()
+              };
+            }
           }
         } catch (e: any) {
-          console.error("Failed to load playlist from server:", e);
+          console.error("Failed to load playlist from server or client fallback:", e);
           throw e; // Bubble up to handleUrlSubmit catch block so it shows in the UI error banner
         }
 
@@ -1216,8 +1388,18 @@ export default function App() {
 
         // Parallel metadata requests: Scraper & Gemini
         const scrapePromise = fetch(`/api/video-metadata?id=${id}`)
-          .then(r => r.ok ? r.json() : null)
-          .catch(() => null);
+          .then(async (r) => {
+            if (r.ok) {
+              return r.json();
+            } else {
+              console.warn(`Server video-metadata endpoint returned ${r.status}. Falling back to client-side YouTube Data API...`);
+              return fetchVideoFromYouTubeClient(id).catch(() => null);
+            }
+          })
+          .catch(async () => {
+            console.warn("Server video-metadata fetch failed. Falling back to client-side YouTube Data API...");
+            return fetchVideoFromYouTubeClient(id).catch(() => null);
+          });
 
         const geminiPromise = hasGeminiKey()
           ? fetchVideoMetadataWithGemini(id).catch((err) => {
