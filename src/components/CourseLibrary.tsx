@@ -465,7 +465,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     setSubjectPlaylistError(null);
 
     const parsed = parseYoutubeUrl(urlVal);
-    const playlistId = parsed?.type === "playlist" ? parsed.id : urlVal.trim();
+    const playlistId = parsed?.id || urlVal.trim();
 
     if (!playlistId || playlistId.length < 5) return;
 
@@ -739,7 +739,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     setImportPlaylistError(null);
 
     const parsed = parseYoutubeUrl(urlVal);
-    const playlistId = parsed?.type === "playlist" ? parsed.id : urlVal.trim();
+    const playlistId = parsed?.id || urlVal.trim();
 
     if (!playlistId || playlistId.length < 5) return;
 
@@ -912,7 +912,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     setChapterPlaylistError(null);
 
     const parsed = parseYoutubeUrl(urlVal);
-    const playlistId = parsed?.type === "playlist" ? parsed.id : urlVal.trim();
+    const playlistId = parsed?.id || urlVal.trim();
 
     if (!playlistId || playlistId.length < 5) return;
 
@@ -2562,8 +2562,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     return (
       <div className="space-y-6 animate-in fade-in duration-300">
         {/* Header Breadcrumb & Control Bar */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm">
-          <div>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm relative">
+          <div className="pr-12 md:pr-0">
             <button
               onClick={() => setSelectedSubject(null)}
               className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 mb-2 cursor-pointer"
@@ -2611,7 +2611,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
             </button>
 
             {/* Subject Header Three Dots Options Menu */}
-            <div className="relative">
+            <div className="absolute top-5 right-5 md:static z-10">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -2735,11 +2735,11 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               return (
                 <div 
                   key={ch.id} 
-                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4"
+                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4 relative"
                 >
                   {/* Chapter Header Bar */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800/80 pb-4">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 pr-10 sm:pr-0">
                       <div className="w-10 h-10 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-extrabold text-sm flex items-center justify-center border border-blue-200/50 dark:border-blue-900/40 shrink-0">
                         Ch.{ch.chapterNumber}
                       </div>
@@ -2786,7 +2786,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                       </button>
 
                       {/* Chapter Three Dots Options Menu */}
-                      <div className="relative">
+                      <div className="absolute top-4 right-4 sm:static z-10">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -3703,75 +3703,75 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                 className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm hover:shadow-md transition cursor-pointer flex flex-col justify-between group relative"
               >
                 <div>
-                  <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center justify-between mb-3 pr-8">
                     <span className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 text-[10px] font-extrabold uppercase border border-blue-100 dark:border-blue-900/40">
                       {subj.category}
                     </span>
+                  </div>
 
-                    {/* Three dots menu for Subject card */}
-                    <div className="relative">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenSubjectCardMenuId(openSubjectCardMenuId === subj.id ? null : subj.id);
-                        }}
-                        className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 transition cursor-pointer"
-                        title="Subject options"
-                      >
-                        <MoreVertical className="w-4 h-4" />
-                      </button>
+                  {/* Three dots menu for Subject card anchored at top right corner */}
+                  <div className="absolute top-4 right-4 z-10">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenSubjectCardMenuId(openSubjectCardMenuId === subj.id ? null : subj.id);
+                      }}
+                      className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 transition cursor-pointer"
+                      title="Subject options"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
 
-                      {openSubjectCardMenuId === subj.id && (
-                        <>
-                          <div 
-                            className="fixed inset-0 z-20" 
+                    {openSubjectCardMenuId === subj.id && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-20" 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenSubjectCardMenuId(null);
+                          }} 
+                        />
+                        <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+                          <button
                             onClick={(e) => {
                               e.stopPropagation();
                               setOpenSubjectCardMenuId(null);
-                            }} 
-                          />
-                          <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenSubjectCardMenuId(null);
-                                handleOpenEditSubject(subj, e);
-                              }}
-                              className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
-                            >
-                              <Edit2 className="w-3.5 h-3.5 text-blue-500" />
-                              <span>Edit Subject</span>
-                            </button>
+                              handleOpenEditSubject(subj, e);
+                            }}
+                            className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
+                          >
+                            <Edit2 className="w-3.5 h-3.5 text-blue-500" />
+                            <span>Edit Subject</span>
+                          </button>
 
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenSubjectCardMenuId(null);
-                                handleOpenImportPlaylistModal(subj);
-                              }}
-                              className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
-                            >
-                              <YoutubeBrandIcon className="w-3.5 h-3.5" />
-                              <span>Import Playlist</span>
-                            </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenSubjectCardMenuId(null);
+                              handleOpenImportPlaylistModal(subj);
+                            }}
+                            className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
+                          >
+                            <YoutubeBrandIcon className="w-3.5 h-3.5" />
+                            <span>Import Playlist</span>
+                          </button>
 
-                            <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
+                          <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
 
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenSubjectCardMenuId(null);
-                                onRequestDeleteSubject(subj.id, subj.subjectName, e);
-                              }}
-                              className="w-full text-left px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2 cursor-pointer transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                              <span>Delete Subject</span>
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenSubjectCardMenuId(null);
+                              onRequestDeleteSubject(subj.id, subj.subjectName, e);
+                            }}
+                            className="w-full text-left px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2 cursor-pointer transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete Subject</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   <h3 className="font-extrabold text-base text-slate-900 dark:text-zinc-50 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition">

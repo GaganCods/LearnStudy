@@ -141,37 +141,82 @@ app.get("/api/playlist", async (req, res) => {
     return res.status(400).json({ error: "Missing or invalid playlist ID" });
   }
 
+  let cleanId = id.trim();
+
+  // Extract list ID or video ID if URL or query parameter was supplied
+  const listMatch = cleanId.match(/[?&]list=([a-zA-Z0-9_-]+)/);
+  if (listMatch) {
+    cleanId = listMatch[1];
+  } else if (cleanId.includes("http://") || cleanId.includes("https://") || cleanId.includes("youtube.com") || cleanId.includes("youtu.be")) {
+    const vidMatch = cleanId.match(/(?:v=|\/embed\/|\/watch\?v=|\/vi\/|youtu\.be\/|shorts\/|live\/)([a-zA-Z0-9_-]{11})/);
+    if (vidMatch) {
+      cleanId = vidMatch[1];
+    }
+  }
+
+  // 1. Single video check (exact 11 character YouTube video ID)
+  const isPlaylistId = /^(PL|UU|FL|WL|RD|OLAK5uy_)[a-zA-Z0-9_-]+$/.test(cleanId);
+
+  if (!isPlaylistId && /^[a-zA-Z0-9_-]{11}$/.test(cleanId)) {
+    console.log(`[YouTube API] ID ${cleanId} detected as single video. Wrapping as single-video chapter.`);
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${cleanId}&format=json`;
+      const oembedRes = await fetch(oembedUrl);
+      let title = "YouTube Video";
+      let channelName = "YouTube Channel";
+      let thumbnail = `https://i.ytimg.com/vi/${cleanId}/hqdefault.jpg`;
+
+      if (oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        title = oembedData.title || title;
+        channelName = oembedData.author_name || channelName;
+        thumbnail = oembedData.thumbnail_url || thumbnail;
+      }
+
+      return res.json({
+        id: cleanId,
+        title,
+        channelName,
+        thumbnail,
+        videos: [{
+          id: cleanId,
+          title,
+          channelName,
+          duration: "10:00",
+          thumbnail,
+          progress: 0,
+          lastWatchedPosition: 0,
+          completed: false,
+          lectureNumber: 1
+        }],
+        totalVideos: 1
+      });
+    } catch (singleVidErr) {
+      console.warn("[YouTube API] Single video oEmbed fallback error:", singleVidErr);
+    }
+  }
+
   const apiKey = DIRECT_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY;
 
   if (apiKey && apiKey !== "MY_YOUTUBE_API_KEY" && apiKey.trim() !== "") {
     try {
-      console.log(`[YouTube API] Fetching playlist metadata for ID: ${id}`);
+      console.log(`[YouTube API] Fetching playlist metadata for ID: ${cleanId}`);
       
       let playlistTitle = "YouTube Playlist";
       let playlistChannel = "Unknown Channel";
       let playlistThumbnail = "";
 
       // 1. Fetch playlist snippet
-      const plUrl = `https://youtube.googleapis.com/youtube/v3/playlists?part=snippet&id=${id}&key=${apiKey}`;
+      const plUrl = `https://youtube.googleapis.com/youtube/v3/playlists?part=snippet&id=${cleanId}&key=${apiKey}`;
       const plRes = await fetchWithRetry(plUrl);
-      if (!plRes.ok) {
-        const errDetails = await analyzeYoutubeApiError(plRes, "fetch playlist metadata");
-        updateDiagnostics("PLAYLIST_METADATA_API_ERROR", {
-          apiKey,
-          error: errDetails.message,
-          requestUrl: plUrl,
-          responseStatus: plRes.status,
-          suggestedAction: errDetails.suggestedAction
-        });
-        throw new Error(errDetails.message);
-      }
-      
-      const plData = await plRes.json();
-      if (plData.items && plData.items[0]) {
-        const item = plData.items[0];
-        playlistTitle = item.snippet?.title || playlistTitle;
-        playlistChannel = item.snippet?.channelTitle || playlistChannel;
-        playlistThumbnail = item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.default?.url || "";
+      if (plRes.ok) {
+        const plData = await plRes.json();
+        if (plData.items && plData.items[0]) {
+          const item = plData.items[0];
+          playlistTitle = item.snippet?.title || playlistTitle;
+          playlistChannel = item.snippet?.channelTitle || playlistChannel;
+          playlistThumbnail = item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.default?.url || "";
+        }
       }
 
       // 2. Fetch all playlist items (handling pagination with nextPageToken)
@@ -180,19 +225,9 @@ app.get("/api/playlist", async (req, res) => {
       let page = 0;
 
       do {
-        const itemsUrl = `https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${id}&maxResults=50&pageToken=${nextPageToken}&key=${apiKey}`;
+        const itemsUrl = `https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${cleanId}&maxResults=50&pageToken=${nextPageToken}&key=${apiKey}`;
         const itemsRes = await fetchWithRetry(itemsUrl);
-        if (!itemsRes.ok) {
-          const errDetails = await analyzeYoutubeApiError(itemsRes, "fetch playlist items");
-          updateDiagnostics("PLAYLIST_ITEMS_API_ERROR", {
-            apiKey,
-            error: errDetails.message,
-            requestUrl: itemsUrl,
-            responseStatus: itemsRes.status,
-            suggestedAction: errDetails.suggestedAction
-          });
-          throw new Error(errDetails.message);
-        }
+        if (!itemsRes.ok) break;
         
         const itemsData = await itemsRes.json();
         if (!itemsData.items || itemsData.items.length === 0) break;
@@ -207,7 +242,7 @@ app.get("/api/playlist", async (req, res) => {
             id: vidId,
             title,
             channelName,
-            duration: "10:00", // Default, will update in batch below
+            duration: "10:00",
             thumbnail,
             progress: 0,
             lastWatchedPosition: 0,
@@ -219,9 +254,9 @@ app.get("/api/playlist", async (req, res) => {
         videos.push(...pageVideos);
         nextPageToken = itemsData.nextPageToken || "";
         page++;
-      } while (nextPageToken && page < 20); // Safe limit of 1000 items
+      } while (nextPageToken && page < 20);
 
-      // 3. Batch fetch durations for all retrieved videos (in chunks of 50)
+      // 3. Batch fetch durations
       if (videos.length > 0) {
         const batchSize = 50;
         for (let i = 0; i < videos.length; i += batchSize) {
@@ -258,14 +293,13 @@ app.get("/api/playlist", async (req, res) => {
           playlistThumbnail = videos[0].thumbnail;
         }
 
-        // Update diagnostics on successful retrieval
         updateDiagnostics("PLAYLIST_LOAD_SUCCESS", {
           apiKey,
-          requestUrl: `https://youtube.googleapis.com/youtube/v3/playlists?id=${id}`
+          requestUrl: `https://youtube.googleapis.com/youtube/v3/playlists?id=${cleanId}`
         });
 
         return res.json({
-          id,
+          id: cleanId,
           title: playlistTitle,
           channelName: playlistChannel,
           thumbnail: playlistThumbnail,
@@ -274,155 +308,100 @@ app.get("/api/playlist", async (req, res) => {
         });
       }
     } catch (apiErr: any) {
-      console.warn("[YouTube API] API key failed or quota limit hit. Falling back to scraping:", apiErr.message || apiErr);
-      // Ensure diagnostics are populated with the error before falling back to scraper
-      const errMsg = apiErr.message || String(apiErr);
-      if (!ytDiagnostics.lastError) {
-        updateDiagnostics("API_FALLBACK_TRIGGERED", {
-          apiKey,
-          error: errMsg
+      console.warn("[YouTube API] API key failed or quota limit hit. Trying RSS fallback:", apiErr.message || apiErr);
+    }
+  }
+
+  // --- RSS FEED FALLBACK (Fast, robust, zero API key required) ---
+  try {
+    console.log(`[YouTube API] Attempting RSS Feed parsing for playlist: ${cleanId}`);
+    const rssUrl = `https://www.youtube.com/feeds/videos.xml?playlist_id=${cleanId}`;
+    const rssRes = await fetch(rssUrl);
+    if (rssRes.ok) {
+      const xml = await rssRes.text();
+      const titleMatch = xml.match(/<title>([^<]+)<\/title>/);
+      const playlistTitle = titleMatch ? titleMatch[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"') : "YouTube Playlist";
+
+      const authorMatch = xml.match(/<author>\s*<name>([^<]+)<\/name>/);
+      const channelName = authorMatch ? authorMatch[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">") : "YouTube Channel";
+
+      const entries = xml.split("<entry>").slice(1);
+      const videos = entries.map((entry, idx) => {
+        const vIdMatch = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+        const vTitleMatch = entry.match(/<title>([^<]+)<\/title>/);
+        const vId = vIdMatch ? vIdMatch[1] : "";
+        const title = vTitleMatch ? vTitleMatch[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"') : `Video ${idx + 1}`;
+        
+        return {
+          id: vId,
+          title,
+          channelName,
+          duration: "10:00",
+          thumbnail: `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`,
+          progress: 0,
+          lastWatchedPosition: 0,
+          completed: false,
+          lectureNumber: idx + 1
+        };
+      }).filter(v => v.id && v.id.length === 11);
+
+      if (videos.length > 0) {
+        console.log(`[YouTube RSS] Successfully fetched ${videos.length} videos for playlist ${cleanId}`);
+        return res.json({
+          id: cleanId,
+          title: playlistTitle,
+          channelName,
+          thumbnail: videos[0]?.thumbnail || `https://i.ytimg.com/vi/${videos[0]?.id}/hqdefault.jpg`,
+          videos,
+          totalVideos: videos.length
         });
       }
     }
+  } catch (rssErr: any) {
+    console.warn("[YouTube API] RSS Feed fallback failed:", rssErr.message || rssErr);
   }
 
-  // --- SCRAPER FALLBACK ---
+  // --- PIPED PUBLIC API FALLBACK ---
   try {
-    const url = `https://www.youtube.com/playlist?list=${id}&hl=en`;
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
-      }
-    });
+    console.log(`[YouTube API] Attempting Piped API fallback for playlist: ${cleanId}`);
+    const pipedRes = await fetch(`https://pipedapi.kavin.rocks/playlists/${cleanId}`);
+    if (pipedRes.ok) {
+      const pipedData = await pipedRes.json();
+      if (pipedData && pipedData.relatedStreams && pipedData.relatedStreams.length > 0) {
+        const videos = pipedData.relatedStreams.map((item: any, idx: number) => {
+          const vidId = item.url ? item.url.replace("/watch?v=", "") : "";
+          return {
+            id: vidId,
+            title: item.title || `Video ${idx + 1}`,
+            channelName: item.uploaderName || pipedData.uploader || "YouTube Channel",
+            duration: item.duration ? `${Math.floor(item.duration / 60)}:${(item.duration % 60).toString().padStart(2, "0")}` : "10:00",
+            thumbnail: item.thumbnail || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
+            progress: 0,
+            lastWatchedPosition: 0,
+            completed: false,
+            lectureNumber: idx + 1
+          };
+        }).filter((v: any) => v.id);
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch playlist page: ${response.statusText}`);
-    }
-
-    const html = await response.text();
-    
-    // Extract ytInitialData variable
-    const startStr = "ytInitialData = ";
-    let ytInitialData: any = null;
-    const startIdx = html.indexOf(startStr);
-    if (startIdx !== -1) {
-      let depth = 0;
-      let jsonStart = startIdx + startStr.length;
-      while (jsonStart < html.length && html[jsonStart] !== "{") {
-        jsonStart++;
-      }
-      
-      if (jsonStart < html.length) {
-        for (let i = jsonStart; i < html.length; i++) {
-          if (html[i] === "{") depth++;
-          else if (html[i] === "}") {
-            depth--;
-            if (depth === 0) {
-              const jsonStr = html.slice(jsonStart, i + 1);
-              try {
-                ytInitialData = JSON.parse(jsonStr);
-              } catch (e) {
-                console.error("Failed to parse extracted JSON:", e);
-              }
-              break;
-            }
-          }
+        if (videos.length > 0) {
+          return res.json({
+            id: cleanId,
+            title: pipedData.title || "YouTube Playlist",
+            channelName: pipedData.uploader || "YouTube Channel",
+            thumbnail: pipedData.thumbnailUrl || videos[0].thumbnail,
+            videos,
+            totalVideos: videos.length
+          });
         }
       }
     }
-
-    if (!ytInitialData) {
-      return res.status(404).json({ error: "Could not find playlist data on YouTube page" });
-    }
-
-    // Recursive search helpers to find nested data
-    const findVideosRecursive = (obj: any, results: any[] = []): any[] => {
-      if (!obj || typeof obj !== "object") return results;
-      if (obj.playlistVideoRenderer) {
-        results.push(obj.playlistVideoRenderer);
-        return results;
-      }
-      for (const key of Object.keys(obj)) {
-        findVideosRecursive(obj[key], results);
-      }
-      return results;
-    };
-
-    const findPlaylistHeaderRecursive = (obj: any): any => {
-      if (!obj || typeof obj !== "object") return null;
-      if (obj.playlistHeaderRenderer) return obj.playlistHeaderRenderer;
-      if (obj.playlistSidebarPrimaryInfoRenderer) return obj.playlistSidebarPrimaryInfoRenderer;
-      for (const key of Object.keys(obj)) {
-        const res = findPlaylistHeaderRecursive(obj[key]);
-        if (res) return res;
-      }
-      return null;
-    };
-
-    const getText = (textObj: any): string => {
-      if (!textObj) return "";
-      if (typeof textObj === "string") return textObj;
-      if (textObj.simpleText) return textObj.simpleText;
-      if (Array.isArray(textObj.runs) && textObj.runs[0]) {
-        return textObj.runs.map((r: any) => r.text).join("");
-      }
-      return "";
-    };
-
-    const playlistVideoRenderers = findVideosRecursive(ytInitialData);
-    const videos = playlistVideoRenderers.map((item: any, idx: number) => {
-      const vidId = item.videoId;
-      const title = getText(item.title) || `Video ${idx + 1}`;
-      const channelName = getText(item.shortBylineText) || "Unknown Channel";
-      const duration = item.lengthText ? getText(item.lengthText) : "10:00";
-      const thumbnail = item.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`;
-      
-      return {
-        id: vidId,
-        title,
-        channelName,
-        duration,
-        thumbnail,
-        progress: 0,
-        lastWatchedPosition: 0,
-        completed: false,
-        lectureNumber: idx + 1
-      };
-    });
-
-    let title = "YouTube Playlist";
-    let channelName = "Unknown Channel";
-    let thumbnail = "";
-
-    const header = findPlaylistHeaderRecursive(ytInitialData);
-    if (header) {
-      title = getText(header.title) || title;
-      const owner = header.ownerText || header.shortBylineText;
-      if (owner) {
-        channelName = getText(owner) || channelName;
-      }
-    }
-
-    if (videos.length > 0) {
-      if (channelName === "Unknown Channel" && videos[0].channelName) {
-        channelName = videos[0].channelName;
-      }
-      thumbnail = videos[0].thumbnail;
-    }
-
-    return res.json({
-      id,
-      title,
-      channelName,
-      thumbnail,
-      videos,
-      totalVideos: videos.length
-    });
-  } catch (err: any) {
-    console.error("Error scraping playlist:", err);
-    return res.status(500).json({ error: err.message || "Failed to fetch and parse playlist" });
+  } catch (pipedErr: any) {
+    console.warn("[YouTube API] Piped fallback failed:", pipedErr.message || pipedErr);
   }
+
+  return res.status(404).json({
+    error: "Could not fetch playlist from YouTube. Please verify that the link is correct and the playlist is set to Public or Unlisted on YouTube."
+  });
 });
 
 // API route to proxy and parse single YouTube video metadata
@@ -610,13 +589,21 @@ app.get("/api/youtube-diagnostics", (req, res) => {
 // =========================================================================
 
 function getGeminiClient(req: express.Request): GoogleGenAI {
-  const userKey = req.headers["x-gemini-key"] as string || req.headers["authorization"]?.replace("Bearer ", "");
-  const apiKey = (userKey && userKey.trim().length >= 20) ? userKey.trim() : process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  let userKey = (req.headers["x-gemini-key"] as string)
+    || (req.headers["authorization"]?.replace("Bearer ", ""))
+    || req.body?.apiKey
+    || req.body?.key;
+
+  if (userKey) {
+    userKey = userKey.trim().replace(/^["']|["']$/g, "");
+  }
+
+  const apiKey = (userKey && userKey.length >= 20) ? userKey : process.env.GEMINI_API_KEY;
+  if (!apiKey || !apiKey.trim()) {
     throw new Error("No Gemini API key detected. Please connect your API key in the Study Hub settings.");
   }
   return new GoogleGenAI({
-    apiKey,
+    apiKey: apiKey.trim(),
     httpOptions: {
       headers: {
         "User-Agent": "aistudio-build",
@@ -673,8 +660,8 @@ function formatGeminiError(err: any): string {
   if (rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED")) {
     return "Rate limit reached. Please wait a moment before sending another AI request.";
   }
-  if (rawMsg.includes("API key")) {
-    return "Invalid or missing API key. Please check your Gemini key in settings.";
+  if (rawMsg.includes("API key") || rawMsg.includes("API_KEY_INVALID") || rawMsg.includes("INVALID_ARGUMENT") || rawMsg.includes("400")) {
+    return "Invalid or inactive API key. Please check your Google Gemini API key from Google AI Studio (aistudio.google.com).";
   }
   return rawMsg;
 }
@@ -684,7 +671,7 @@ app.post("/api/ai/validate-key", async (req, res) => {
   try {
     const ai = getGeminiClient(req);
     const response = await generateContentWithFallback(ai, {
-      contents: "Respond with exactly: 'VALID'.",
+      contents: "Hello, respond with VALID.",
     });
     if (response && response.text) {
       return res.json({ valid: true });

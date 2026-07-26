@@ -1,11 +1,15 @@
 export const GEMINI_STORAGE_KEY = "learnstudy_api_key";
 
 export function getGeminiKey(): string | null {
-  return localStorage.getItem(GEMINI_STORAGE_KEY);
+  const val = localStorage.getItem(GEMINI_STORAGE_KEY);
+  if (!val) return null;
+  const sanitized = val.trim().replace(/^["']|["']$/g, "");
+  return sanitized.length >= 20 ? sanitized : null;
 }
 
 export function saveGeminiKey(key: string) {
-  localStorage.setItem(GEMINI_STORAGE_KEY, key.trim());
+  const sanitized = key.trim().replace(/^["']|["']$/g, "");
+  localStorage.setItem(GEMINI_STORAGE_KEY, sanitized);
 }
 
 export function removeGeminiKey() {
@@ -14,7 +18,7 @@ export function removeGeminiKey() {
 
 export function maskApiKey(key: string): string {
   if (!key) return "";
-  const trimmed = key.trim();
+  const trimmed = key.trim().replace(/^["']|["']$/g, "");
   if (trimmed.length <= 8) {
     return "*".repeat(trimmed.length);
   }
@@ -23,7 +27,7 @@ export function maskApiKey(key: string): string {
 
 export function hasGeminiKey(): boolean {
   const key = getGeminiKey();
-  return !!key && key.trim().length >= 20;
+  return !!key && key.length >= 20;
 }
 
 /**
@@ -44,7 +48,7 @@ function getHeaders(): HeadersInit {
  * Validates a Gemini API Key format and makes a lightweight request to test live connectivity.
  */
 export async function validateGeminiKey(key: string): Promise<boolean> {
-  const trimmed = key.trim();
+  const trimmed = key.trim().replace(/^["']|["']$/g, "");
   if (!trimmed) {
     throw new Error("API Key cannot be empty");
   }
@@ -59,6 +63,7 @@ export async function validateGeminiKey(key: string): Promise<boolean> {
         "Content-Type": "application/json",
         "x-gemini-key": trimmed,
       },
+      body: JSON.stringify({ key: trimmed, apiKey: trimmed }),
     });
 
     if (!res.ok) {
