@@ -614,14 +614,15 @@ function getGeminiClient(req: express.Request): GoogleGenAI {
 
 // Resilient Gemini generator wrapper with exponential backoff and fallback model
 async function generateContentWithFallback(ai: GoogleGenAI, params: any) {
-  const primaryModel = "gemini-3.6-flash";
-  const fallbackModel = "gemini-3.1-flash-lite";
+  const primaryModel = "gemini-2.5-flash";
+  const fallbackModel = "gemini-2.0-flash";
+  const tertiaryModel = "gemini-1.5-flash";
 
   let lastError: any = null;
   let delay = 1000;
 
-  // Try primary model up to 2 times, then fallback model
-  const modelsToTry = [primaryModel, primaryModel, fallbackModel];
+  // Try primary model, fallback model, tertiary model
+  const modelsToTry = [primaryModel, fallbackModel, tertiaryModel];
 
   for (let i = 0; i < modelsToTry.length; i++) {
     const model = modelsToTry[i];
@@ -660,7 +661,7 @@ function formatGeminiError(err: any): string {
   if (rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED")) {
     return "Rate limit reached. Please wait a moment before sending another AI request.";
   }
-  if (rawMsg.includes("API key") || rawMsg.includes("API_KEY_INVALID") || rawMsg.includes("INVALID_ARGUMENT") || rawMsg.includes("400")) {
+  if (rawMsg.includes("API_KEY_INVALID") || rawMsg.includes("API key not valid") || rawMsg.includes("401") || rawMsg.includes("UNAUTHENTICATED")) {
     return "Invalid or inactive API key. Please check your Google Gemini API key from Google AI Studio (aistudio.google.com).";
   }
   return rawMsg;
