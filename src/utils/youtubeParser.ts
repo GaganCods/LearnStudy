@@ -176,6 +176,45 @@ export async function fetchPlaylistWithFallback(playlistOrVideoId: string): Prom
         } while (nextPageToken && page < 20);
 
         if (videos.length > 0) {
+          // Batch fetch video durations from YouTube API if key is available
+          try {
+            const batchSize = 50;
+            for (let i = 0; i < videos.length; i += batchSize) {
+              const batch = videos.slice(i, i + batchSize);
+              const batchIds = batch.map(v => v.id).join(",");
+              const vidUrl = `https://youtube.googleapis.com/youtube/v3/videos?part=contentDetails&id=${batchIds}&key=${apiKey}`;
+              const vidRes = await fetch(vidUrl);
+              if (vidRes.ok) {
+                const vidData = await vidRes.json();
+                if (vidData.items) {
+                  const durationMap = new Map<string, string>();
+                  vidData.items.forEach((item: any) => {
+                    if (item.contentDetails?.duration) {
+                      const iso = item.contentDetails.duration;
+                      const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+                      if (match) {
+                        const h = parseInt(match[1] || "0", 10);
+                        const m = parseInt(match[2] || "0", 10);
+                        const s = parseInt(match[3] || "0", 10);
+                        const durStr = h > 0 
+                          ? `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}` 
+                          : `${m}:${s.toString().padStart(2, "0")}`;
+                        durationMap.set(item.id, durStr);
+                      }
+                    }
+                  });
+                  batch.forEach(v => {
+                    if (durationMap.has(v.id)) {
+                      v.duration = durationMap.get(v.id);
+                    }
+                  });
+                }
+              }
+            }
+          } catch (batchErr) {
+            console.warn("[youtubeParser] Client batch duration fetch failed:", batchErr);
+          }
+
           return {
             id: cleanId,
             title: playlistTitle,
@@ -191,8 +230,37 @@ export async function fetchPlaylistWithFallback(playlistOrVideoId: string): Prom
     }
   }
 
-  // 3. Fallback: Single Video oEmbed if 11-char video ID
+  // 3. Fallback: Single Video Metadata endpoint if 11-char video ID
   if (/^[a-zA-Z0-9_-]{11}$/.test(cleanId)) {
+    try {
+      const metaRes = await fetch(`/api/video-metadata?id=${cleanId}`);
+      if (metaRes.ok) {
+        const metaData = await metaRes.json();
+        const title = metaData.title || "YouTube Video";
+        const channelName = metaData.channelName || "YouTube Creator";
+        const duration = metaData.duration || "10:00";
+        const thumbnail = metaData.thumbnail || `https://i.ytimg.com/vi/${cleanId}/hqdefault.jpg`;
+        return {
+          id: cleanId,
+          title,
+          channelName,
+          thumbnail,
+          videos: [{
+            id: cleanId,
+            title,
+            channelName,
+            duration,
+            thumbnail,
+            progress: 0,
+            lastWatchedPosition: 0,
+            completed: false,
+            lectureNumber: 1
+          }],
+          totalVideos: 1
+        };
+      }
+    } catch (e) {}
+
     try {
       const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${cleanId}&format=json`);
       if (oembedRes.ok) {

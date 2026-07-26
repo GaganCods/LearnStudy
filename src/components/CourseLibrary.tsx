@@ -1241,8 +1241,26 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     const targetChapter = selectedSubject.chapters.find(c => c.id === targetChapterId);
     const lectureIndex = (targetChapter?.lectures.length || 0) + 1;
 
-    const finalTitle = newLectureTitle.trim() || (ytId ? `Lecture (${ytId})` : `Lecture ${lectureIndex}`);
-    const finalDuration = newLectureDuration.trim() || "15:00";
+    let finalTitle = newLectureTitle.trim();
+    let finalDuration = newLectureDuration.trim();
+
+    if (ytId && ytId.length === 11 && (!finalTitle || !finalDuration || finalTitle.startsWith("Lecture") || finalDuration === "15:00")) {
+      try {
+        const metaRes = await fetch(`/api/video-metadata?id=${ytId}`);
+        if (metaRes.ok) {
+          const metaData = await metaRes.json();
+          if (metaData.title && (!finalTitle || finalTitle.startsWith("Lecture"))) {
+            finalTitle = metaData.title;
+          }
+          if (metaData.duration && (!finalDuration || finalDuration === "15:00")) {
+            finalDuration = metaData.duration;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!finalTitle) finalTitle = ytId ? `Lecture (${ytId})` : `Lecture ${lectureIndex}`;
+    if (!finalDuration) finalDuration = "10:00";
 
     const newLec: ChapterLecture = {
       id: `lec-${Date.now()}`,
@@ -2733,8 +2751,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     return (
       <div className="space-y-6 animate-in fade-in duration-300">
         {/* Header Breadcrumb & Control Bar */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm relative">
-          <div className="pr-12 md:pr-0">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm">
+          <div>
             <button
               onClick={() => setSelectedSubject(null)}
               className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 mb-2 cursor-pointer"
@@ -2782,7 +2800,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
             </button>
 
             {/* Subject Header Three Dots Options Menu */}
-            <div className="absolute top-5 right-5 md:static z-10">
+            <div className="relative">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -2906,11 +2924,11 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               return (
                 <div 
                   key={ch.id} 
-                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4 relative"
+                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4"
                 >
                   {/* Chapter Header Bar */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800/80 pb-4">
-                    <div className="flex items-center gap-3 pr-10 sm:pr-0">
+                    <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-extrabold text-sm flex items-center justify-center border border-blue-200/50 dark:border-blue-900/40 shrink-0">
                         Ch.{ch.chapterNumber}
                       </div>
@@ -2957,7 +2975,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                       </button>
 
                       {/* Chapter Three Dots Options Menu */}
-                      <div className="absolute top-4 right-4 sm:static z-10">
+                      <div className="relative">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

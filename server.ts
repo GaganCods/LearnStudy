@@ -293,6 +293,8 @@ app.get("/api/playlist", async (req, res) => {
           playlistThumbnail = videos[0].thumbnail;
         }
 
+        await enrichVideoMetadata(videos);
+
         updateDiagnostics("PLAYLIST_LOAD_SUCCESS", {
           apiKey,
           requestUrl: `https://youtube.googleapis.com/youtube/v3/playlists?id=${cleanId}`
@@ -346,7 +348,9 @@ app.get("/api/playlist", async (req, res) => {
       }).filter(v => v.id && v.id.length === 11);
 
       if (videos.length > 0) {
-        console.log(`[YouTube RSS] Successfully fetched ${videos.length} videos for playlist ${cleanId}`);
+        console.log(`[YouTube RSS] Successfully fetched ${videos.length} videos for playlist ${cleanId}. Enriching durations...`);
+        await enrichVideoMetadata(videos);
+
         return res.json({
           id: cleanId,
           title: playlistTitle,
@@ -384,6 +388,8 @@ app.get("/api/playlist", async (req, res) => {
         }).filter((v: any) => v.id);
 
         if (videos.length > 0) {
+          await enrichVideoMetadata(videos);
+
           return res.json({
             id: cleanId,
             title: pipedData.title || "YouTube Playlist",
@@ -612,17 +618,125 @@ function getGeminiClient(req: express.Request): GoogleGenAI {
   });
 }
 
+// Helper to enrich video metadata (durations and titles) for any videos missing them
+async function enrichVideoMetadata(videos: Array<{ id: string; title: string; duration: string; channelName?: string; thumbnail?: string }>): Promise<void> {
+  if (!videos || videos.length === 0) return;
+
+  const needsEnrichment = videos.filter(v => 
+    !v.duration || v.duration === "10:00" || v.duration === "15:00" || v.duration === "0:00" ||
+    !v.title || v.title === "Video" || v.title.startsWith("Video ") || v.title.startsWith("Lecture ")
+  );
+
+  if (needsEnrichment.length === 0) return;
+
+  // 1. Try YouTube Data API batch if API key is available
+  const apiKey = DIRECT_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY;
+  if (apiKey && apiKey.trim()) {
+    try {
+      const batchSize = 50;
+      for (let i = 0; i < needsEnrichment.length; i += batchSize) {
+        const batch = needsEnrichment.slice(i, i + batchSize);
+        const batchIds = batch.map(v => v.id).join(",");
+        const vidUrl = `https://youtube.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${batchIds}&key=${apiKey}`;
+        const res = await fetchWithRetry(vidUrl);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.items) {
+            const map = new Map<string, { duration?: string; title?: string; channelName?: string }>();
+            data.items.forEach((item: any) => {
+              const dur = item.contentDetails?.duration ? parseISO8601Duration(item.contentDetails.duration) : null;
+              const title = item.snippet?.title;
+              const channelName = item.snippet?.channelTitle;
+              map.set(item.id, { duration: dur || undefined, title, channelName });
+            });
+            batch.forEach(v => {
+              const info = map.get(v.id);
+              if (info) {
+                if (info.duration) v.duration = info.duration;
+                if (info.title) v.title = info.title;
+                if (info.channelName && (!v.channelName || v.channelName === "Unknown Channel")) v.channelName = info.channelName;
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[enrichVideoMetadata] YouTube API batch fetch failed:", e);
+    }
+  }
+
+  // 2. For remaining videos with default/missing duration or title, scrape watch page in parallel
+  const remaining = needsEnrichment.filter(v => 
+    !v.duration || v.duration === "10:00" || v.duration === "15:00" || v.duration === "0:00" ||
+    !v.title || v.title === "Video" || v.title.startsWith("Video ")
+  );
+
+  if (remaining.length > 0) {
+    const promises = remaining.slice(0, 30).map(async (v) => {
+      try {
+        const watchUrl = `https://www.youtube.com/watch?v=${v.id}&hl=en`;
+        const res = await fetch(watchUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9"
+          }
+        });
+        if (res.ok) {
+          const html = await res.text();
+          let totalSecs = 0;
+          const mSec = html.match(/"lengthSeconds":"(\d+)"/);
+          if (mSec) totalSecs = parseInt(mSec[1], 10);
+          if (!totalSecs) {
+            const mMs = html.match(/"approxDurationMs":"(\d+)"/);
+            if (mMs) totalSecs = Math.floor(parseInt(mMs[1], 10) / 1000);
+          }
+          if (!totalSecs) {
+            const mItem = html.match(/itemprop="duration" content="PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?"/);
+            if (mItem) {
+              const h = parseInt(mItem[1] || "0", 10);
+              const m = parseInt(mItem[2] || "0", 10);
+              const s = parseInt(mItem[3] || "0", 10);
+              totalSecs = h * 3600 + m * 60 + s;
+            }
+          }
+
+          if (totalSecs > 0) {
+            const hrs = Math.floor(totalSecs / 3600);
+            const mins = Math.floor((totalSecs % 3600) / 60);
+            const secs = totalSecs % 60;
+            v.duration = hrs > 0 
+              ? `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+              : `${mins}:${secs.toString().padStart(2, "0")}`;
+          }
+
+          if (!v.title || v.title === "Video" || v.title.startsWith("Video ")) {
+            const mTitle = html.match(/<meta name="title" content="([^"]+)"/) || html.match(/<meta property="og:title" content="([^"]+)"/);
+            if (mTitle) {
+              v.title = mTitle[1]
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/&amp;/g, "&")
+                .replace(/&lt;/g, "<")
+                .replace(/&gt;/g, ">");
+            }
+          }
+        }
+      } catch (e) {}
+    });
+    await Promise.all(promises);
+  }
+}
+
 // Resilient Gemini generator wrapper with exponential backoff and fallback model
 async function generateContentWithFallback(ai: GoogleGenAI, params: any) {
-  const primaryModel = "gemini-2.5-flash";
-  const fallbackModel = "gemini-2.0-flash";
-  const tertiaryModel = "gemini-1.5-flash";
+  const primaryModel = "gemini-3.6-flash";
+  const fallbackModel = "gemini-flash-latest";
 
   let lastError: any = null;
   let delay = 1000;
 
-  // Try primary model, fallback model, tertiary model
-  const modelsToTry = [primaryModel, fallbackModel, tertiaryModel];
+  // Try primary model and fallback model
+  const modelsToTry = [primaryModel, fallbackModel];
 
   for (let i = 0; i < modelsToTry.length; i++) {
     const model = modelsToTry[i];
