@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
+import { GoogleGenAI, Type } from "@google/genai";
 
 // =========================================================================
 // 🔑 PASTE YOUR YOUTUBE API KEY HERE DIRECTLY:
@@ -602,6 +603,441 @@ app.get("/api/youtube-diagnostics", (req, res) => {
     nodeEnv: process.env.NODE_ENV || "development",
     appUrl: process.env.APP_URL || "Not Configured"
   });
+});
+
+// =========================================================================
+// 🧠 SERVER-SIDE GEMINI API PROXY ENDPOINTS (Secure, scalable, and compliant)
+// =========================================================================
+
+function getGeminiClient(req: express.Request): GoogleGenAI {
+  const userKey = req.headers["x-gemini-key"] as string || req.headers["authorization"]?.replace("Bearer ", "");
+  const apiKey = (userKey && userKey.trim().length >= 20) ? userKey.trim() : process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("No Gemini API key detected. Please connect your API key in the Study Hub settings.");
+  }
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
+      }
+    }
+  });
+}
+
+// Resilient Gemini generator wrapper with exponential backoff and fallback model
+async function generateContentWithFallback(ai: GoogleGenAI, params: any) {
+  const primaryModel = "gemini-3.6-flash";
+  const fallbackModel = "gemini-3.1-flash-lite";
+
+  let lastError: any = null;
+  let delay = 1000;
+
+  // Try primary model up to 2 times, then fallback model
+  const modelsToTry = [primaryModel, primaryModel, fallbackModel];
+
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const model = modelsToTry[i];
+    try {
+      const response = await ai.models.generateContent({
+        ...params,
+        model,
+      });
+      return response;
+    } catch (err: any) {
+      lastError = err;
+      const errMsg = String(err.message || err);
+      const is503Or429 = err?.status === 503 || err?.code === 503 || 
+                         err?.status === 429 || err?.code === 429 ||
+                         errMsg.includes("503") || errMsg.includes("high demand") || 
+                         errMsg.includes("UNAVAILABLE") || errMsg.includes("RESOURCE_EXHAUSTED");
+
+      console.warn(`[Gemini API Attempt ${i + 1}/${modelsToTry.length}] Model ${model} failed (${is503Or429 ? "503/High Demand" : errMsg}).`);
+
+      if (i < modelsToTry.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 1.5;
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+// Format human-friendly error messages from raw API exceptions
+function formatGeminiError(err: any): string {
+  const rawMsg = err?.message || String(err);
+  if (rawMsg.includes("503") || rawMsg.includes("UNAVAILABLE") || rawMsg.includes("high demand")) {
+    return "The AI study model is currently experiencing high demand. Please try again in a few moments.";
+  }
+  if (rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED")) {
+    return "Rate limit reached. Please wait a moment before sending another AI request.";
+  }
+  if (rawMsg.includes("API key")) {
+    return "Invalid or missing API key. Please check your Gemini key in settings.";
+  }
+  return rawMsg;
+}
+
+// 1. API key validation
+app.post("/api/ai/validate-key", async (req, res) => {
+  try {
+    const ai = getGeminiClient(req);
+    const response = await generateContentWithFallback(ai, {
+      contents: "Respond with exactly: 'VALID'.",
+    });
+    if (response && response.text) {
+      return res.json({ valid: true });
+    }
+    return res.status(400).json({ error: "Empty or invalid response from the AI engine." });
+  } catch (err: any) {
+    console.error("[Gemini Validation Failed]:", err);
+    return res.status(400).json({ error: formatGeminiError(err) });
+  }
+});
+
+// 2. Multi-format AI study material generator
+app.post("/api/ai/generate-notes", async (req, res) => {
+  const { videoTitle, channelName, type, studentNotes, imageBase64, imageMime } = req.body;
+  if (!videoTitle) {
+    return res.status(400).json({ error: "Missing video title parameter." });
+  }
+
+  try {
+    const ai = getGeminiClient(req);
+    let prompt = "";
+    let systemInstruction = "You are LearnStudy AI, an elite educational summarizer and study tutor. Your materials are deeply structured, clean, comprehensive, and beautifully formatted in markdown.";
+
+    if (type === "complete") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate comprehensive, highly detailed, and complete study notes in markdown format.
+Structure the notes precisely as follows:
+- **Executive Outline**: An in-depth overview of the lecture's core goals and themes.
+- **Detailed Core Concepts**: Multiple bulleted sections breaking down every major concept with clear definitions, real-world examples, and academic context.
+- **Key Equations & Formulas**: Detail any equations, derivations, and variables mentioned, or practical uses.
+- **Academic Comparison Grid**: A structured markdown table summarizing milestones, figures, or comparison parameters.
+- **Comprehensive Glossary**: Definitions of all technical and industry terms.
+- **In-Depth Study Guide**: Specific practice problems or study tracks for the student to follow.
+
+Write in a formal, engaging, academic tone using bold highlights and spacious layout. Avoid meta-commentary.`;
+    } else if (type === "short") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate highly condensed, high-yield Short Notes (or an executive summary) in markdown format.
+Keep it strictly under 500 words but dense with information.
+Include:
+- **The Core Thesis**: One paragraph summarizing the video.
+- **High-Yield Concepts**: 4-5 bullet points of the most critical take-aways.
+- **Instant Glossary**: 3 brief term definitions.`;
+    } else if (type === "revision") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate an elegant, highly structured Revision Cheat Sheet in markdown format.
+Focus on memory-retention hacks, clear visual analogies, key bullet-point summaries, and mnemonic devices to help a student revise the topic 10 minutes before an exam. Use lists, warning notes, and highlight markers.`;
+    } else if (type === "flashcards") {
+      systemInstruction = "You are LearnStudy Flashcard Maker. You return lists of highly effective academic flashcards.";
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate 6 to 10 high-value study flashcards.
+Each flashcard should test a core concept, definition, formula, or relationship.
+Format the output as a beautiful, easy-to-read markdown table or list:
+| Card ID | Front (Question/Concept) | Back (Answer/Explanation) |
+| --- | --- | --- |`;
+    } else if (type === "questions") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate a list of 5 to 8 Important Practice Questions with comprehensive, step-by-step academic answers.
+Each question should mimic a university exam question and provide a flawless model answer.`;
+    } else if (type === "mindmap") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate a beautiful visual Markdown Mind Map.
+Use hierarchical bullet points, indentation levels, and branch emojis (e.g. 🌲, 🌿, 📍, 🔑) to represent how all the subtopics branch off from the main lecture topic. Make it highly structural and easy to scan at a glance.`;
+    } else if (type === "formulas") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Extract and generate a Formula and Definition Cheat Sheet in markdown format.
+Create a clear markdown table listing every formula, variable definition, SI unit, and key definition mentioned in the topic, with brief examples of how to apply them.`;
+    } else if (type === "improve") {
+      prompt = `The student has taken the following draft notes during the lecture "${videoTitle}" by creator "${channelName}":
+---
+${studentNotes || ""}
+---
+
+Your task is to improve, structure, and expand these notes. 
+Keep all of the student's original facts and thoughts, but:
+1. Fix any grammar, typos, and formatting issues.
+2. Structure them with clear markdown headings, bullet points, and code blocks.
+3. Enhance them by adding detailed conceptual explanations, real-world examples, and necessary academic context for the terms mentioned by the student.
+4. Highlight key terms and equations.
+Format the output as clean, production-ready study notes in markdown.`;
+    } else if (type === "image") {
+      if (!imageBase64) {
+        return res.status(400).json({ error: "Missing image data" });
+      }
+      prompt = `Analyze this lecture slide, diagram, or textbook page.
+Extract all key concepts, formulas, bullet points, and visual data shown in the image.
+Provide a clear, highly structured markdown explanation:
+1. **Slide Summary**: What is the slide/diagram illustrating?
+2. **Extracted Content**: Detailed breakdown of text, lists, and formulas.
+3. **Conceptual Deep-Dive**: In-depth explanation of the principles shown, adding context that may not be directly written but is highly relevant to the topic.
+4. **Integration Hint**: Briefly suggest where this fits in the student's notes.`;
+    } else {
+      return res.status(400).json({ error: "Invalid study material type requested" });
+    }
+
+    if (studentNotes && type !== "improve" && studentNotes.trim()) {
+      prompt += `\n\nIncorporate the student's current draft notes to personalize and detail the material:\nSTUDENT DRAFT NOTES:\n${studentNotes}`;
+    }
+
+    if (type === "image" && imageBase64) {
+      const imagePart = {
+        inlineData: {
+          mimeType: imageMime || "image/png",
+          data: imageBase64,
+        },
+      };
+      const textPart = { text: prompt };
+      const response = await generateContentWithFallback(ai, {
+        contents: { parts: [imagePart, textPart] },
+        config: { systemInstruction },
+      });
+      return res.json({ result: response.text });
+    } else {
+      const response = await generateContentWithFallback(ai, {
+        contents: prompt,
+        config: { systemInstruction },
+      });
+      return res.json({ result: response.text });
+    }
+  } catch (err: any) {
+    console.error("[Gemini Study Materials Generation Failed]:", err);
+    return res.status(500).json({ error: formatGeminiError(err) });
+  }
+});
+
+// 3. Interactive MCQ Quiz Generator
+app.post("/api/ai/generate-quiz", async (req, res) => {
+  const { videoTitle, channelName, studentNotes } = req.body;
+  try {
+    const ai = getGeminiClient(req);
+    let prompt = `Create a multiple-choice quiz consisting of 3 to 5 premium conceptual questions testing a student's deep comprehension of the video lecture: "${videoTitle}" by "${channelName}".`;
+    if (studentNotes && studentNotes.trim()) {
+      prompt += `\n\nBase your questions on the core content of the lecture and integrate facts/details from these student study notes:\n${studentNotes}`;
+    }
+    prompt += `\n\nEnsure that each question is unique, mathematically/conceptually rigorous, and has 4 options. Make sure the explanation is comprehensive and explains why the correct option is correct, and why other options are incorrect.`;
+
+    const response = await generateContentWithFallback(ai, {
+      contents: prompt,
+      config: {
+        systemInstruction: "You are LearnStudy QuizMaster. You generate balanced, challenging, multiple-choice quizzes that test actual learning and conceptual mastery.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          description: "A list of multiple choice questions.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              question: { type: Type.STRING, description: "The conceptual multiple-choice question." },
+              options: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of exactly 4 plausible options." },
+              correctIndex: { type: Type.INTEGER, description: "The 0-based index of the correct option (0 to 3)." },
+              explanation: { type: Type.STRING, description: "Thorough explanation of the correct answer and conceptual reasoning." }
+            },
+            required: ["question", "options", "correctIndex", "explanation"]
+          }
+        }
+      }
+    });
+
+    const jsonText = response.text?.trim() || "[]";
+    return res.json(JSON.parse(jsonText));
+  } catch (err: any) {
+    console.error("[Gemini Quiz Generation Failed]:", err);
+    return res.status(500).json({ error: formatGeminiError(err) });
+  }
+});
+
+// 4. Tutor doubt solver
+app.post("/api/ai/solve-doubt", async (req, res) => {
+  const { videoTitle, channelName, studentNotes, chatHistory, newQuestion } = req.body;
+  try {
+    const ai = getGeminiClient(req);
+    const formattedHistory = (chatHistory || []).map((msg: any) => ({
+      role: msg.role === "user" ? "user" : "model",
+      parts: [{ text: msg.text }]
+    }));
+
+    const systemInstruction = `You are LearnStudy Doubt Solver, an award-winning personalized academic tutor. 
+The student is currently watching the lecture: "${videoTitle}" by creator "${channelName}".
+The student's study notes for this lecture are:
+---
+${studentNotes || "(No study notes yet)"}
+---
+
+Your role is to resolve the student's doubts about this lecture topic with incredible clarity, patience, and visual descriptions. 
+Break down complex formulas step-by-step. Use Markdown formatting like headers, bullet points, code blocks, bold key terms, and italic formulas for a gorgeous educational layout. Keep explanations highly educational and engaging.`;
+
+    const contents = [
+      ...formattedHistory,
+      { role: "user", parts: [{ text: newQuestion }] }
+    ];
+
+    const response = await generateContentWithFallback(ai, {
+      contents,
+      config: { systemInstruction }
+    });
+
+    return res.json({ result: response.text });
+  } catch (err: any) {
+    console.error("[Gemini Doubt Solver Failed]:", err);
+    return res.status(500).json({ error: formatGeminiError(err) });
+  }
+});
+
+// 5. Predict educational metadata for a video
+app.get("/api/ai/video-metadata", async (req, res) => {
+  const { id } = req.query;
+  if (!id || typeof id !== "string") {
+    return res.status(400).json({ error: "Missing video ID parameter." });
+  }
+
+  try {
+    const ai = getGeminiClient(req);
+    const prompt = `Identify or estimate highly accurate educational metadata for the YouTube video with ID: "${id}".
+If you have exact pre-trained memory of this video ID, return the exact info. Otherwise, return a highly realistic, academically-focused title, channel name, duration, publish date, concise and engaging 2-3 sentence description, and 3-5 relevant educational tags matching typical video topics for this ID.
+Ensure the duration is in MM:SS format or H:MM:SS format (e.g. "12:34" or "1:05:22").`;
+
+    const response = await generateContentWithFallback(ai, {
+      contents: prompt,
+      config: {
+        systemInstruction: "You are LearnStudy Video Indexer. You return structured metadata for educational and informational video lectures.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING, description: "The educational/academic video title" },
+            channelName: { type: Type.STRING, description: "Name of the YouTube channel or creator" },
+            duration: { type: Type.STRING, description: "Video duration formatted as MM:SS or H:MM:SS" },
+            publishDate: { type: Type.STRING, description: "Realistic publish date, e.g. 'Oct 14, 2022'" },
+            description: { type: Type.STRING, description: "Concise 2-3 sentence summary of the educational content covered" },
+            tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "3 to 5 academic tags or keywords" }
+          },
+          required: ["title", "channelName", "duration", "publishDate", "description", "tags"]
+        }
+      }
+    });
+
+    const jsonText = response.text?.trim() || "{}";
+    return res.json(JSON.parse(jsonText));
+  } catch (err: any) {
+    console.error("[Gemini Video Metadata Predictor Failed]:", err);
+    return res.status(500).json({ error: formatGeminiError(err) });
+  }
+});
+
+// 6. Student PDF Reader Workspace AI Assistant
+app.post("/api/ai/pdf-assistant", async (req, res) => {
+  const { action, documentTitle, pageNumber, selectedText, fullContext, customQuery, targetLanguage } = req.body;
+  try {
+    const ai = getGeminiClient(req);
+
+    if (action === "dictionary") {
+      const prompt = `Provide an academic dictionary breakdown for the word or phrase: "${selectedText}". Return definition, pronunciation guide, part of speech, key synonyms, and an educational example sentence.`;
+      const response = await generateContentWithFallback(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction: "You are an academic lexicon dictionary assistant.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              word: { type: Type.STRING },
+              pronunciation: { type: Type.STRING },
+              partOfSpeech: { type: Type.STRING },
+              definition: { type: Type.STRING },
+              synonyms: { type: Type.ARRAY, items: { type: Type.STRING } },
+              exampleSentence: { type: Type.STRING }
+            },
+            required: ["word", "pronunciation", "partOfSpeech", "definition", "synonyms", "exampleSentence"]
+          }
+        }
+      });
+      return res.json(JSON.parse(response.text?.trim() || "{}"));
+    }
+
+    if (action === "generate_flashcards") {
+      const prompt = `Based on the following text/content from the PDF document "${documentTitle}" (Page ${pageNumber || 1}):\n\n"${selectedText || fullContext || documentTitle}"\n\nGenerate 3 to 5 study flashcards (Question + Answer) that test core concepts, definitions, or formulas.`;
+      const response = await generateContentWithFallback(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction: "You are a master study flashcard creator.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                question: { type: Type.STRING },
+                answer: { type: Type.STRING },
+                chapter: { type: Type.STRING }
+              },
+              required: ["question", "answer"]
+            }
+          }
+        }
+      });
+      return res.json(JSON.parse(response.text?.trim() || "[]"));
+    }
+
+    if (action === "generate_mcqs") {
+      const prompt = `Generate 3 conceptual multiple-choice questions with 4 options and a detailed explanation based on this text from "${documentTitle}":\n\n"${selectedText || fullContext}"`;
+      const response = await generateContentWithFallback(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction: "You are LearnStudy Quiz Generator for PDF course material.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                question: { type: Type.STRING },
+                options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                correctIndex: { type: Type.INTEGER },
+                explanation: { type: Type.STRING }
+              },
+              required: ["question", "options", "correctIndex", "explanation"]
+            }
+          }
+        }
+      });
+      return res.json(JSON.parse(response.text?.trim() || "[]"));
+    }
+
+    // Default text responses (Explain, Summarize, Simplify, Formula Sheet, Translate, Ask Doubt)
+    let systemInstruction = "You are LearnStudy AI Student Reading Assistant, specialized in helping university and school students master textbook chapters, lecture slides, and notes.";
+    let prompt = "";
+
+    if (action === "explain") {
+      prompt = `Explain the following text from "${documentTitle}" (Page ${pageNumber || 1}) in simple, intuitive terms suitable for a student studying this topic:\n\n"${selectedText || fullContext}"`;
+    } else if (action === "summarize") {
+      prompt = `Provide a structured, bulleted study summary of this PDF section/page from "${documentTitle}" (Page ${pageNumber || 1}):\n\n"${fullContext || selectedText}"\n\nHighlight key concepts, definitions, and main takeaways.`;
+    } else if (action === "simplify") {
+      prompt = `Simplify and rewrite this complex paragraph or technical jargon into plain, easy-to-understand language:\n\n"${selectedText || fullContext}"`;
+    } else if (action === "formula_sheet") {
+      prompt = `Extract or derive all key formulas, equations, mathematical laws, or core principles from this text of "${documentTitle}" and format them cleanly as a revision cheat sheet:\n\n"${fullContext || selectedText}"`;
+    } else if (action === "translate") {
+      const lang = targetLanguage || "Spanish";
+      prompt = `Translate the following educational text accurately into ${lang}, preserving technical clarity:\n\n"${selectedText || fullContext}"`;
+    } else {
+      // General question / doubt
+      prompt = `The student is reading "${documentTitle}" (Page ${pageNumber || 1}).\nContext from page:\n"${fullContext || ""}"\n\nStudent Question:\n"${customQuery || selectedText || "Explain this page."}"`;
+    }
+
+    const response = await generateContentWithFallback(ai, {
+      contents: prompt,
+      config: { systemInstruction }
+    });
+
+    return res.json({ result: response.text });
+  } catch (err: any) {
+    console.error("[Gemini PDF Assistant Failed]:", err);
+    return res.status(500).json({ error: formatGeminiError(err) });
+  }
 });
 
 

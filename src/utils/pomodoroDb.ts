@@ -13,6 +13,15 @@ export interface PomodoroSettings {
   pauseBetweenSessions: boolean;
   countdownFormat: "MM:SS" | "HH:MM:SS";
   notificationSound: string;
+  loopAlarm: "off" | "once" | "until_stopped" | "custom";
+  loopInterval: number;
+  maxRepeatDuration: number;
+  autoStopAlarm: "one_ring" | 30 | 60 | "never";
+  backgroundSound: string;
+  backgroundVolume: number;
+  voiceReminders: boolean;
+  selectedPresetId: string;
+  customPresets: { id: string; name: string; focusDuration: number; shortBreakDuration: number; longBreakDuration: number; sessionsBeforeLongBreak: number }[];
   volume: number;
   enableBrowserNotifications: boolean;
   enableVibration: boolean;
@@ -119,6 +128,15 @@ export class PomodoroDb {
           floatingTimerPosition: { x: 20, y: 80 },
           compactWidget: false,
           countdownAnimationStyle: "smooth",
+          loopAlarm: "off",
+          loopInterval: 5,
+          maxRepeatDuration: 30,
+          autoStopAlarm: "one_ring",
+          backgroundSound: "none",
+          backgroundVolume: 50,
+          voiceReminders: true,
+          selectedPresetId: "classic",
+          customPresets: [],
         };
         resolve(request.result || defaultSettings);
       };
@@ -141,6 +159,15 @@ export class PomodoroDb {
           floatingTimerPosition: { x: 20, y: 80 },
           compactWidget: false,
           countdownAnimationStyle: "smooth",
+          loopAlarm: "off",
+          loopInterval: 5,
+          maxRepeatDuration: 30,
+          autoStopAlarm: "one_ring",
+          backgroundSound: "none",
+          backgroundVolume: 50,
+          voiceReminders: true,
+          selectedPresetId: "classic",
+          customPresets: [],
         });
       };
     });

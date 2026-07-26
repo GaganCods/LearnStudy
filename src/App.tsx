@@ -4,8 +4,10 @@ import {
   RotateCcw, Maximize, FileText, Bookmark, Trash2, Search, 
   Maximize2, Minimize2, ChevronRight, ChevronLeft, BookOpen, GraduationCap, 
   Sparkles, TrendingUp, Plus, Edit2, X, Clock, Flame, 
-  ShieldAlert, Share2, Moon, Sun, Laptop, ChevronDown, CheckCircle,
-  Eye, EyeOff, Star, Calendar, Download, Upload, Info, RefreshCw, ArrowUpDown, Filter
+  ShieldAlert, Share2, Moon, Sun, Laptop, ChevronDown, ChevronUp, CheckCircle,
+  Eye, EyeOff, Star, Calendar, Download, Upload, Info, RefreshCw, ArrowUpDown, Filter,
+  Github, Linkedin, Twitter, Globe, Award, User, Folder, Brain, Users, Cloud, CloudOff,
+  Layers, LogOut, Crown, CheckCircle2, Menu, Loader2, MoreVertical, Keyboard, AlertTriangle
 } from "lucide-react";
 import { Storage } from "./utils/storage";
 import { StudyStats } from "./components/StudyStats";
@@ -16,6 +18,7 @@ import {
 } from "./types";
 import { usePomodoro } from "./components/PomodoroContext";
 import { PomodoroTimer } from "./components/PomodoroTimer";
+
 import { CompactStudyTimer } from "./components/CompactStudyTimer";
 import { FullScreenTimer } from "./components/FullScreenTimer";
 import { parseYoutubeUrl } from "./utils/youtubeParser";
@@ -24,6 +27,19 @@ import { hasGeminiKey, getGeminiKey, removeGeminiKey, fetchVideoMetadataWithGemi
 import { GeminiOnboardingModal } from "./components/GeminiOnboardingModal";
 import { AIStudyCompanion } from "./components/AIStudyCompanion";
 import { useToast } from "./components/ToastContext";
+import { DeveloperCard } from "./components/DeveloperCard";
+import { DeveloperProfile } from "./components/DeveloperProfile";
+import { DeveloperAvatar } from "./components/DeveloperAvatar";
+
+// LearnStudy 2.0 Platform Components
+import { AuthModal } from "./components/AuthModal";
+import { PersonalDashboard } from "./components/PersonalDashboard";
+import { CourseLibrary } from "./components/CourseLibrary";
+import { FlashcardsManager } from "./components/FlashcardsManager";
+import { StudyPlanner } from "./components/StudyPlanner";
+import { PDFStudyReader } from "./components/PDFStudyReader";
+import { StudyCalendar } from "./components/StudyCalendar";
+import { getCurrentUser, signOutUser, onAuthChange } from "./lib/firebase";
 
 declare global {
   interface Window {
@@ -48,8 +64,36 @@ function parseISO8601DurationClient(durationStr: string): string {
   }
 }
 
+function renderTextWithLinks(text: string) {
+  if (!text) return "";
+  const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+  const parts = text.split(urlRegex);
+  return (
+    <>
+      {parts.map((part, index) => {
+        if (part.match(urlRegex)) {
+          const cleanUrl = part.replace(/[.,;!?)]$/, "");
+          const href = cleanUrl.toLowerCase().startsWith("http") ? cleanUrl : `https://${cleanUrl}`;
+          return (
+            <a
+              key={index}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold"
+            >
+              {part}
+            </a>
+          );
+        }
+        return part;
+      })}
+    </>
+  );
+}
+
 async function fetchPlaylistFromYouTubeClient(id: string): Promise<any> {
-  const apiKey = CLIENT_YOUTUBE_API_KEY;
+  const apiKey = Storage.getSettings().youtubeApiKey || CLIENT_YOUTUBE_API_KEY;
   if (!apiKey) throw new Error("Client API Key is empty");
 
   // 1. Fetch playlist metadata
@@ -156,7 +200,7 @@ async function fetchPlaylistFromYouTubeClient(id: string): Promise<any> {
 }
 
 async function fetchVideoFromYouTubeClient(id: string): Promise<any> {
-  const apiKey = CLIENT_YOUTUBE_API_KEY;
+  const apiKey = Storage.getSettings().youtubeApiKey || CLIENT_YOUTUBE_API_KEY;
   if (!apiKey) throw new Error("Client API Key is empty");
 
   const url = `https://youtube.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${id}&key=${apiKey}`;
@@ -232,7 +276,7 @@ export default function App() {
   const [playlists, setPlaylists] = useState<PlaylistInfo[]>([]);
   const [singleVideos, setSingleVideos] = useState<SingleVideoInfo[]>([]);
   const [favorites, setFavorites] = useState<{ playlists: string[]; videos: string[] }>({ playlists: [], videos: [] });
-  const [favTypeFilter, setFavTypeFilter] = useState<"playlist" | "video">("playlist");
+  const [favTypeFilter, setFavTypeFilter] = useState<"all" | "playlist" | "video">("all");
   
   // URL Input
   const [urlInput, setUrlInput] = useState("");
@@ -248,6 +292,21 @@ export default function App() {
   const [showFullKeyInSettings, setShowFullKeyInSettings] = useState(false);
   const [settingsKeyTestLoading, setSettingsKeyTestLoading] = useState(false);
   const [settingsKeyTestResult, setSettingsKeyTestResult] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Firebase Auth state & Modal
+  const [authUser, setAuthUser] = useState<any>(getCurrentUser());
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [showClearHistoryModal, setShowClearHistoryModal] = useState(false);
+  const [showClearFavoritesModal, setShowClearFavoritesModal] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthChange((user) => {
+      setAuthUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Trigger Onboarding Modal on launch if no key exists
   useEffect(() => {
@@ -324,6 +383,34 @@ export default function App() {
   const [theatreMode, setTheatreMode] = useState(false);
   const [playerReady, setPlayerReady] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [bookmarksCollapsed, setBookmarksCollapsed] = useState(false);
+  const [descriptionCollapsed, setDescriptionCollapsed] = useState(true);
+  
+  // Custom interactive control states
+  const [readingMode, setReadingMode] = useState(false);
+  const [scrolledPast, setScrolledPast] = useState(false);
+  const [showMoreMobileMenu, setShowMoreMobileMenu] = useState(false);
+  const [completingState, setCompletingState] = useState<'idle' | 'saving' | 'completed'>('idle');
+
+  // Derived state to check if the currently playing video is completed
+  const isCurrentVideoCompleted = useMemo(() => {
+    if (!activeSession) return false;
+    if (activeSession.type === "playlist") {
+      const playlist = playlists.find(p => p.id === activeSession.id);
+      const video = playlist?.videos.find(v => v.id === activeVideoId);
+      return !!video?.completed;
+    } else {
+      const video = singleVideos.find(v => v.id === activeSession.id);
+      return !!video?.completed;
+    }
+  }, [activeSession, activeVideoId, playlists, singleVideos]);
+  const [activeAiDropdown, setActiveAiDropdown] = useState(false);
+  const [aiCompanionProps, setAiCompanionProps] = useState<{
+    initialTab?: "hub" | "chat" | "quiz";
+    initialMaterialId?: string | null;
+    initialChatMessage?: string;
+  }>({});
 
   // Player retry/error state
   const [initAttempts, setInitAttempts] = useState(0);
@@ -372,6 +459,24 @@ export default function App() {
   useEffect(() => {
     playlistsRef.current = playlists;
   }, [playlists]);
+
+  // Listen for scrolls to show sticky control bar
+  useEffect(() => {
+    const container = mainScrollRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      setScrolledPast(container.scrollTop > 380);
+    };
+
+    container.addEventListener("scroll", handleScroll);
+    // Initial check
+    handleScroll();
+    
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+    };
+  }, [mainScrollRef.current, activeTab, activeVideoId]);
 
   // Sync active lecture title to Pomodoro logs
   const currentPlaylist = useMemo(() => {
@@ -521,6 +626,82 @@ export default function App() {
     }
   }, [activeVideoId]);
 
+  // Unified metadata-fetching effect for active video (handles single video & playlist navigation)
+  useEffect(() => {
+    if (!activeVideoId) return;
+    
+    // If metadata matches active video, skip redundant fetches
+    if (singleVideoMetadata && singleVideoMetadata.id === activeVideoId) {
+      return;
+    }
+
+    setIsSingleVideoDetailsLoading(true);
+
+    const scrapePromise = fetch(`/api/video-metadata?id=${activeVideoId}`)
+      .then(async (r) => {
+        if (r.ok) {
+          return r.json();
+        } else {
+          return fetchVideoFromYouTubeClient(activeVideoId).catch(() => null);
+        }
+      })
+      .catch(async () => {
+        return fetchVideoFromYouTubeClient(activeVideoId).catch(() => null);
+      });
+
+    const geminiPromise = hasGeminiKey()
+      ? fetchVideoMetadataWithGemini(activeVideoId).catch((err) => {
+          console.warn("Gemini metadata failed, falling back to basic scraping:", err);
+          return null;
+        })
+      : Promise.resolve(null);
+
+    Promise.all([scrapePromise, geminiPromise]).then(([scraped, gemini]) => {
+      const mergedTitle = gemini?.title || scraped?.title || activeVideoTitle || "YouTube Lecture";
+      const mergedChannel = gemini?.channelName || scraped?.channelName || activeVideoChannel || "Unknown Creator";
+      const mergedDuration = scraped?.duration || "10:00";
+      const mergedDesc = gemini?.description || scraped?.description || "";
+      const mergedPublishDate = scraped?.publishDate || "";
+      const mergedTags = gemini?.tags || [];
+
+      // Save to Single Videos storage if active session is a video
+      if (activeSession?.type === "video") {
+        const existing = Storage.getSingleVideos().find(v => v.id === activeVideoId);
+        const videoToSave: SingleVideoInfo = {
+          id: activeVideoId,
+          type: "video",
+          title: mergedTitle,
+          channelName: mergedChannel,
+          duration: mergedDuration,
+          thumbnail: `https://i.ytimg.com/vi/${activeVideoId}/hqdefault.jpg`,
+          progress: existing?.progress || 0,
+          lastWatchedAt: new Date().toISOString(),
+          completed: existing?.completed || false,
+          isFavorite: existing?.isFavorite || false
+        };
+        Storage.saveSingleVideo(videoToSave);
+        setSingleVideos(Storage.getSingleVideos());
+      }
+
+      setActiveVideoTitle(mergedTitle);
+      setActiveVideoChannel(mergedChannel);
+
+      setSingleVideoMetadata({
+        id: activeVideoId,
+        title: mergedTitle,
+        channelName: mergedChannel,
+        duration: mergedDuration,
+        publishDate: mergedPublishDate,
+        description: mergedDesc,
+        tags: mergedTags
+      });
+      setIsSingleVideoDetailsLoading(false);
+    }).catch(err => {
+      console.error("Failed to fetch active video metadata", err);
+      setIsSingleVideoDetailsLoading(false);
+    });
+  }, [activeVideoId, activeSession]);
+
   // YT Iframe script loader
   useEffect(() => {
     if (!window.YT) {
@@ -578,6 +759,13 @@ export default function App() {
       placeholder.innerHTML = '<div id="yt-player-frame"></div>';
 
       const isPlaylist = activeSession?.type === "playlist";
+      const isNativeYouTubePlaylist = isPlaylist && activeSession?.id && (
+        activeSession.id.startsWith("PL") || 
+        activeSession.id.startsWith("RD") || 
+        activeSession.id.startsWith("FL") || 
+        activeSession.id.startsWith("UU") || 
+        activeSession.id.startsWith("OLAK")
+      );
 
       try {
         player = new window.YT.Player("yt-player-frame", {
@@ -592,7 +780,7 @@ export default function App() {
             modestbranding: 1,
             playsinline: 1,
             start: startSeconds,
-            ...(isPlaylist ? { listType: "playlist", list: activeSession.id } : {})
+            ...(isNativeYouTubePlaylist ? { listType: "playlist", list: activeSession.id } : {})
           },
           events: {
             onReady: (event: any) => {
@@ -610,6 +798,12 @@ export default function App() {
                 } catch (e) {
                   console.warn("Could not set playback speed", e);
                 }
+              }
+
+              if (settings.autoPlay && typeof event.target.playVideo === "function") {
+                try {
+                  event.target.playVideo();
+                } catch (e) {}
               }
 
               // Extract playlist metadata immediately if available
@@ -872,21 +1066,29 @@ export default function App() {
       try {
         if (typeof playerRef.current.getVideoData === "function") {
           const currentVideoData = playerRef.current.getVideoData();
-          if (currentVideoData && currentVideoData.video_id !== activeVideoId) {
-            if (activeSession?.type === "playlist" && typeof playerRef.current.getPlaylist === "function" && typeof playerRef.current.playVideoAt === "function") {
+          if (!currentVideoData || currentVideoData.video_id !== activeVideoId) {
+            const isNativeYTPlaylist = activeSession?.type === "playlist" && 
+              activeSession.id && 
+              (activeSession.id.startsWith("PL") || activeSession.id.startsWith("RD") || activeSession.id.startsWith("FL") || activeSession.id.startsWith("UU") || activeSession.id.startsWith("OLAK"));
+
+            if (isNativeYTPlaylist && typeof playerRef.current.getPlaylist === "function" && typeof playerRef.current.playVideoAt === "function") {
               const playlist = playerRef.current.getPlaylist();
-              if (playlist) {
+              if (playlist && Array.isArray(playlist) && playlist.length > 0) {
                 const idx = playlist.indexOf(activeVideoId);
                 if (idx >= 0) {
                   playerRef.current.playVideoAt(idx);
                 } else if (typeof playerRef.current.loadVideoById === "function") {
                   playerRef.current.loadVideoById(activeVideoId);
                 }
+              } else if (typeof playerRef.current.loadVideoById === "function") {
+                playerRef.current.loadVideoById(activeVideoId);
               }
             } else if (typeof playerRef.current.loadVideoById === "function") {
               playerRef.current.loadVideoById(activeVideoId);
             }
           }
+        } else if (typeof playerRef.current.loadVideoById === "function") {
+          playerRef.current.loadVideoById(activeVideoId);
         }
       } catch (e) {
         console.warn("Failed to sync video id with player", e);
@@ -1371,7 +1573,7 @@ export default function App() {
         }
 
       } else {
-        // --- SINGLE VIDEO LOAD (WITH PARALLEL GEMINI METADATA FETCH) ---
+        // --- SINGLE VIDEO LOAD (HANDLED BY UNIFIED METADATA EFFECT) ---
         let video = Storage.getSingleVideos().find(v => v.id === id);
         
         // Set immediately to render skeleton and start player frame immediately
@@ -1385,73 +1587,7 @@ export default function App() {
         scrollToWorkspace();
         setUrlInput("");
         setIsLoading(false); // Stop loading spinner, the player is interactive now!
-
-        // Parallel metadata requests: Scraper & Gemini
-        const scrapePromise = fetch(`/api/video-metadata?id=${id}`)
-          .then(async (r) => {
-            if (r.ok) {
-              return r.json();
-            } else {
-              console.warn(`Server video-metadata endpoint returned ${r.status}. Falling back to client-side YouTube Data API...`);
-              return fetchVideoFromYouTubeClient(id).catch(() => null);
-            }
-          })
-          .catch(async () => {
-            console.warn("Server video-metadata fetch failed. Falling back to client-side YouTube Data API...");
-            return fetchVideoFromYouTubeClient(id).catch(() => null);
-          });
-
-        const geminiPromise = hasGeminiKey()
-          ? fetchVideoMetadataWithGemini(id).catch((err) => {
-              console.warn("Gemini metadata failed, falling back to basic scraping:", err);
-              return null;
-            })
-          : Promise.resolve(null);
-
-        Promise.all([scrapePromise, geminiPromise]).then(([scraped, gemini]) => {
-          const mergedTitle = gemini?.title || scraped?.title || video?.title || "YouTube Lecture";
-          const mergedChannel = gemini?.channelName || scraped?.channelName || video?.channelName || "Unknown Creator";
-          const mergedDuration = scraped?.duration || video?.duration || "10:00";
-          const mergedDesc = gemini?.description || scraped?.description || "";
-          const mergedPublishDate = scraped?.publishDate || "";
-          const mergedTags = gemini?.tags || [];
-
-          const videoToSave: SingleVideoInfo = {
-            id: id,
-            type: "video",
-            title: mergedTitle,
-            channelName: mergedChannel,
-            duration: mergedDuration,
-            thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-            progress: video?.progress || 0,
-            lastWatchedAt: new Date().toISOString(),
-            completed: video?.completed || false,
-            isFavorite: video?.isFavorite || false
-          };
-
-          Storage.saveSingleVideo(videoToSave);
-          setSingleVideos(Storage.getSingleVideos());
-          
-          setActiveVideoTitle(mergedTitle);
-          setActiveVideoChannel(mergedChannel);
-
-          setSingleVideoMetadata({
-            id,
-            title: mergedTitle,
-            channelName: mergedChannel,
-            duration: mergedDuration,
-            publishDate: mergedPublishDate,
-            description: mergedDesc,
-            tags: mergedTags
-          });
-
-          setIsSingleVideoDetailsLoading(false);
-        }).catch(err => {
-          console.error("Parallel single video metadata fetch failed", err);
-          setIsSingleVideoDetailsLoading(false);
-        });
-
-        return; // Early return because single video details are fetched asynchronously
+        return;
       }
 
       scrollToWorkspace();
@@ -1771,7 +1907,7 @@ export default function App() {
   const handleResetData = () => {
     toast.warning(
       "Reset All Local Data?",
-      "This action is permanent and will clear all notes, bookmarks, playlists, and histories!",
+      "This action is permanent and will clear all notes, bookmarks, playlists, histories, study plans, and flashcards!",
       {
         duration: 10000,
         action: {
@@ -1785,8 +1921,11 @@ export default function App() {
             setActiveSession(null);
             setActiveVideoId("");
             setActiveVideoTitle("");
-            toast.success("Data Reset Complete", "All local data has been successfully cleared.");
+            toast.success("Data Reset Complete", "All data has been successfully cleared. Reloading...");
             setActiveTab("home");
+            setTimeout(() => {
+              window.location.reload();
+            }, 1200);
           }
         }
       }
@@ -2223,6 +2362,28 @@ export default function App() {
     });
   }, [playlists, singleVideos, historyFilter]);
 
+  // Sorted and filtered favorite items (most recently watched first)
+  const sortedFavoriteItems = useMemo(() => {
+    let items: Array<(PlaylistInfo & { type: "playlist" }) | (SingleVideoInfo & { type: "video" })> = [];
+    if (favTypeFilter === "all" || favTypeFilter === "playlist") {
+      const favPls = playlists
+        .filter(p => favorites.playlists.includes(p.id))
+        .map(p => ({ ...p, type: "playlist" as const }));
+      items = [...items, ...favPls];
+    }
+    if (favTypeFilter === "all" || favTypeFilter === "video") {
+      const favVids = singleVideos
+        .filter(v => favorites.videos.includes(v.id))
+        .map(v => ({ ...v, type: "video" as const }));
+      items = [...items, ...favVids];
+    }
+    return items.sort((a, b) => {
+      const timeA = a.lastWatchedAt ? new Date(a.lastWatchedAt).getTime() : 0;
+      const timeB = b.lastWatchedAt ? new Date(b.lastWatchedAt).getTime() : 0;
+      return timeB - timeA;
+    });
+  }, [playlists, singleVideos, favorites, favTypeFilter]);
+
   // Unified global search across playlists, videos, notes, bookmarks
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return null;
@@ -2286,13 +2447,21 @@ export default function App() {
       {/* 1. Header / Top App Bar */}
       {!focusMode && (
         <header className="sticky top-0 z-40 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md border-b border-slate-200 dark:border-zinc-900 px-4 md:px-8 py-3.5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 cursor-pointer" onClick={() => setActiveTab("home")}>
-              <div className="bg-gradient-to-tr from-blue-50 to-white dark:from-zinc-900 dark:to-zinc-900/40 p-1.5 rounded-xl shadow-sm border border-slate-100 dark:border-zinc-800 flex items-center justify-center">
-                <img src="/favicon.svg" alt="LearnStudy" className="w-7 h-7" referrerPolicy="no-referrer" />
-              </div>
+          <div className="flex items-center gap-2.5 md:gap-3">
+            {/* Mobile Left Sidebar Opener */}
+            <button
+              onClick={() => setMobileSidebarOpen(true)}
+              className="md:hidden p-2 text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-900 rounded-xl transition cursor-pointer"
+              aria-label="Open Navigation Menu"
+              title="Open Navigation Menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => setActiveTab("home")}>
+              <img src="/favicon.svg" alt="LearnStudy" className="w-6 h-6 object-contain shrink-0" referrerPolicy="no-referrer" />
               <span className="font-extrabold text-xl tracking-tight text-slate-900 dark:text-white flex items-center gap-1.5">
-                LearnStudy
+                <span>Learn<span className="bg-gradient-to-r from-blue-500 to-indigo-500 bg-clip-text text-transparent">Study</span></span>
               </span>
             </div>
           </div>
@@ -2379,6 +2548,114 @@ export default function App() {
         </header>
       )}
 
+      {/* Mobile Left Navigation Drawer Overlay */}
+      {mobileSidebarOpen && (
+        <div className="fixed inset-0 z-50 md:hidden flex">
+          {/* Backdrop */}
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity" 
+            onClick={() => setMobileSidebarOpen(false)} 
+          />
+
+          {/* Drawer Panel */}
+          <div className="relative w-72 max-w-[82vw] bg-white dark:bg-zinc-950 h-full shadow-2xl flex flex-col z-10 overflow-hidden border-r border-slate-200 dark:border-zinc-850 animate-in slide-in-from-left duration-200">
+            {/* Header */}
+            <div className="p-4 border-b border-slate-100 dark:border-zinc-850 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <img src="/favicon.svg" alt="LearnStudy" className="w-5 h-5 object-contain shrink-0" referrerPolicy="no-referrer" />
+                <span className="font-extrabold text-lg text-slate-900 dark:text-white">Learn<span className="bg-gradient-to-r from-blue-500 to-indigo-500 bg-clip-text text-transparent">Study</span></span>
+              </div>
+              <button
+                onClick={() => setMobileSidebarOpen(false)}
+                className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-zinc-900 text-slate-500 dark:text-zinc-400 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Nav list */}
+            <div className="p-3 space-y-1 flex-1 overflow-y-auto">
+              <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-zinc-500 px-3 py-1">
+                Navigation
+              </div>
+              {[
+                { id: "home", label: "Home Dashboard", icon: <Home className="w-4.5 h-4.5" /> },
+                { id: "study", label: "Lecture Player", icon: <Tv className="w-4.5 h-4.5" /> },
+                { id: "library", label: "Course Library", icon: <Folder className="w-4.5 h-4.5 text-blue-500" /> },
+                { id: "flashcards", label: "Flashcards & Quiz", icon: <Brain className="w-4.5 h-4.5 text-emerald-500" /> },
+                { id: "planner", label: "Study Planner & Tasks", icon: <Calendar className="w-4.5 h-4.5 text-purple-500" /> },
+                { id: "calendar", label: "Study Calendar", icon: <Calendar className="w-4.5 h-4.5 text-amber-500" /> },
+                { id: "pdf", label: "PDF Study Reader", icon: <FileText className="w-4.5 h-4.5 text-rose-500" /> },
+                { id: "pomodoro", label: "Pomodoro Timer", icon: <Clock className="w-4.5 h-4.5 text-orange-500" /> },
+                { id: "history", label: "Watch History", icon: <History className="w-4.5 h-4.5" /> },
+                { id: "favorites", label: "Favorites", icon: <Heart className="w-4.5 h-4.5 text-red-500" /> },
+                { id: "stats", label: "Study Analytics", icon: <TrendingUp className="w-4.5 h-4.5 text-cyan-500" /> },
+                { id: "developer", label: "Developer Profile", icon: <User className="w-4.5 h-4.5 text-teal-500" /> },
+                { id: "settings", label: "Settings & Account", icon: <Settings className="w-4.5 h-4.5" /> },
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    setActiveTab(item.id as ActiveTab);
+                    setSearchQuery("");
+                    setMobileSidebarOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    activeTab === item.id && !searchQuery
+                      ? "bg-blue-600 text-white shadow-md shadow-blue-500/20"
+                      : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                  }`}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Bottom Account Drawer Section */}
+            <div className="p-3.5 border-t border-slate-100 dark:border-zinc-850 bg-slate-50/80 dark:bg-zinc-900/80 shrink-0">
+              {authUser ? (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-black flex items-center justify-center text-xs shrink-0">
+                      {(authUser.displayName || authUser.email || "G")[0].toUpperCase()}
+                    </div>
+                    <div className="truncate">
+                      <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
+                        {authUser.displayName || "Google User"}
+                      </div>
+                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                        <Cloud className="w-3 h-3 text-emerald-500" /> Synced
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setMobileSidebarOpen(false);
+                      setActiveTab("settings");
+                    }}
+                    className="p-2 text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200 bg-white dark:bg-zinc-800 rounded-xl border border-slate-200 dark:border-zinc-700 cursor-pointer text-xs font-bold"
+                  >
+                    Manage
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setMobileSidebarOpen(false);
+                    setActiveTab("settings");
+                  }}
+                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs py-2.5 rounded-xl transition flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                >
+                  <User className="w-4 h-4" />
+                  Google Account Settings
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mobile Search input */}
       {!focusMode && (
         <div className="p-3 bg-white dark:bg-zinc-950 border-b border-slate-200 dark:border-zinc-900 block md:hidden">
@@ -2431,91 +2708,171 @@ export default function App() {
             )}
             
             <nav className="space-y-1">
+              {/* Core Learning Section */}
               <button
                 onClick={() => { setActiveTab("home"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-11 w-11 mx-auto" : "gap-3 px-3.5 py-2.5"} rounded-xl text-sm font-semibold transition ${
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
                   activeTab === "home" && !searchQuery
-                    ? "bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
                 }`}
-                title={sidebarCollapsed ? "Home" : undefined}
+                title={sidebarCollapsed ? "Dashboard" : undefined}
               >
-                <Home className="w-4.5 h-4.5 shrink-0" />
-                {!sidebarCollapsed && <span>Home</span>}
+                <Home className="w-4 h-4 shrink-0" />
+                {!sidebarCollapsed && <span>Dashboard</span>}
               </button>
-              
+
               <button
                 onClick={() => { setActiveTab("study"); setSearchQuery(""); }}
                 disabled={!activeVideoId && !activeSession}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-11 w-11 mx-auto" : "gap-3 px-3.5 py-2.5"} rounded-xl text-sm font-semibold transition ${
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
                   !activeVideoId && !activeSession ? "opacity-50 cursor-not-allowed" : ""
                 } ${
                   activeTab === "study" && !searchQuery
-                    ? "bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
                 }`}
-                title={sidebarCollapsed ? "Study Player" : undefined}
+                title={sidebarCollapsed ? "Lecture Player" : undefined}
               >
-                <Tv className="w-4.5 h-4.5 shrink-0" />
-                {!sidebarCollapsed && <span>Study Player</span>}
+                <Tv className="w-4 h-4 shrink-0" />
+                {!sidebarCollapsed && <span>Lecture Player</span>}
+              </button>
+
+              <button
+                onClick={() => { setActiveTab("library"); setSearchQuery(""); }}
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                  activeTab === "library" && !searchQuery
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                }`}
+                title={sidebarCollapsed ? "Course Library" : undefined}
+              >
+                <Folder className="w-4 h-4 shrink-0" />
+                {!sidebarCollapsed && <span>Course Library</span>}
+              </button>
+
+              {/* Study Tools Section */}
+              {!sidebarCollapsed && (
+                <div className="pt-2 pb-1 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3">
+                  Smart Study Tools
+                </div>
+              )}
+
+              <button
+                onClick={() => { setActiveTab("flashcards"); setSearchQuery(""); }}
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                  activeTab === "flashcards" && !searchQuery
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                }`}
+                title={sidebarCollapsed ? "Flashcards" : undefined}
+              >
+                <Brain className="w-4 h-4 shrink-0 text-purple-500" />
+                {!sidebarCollapsed && <span>Flashcards & Quiz</span>}
+              </button>
+
+              <button
+                onClick={() => { setActiveTab("planner"); setSearchQuery(""); }}
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                  activeTab === "planner" && !searchQuery
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                }`}
+                title={sidebarCollapsed ? "Study Planner" : undefined}
+              >
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+                {!sidebarCollapsed && <span>Planner & Tasks</span>}
+              </button>
+
+              <button
+                onClick={() => { setActiveTab("calendar"); setSearchQuery(""); }}
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                  activeTab === "calendar" && !searchQuery
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                }`}
+                title={sidebarCollapsed ? "Calendar & Streak" : undefined}
+              >
+                <Calendar className="w-4 h-4 shrink-0 text-amber-500" />
+                {!sidebarCollapsed && <span>Calendar & Streaks</span>}
+              </button>
+
+              <button
+                onClick={() => { setActiveTab("pdf"); setSearchQuery(""); }}
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                  activeTab === "pdf" && !searchQuery
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                }`}
+                title={sidebarCollapsed ? "PDF Reader" : undefined}
+              >
+                <FileText className="w-4 h-4 shrink-0 text-indigo-500" />
+                {!sidebarCollapsed && <span>PDF Reader</span>}
+              </button>
+
+              {/* General Utilities */}
+              {!sidebarCollapsed && (
+                <div className="pt-2 pb-1 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3">
+                  Utilities
+                </div>
+              )}
+
+              <button
+                onClick={() => { setActiveTab("pomodoro"); setSearchQuery(""); }}
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                  activeTab === "pomodoro" && !searchQuery
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                }`}
+                title={sidebarCollapsed ? "Pomodoro Timer" : undefined}
+              >
+                <Clock className="w-4 h-4 shrink-0 text-orange-500" />
+                {!sidebarCollapsed && <span>Pomodoro Timer</span>}
               </button>
 
               <button
                 onClick={() => { setActiveTab("history"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-11 w-11 mx-auto" : "gap-3 px-3.5 py-2.5"} rounded-xl text-sm font-semibold transition ${
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
                   activeTab === "history" && !searchQuery
-                    ? "bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
                 }`}
                 title={sidebarCollapsed ? "Watch History" : undefined}
               >
-                <History className="w-4.5 h-4.5 shrink-0" />
+                <History className="w-4 h-4 shrink-0" />
                 {!sidebarCollapsed && <span>Watch History</span>}
               </button>
 
               <button
                 onClick={() => { setActiveTab("favorites"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-11 w-11 mx-auto" : "gap-3 px-3.5 py-2.5"} rounded-xl text-sm font-semibold transition ${
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
                   activeTab === "favorites" && !searchQuery
-                    ? "bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
                 }`}
                 title={sidebarCollapsed ? "Favorites" : undefined}
               >
-                <Heart className="w-4.5 h-4.5 shrink-0" />
+                <Heart className="w-4 h-4 shrink-0 text-red-500" />
                 {!sidebarCollapsed && <span>Favorites</span>}
               </button>
 
               <button
-                onClick={() => { setActiveTab("pomodoro"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-11 w-11 mx-auto" : "gap-3 px-3.5 py-2.5"} rounded-xl text-sm font-semibold transition ${
-                  activeTab === "pomodoro" && !searchQuery
-                    ? "bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
-                title={sidebarCollapsed ? "Pomodoro Timer" : undefined}
-              >
-                <Clock className="w-4.5 h-4.5 shrink-0" />
-                {!sidebarCollapsed && <span>Pomodoro Timer</span>}
-              </button>
-
-              <button
                 onClick={() => { setActiveTab("stats"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-11 w-11 mx-auto" : "gap-3 px-3.5 py-2.5"} rounded-xl text-sm font-semibold transition ${
+                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
                   activeTab === "stats" && !searchQuery
-                    ? "bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
                 }`}
                 title={sidebarCollapsed ? "Statistics" : undefined}
               >
-                <TrendingUp className="w-4.5 h-4.5 shrink-0" />
+                <TrendingUp className="w-4 h-4 shrink-0 text-blue-500" />
                 {!sidebarCollapsed && <span>Statistics</span>}
               </button>
             </nav>
           </div>
 
           {/* Settings Section at the absolute bottom */}
-          <div className="pt-4 border-t border-slate-100 dark:border-zinc-900/60 shrink-0">
+          <div className="pt-4 border-t border-slate-100 dark:border-zinc-900/60 shrink-0 space-y-2">
             <button
               onClick={() => { setActiveTab("settings"); setSearchQuery(""); }}
               className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-11 w-11 mx-auto" : "gap-3 px-3.5 py-2.5"} rounded-xl text-sm font-semibold transition ${
@@ -2679,36 +3036,47 @@ export default function App() {
             <>
               {/* HOME TAB */}
               {activeTab === "home" && (
-                <div className="space-y-8 max-w-5xl mx-auto py-4">
-                  {/* Hero Intro paste URL box */}
-                  <div className="text-center py-12 px-6 md:px-10 bg-white dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-sm relative overflow-hidden">
-                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-50/60 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/30 text-blue-600 dark:text-blue-400 text-xs font-bold tracking-wide uppercase mb-6 shadow-sm">
-                      <GraduationCap className="w-4 h-4 text-blue-500 dark:text-blue-400" />
-                      Built for Students
+                <div className="space-y-8 max-w-6xl mx-auto py-2">
+                  {/* Personal Dashboard Header */}
+                  <PersonalDashboard 
+                    user={authUser} 
+                    onOpenAuth={() => setShowAuthModal(true)} 
+                    setActiveTab={setActiveTab}
+                  />
+
+                  {/* Quick Import Lecture URL Box */}
+                  <div className="py-8 px-6 md:px-10 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-sm relative overflow-hidden">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                      <div>
+                        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50/80 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/30 text-blue-600 dark:text-blue-400 text-xs font-bold tracking-wide uppercase shadow-xs">
+                          <GraduationCap className="w-4 h-4 text-blue-500" />
+                          Import & Study
+                        </div>
+                        <h2 className="text-xl font-extrabold text-slate-900 dark:text-zinc-50 tracking-tight mt-2">
+                          Add New YouTube Lecture or Playlist
+                        </h2>
+                        <p className="text-slate-500 dark:text-zinc-400 text-xs mt-1">
+                          Paste any YouTube video or playlist link to watch distraction-free with AI notes, bookmarks, and transcripts.
+                        </p>
+                      </div>
                     </div>
                     
-                    <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-zinc-50 tracking-tight leading-tight">
-                      Distraction-Free <span className="text-blue-600 dark:text-blue-400">YouTube Study</span> Player
-                    </h1>
-                    <p className="text-slate-500 dark:text-zinc-400 mt-3 text-sm max-w-lg mx-auto leading-relaxed">
-                      Study lectures without recommendations, comment sections, or auto-play loops. Simply paste a playlist or video URL to start focused study.
-                    </p>
-                    
-                    <form onSubmit={handleUrlSubmit} className="mt-8 flex flex-col sm:flex-row items-center gap-3">
+                    <form onSubmit={handleUrlSubmit} className="flex flex-col sm:flex-row items-center gap-3">
                       <div className="relative w-full">
                         <Youtube className="absolute left-4 top-3.5 h-5 w-5 text-slate-400 dark:text-zinc-500" />
                         <input
+                          id="youtube-url-input"
                           type="text"
-                          placeholder="Paste YouTube Playlist or Video URL..."
+                          placeholder="Paste YouTube Playlist or Video URL (e.g. https://youtube.com/playlist?list=...)"
                           value={urlInput}
                           onChange={(e) => setUrlInput(e.target.value)}
-                          className="w-full bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 text-sm pl-12 pr-4 py-3.5 rounded-2xl text-slate-900 dark:text-zinc-50 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+                          className="w-full bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 text-sm pl-12 pr-4 py-3.5 rounded-2xl text-slate-900 dark:text-zinc-50 shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
                         />
                       </div>
                       <button
                         type="submit"
                         disabled={isLoading}
-                        className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white font-semibold text-sm px-7 py-3.5 rounded-2xl shadow-sm transition shrink-0 flex items-center justify-center gap-2"
+                        className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white font-extrabold text-xs px-7 py-3.5 rounded-2xl shadow-sm transition shrink-0 flex items-center justify-center gap-2 cursor-pointer"
                       >
                         {isLoading ? (
                           <>
@@ -2716,7 +3084,7 @@ export default function App() {
                             Analyzing...
                           </>
                         ) : (
-                          "Load Lectures"
+                          "Load Lecture"
                         )}
                       </button>
                     </form>
@@ -3307,7 +3675,7 @@ export default function App() {
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                     
                     {/* Centered Large Video Player & Controls */}
-                    <div className={`${theatreMode ? "lg:col-span-12" : "lg:col-span-8"} space-y-4`}>
+                    <div className={`${(theatreMode || readingMode) ? "lg:col-span-12" : "lg:col-span-8"} space-y-4`}>
                       
                       {/* Embedded custom balanced video window */}
                       <div 
@@ -3319,100 +3687,488 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Action, Navigation and Controls Bar directly below player */}
-                      <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-sm select-none">
+                      {/* --- UPGRADED BRAND CONTROL BAR (DESKTOP) --- */}
+                      <div className="hidden md:flex flex-col gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm select-none">
                         
-                        {/* Playlist Navigation (Previous / Next) */}
-                        <div className="flex items-center bg-slate-100 dark:bg-zinc-800 p-1 rounded-xl gap-0.5 border border-slate-200/40 dark:border-zinc-700/40 shrink-0">
-                          <button 
-                            onClick={handlePrevVideo}
-                            disabled={activeSession?.type !== "playlist"}
-                            className="p-1.5 rounded-lg text-slate-600 dark:text-zinc-400 hover:bg-white dark:hover:bg-zinc-900 hover:text-slate-950 dark:hover:text-white transition disabled:opacity-40 disabled:hover:bg-transparent"
-                            title="Previous Video"
+                        {/* Row 1: Primary Actions, Favorites, and AI Hub Dropdown */}
+                        <div className="flex items-center justify-between gap-4">
+                          {/* Left Group: Navigation + Save + Bookmark */}
+                          <div className="flex items-center gap-2">
+                            {activeSession?.type === "playlist" && (
+                              <div className="flex items-center bg-slate-100 dark:bg-zinc-800 p-1 rounded-xl border border-slate-200/40 dark:border-zinc-700/40 shrink-0">
+                                <button 
+                                  onClick={handlePrevVideo}
+                                  className="p-1.5 rounded-lg text-slate-600 dark:text-zinc-400 hover:bg-white dark:hover:bg-zinc-900 hover:text-slate-950 dark:hover:text-white transition disabled:opacity-40"
+                                  title="Previous Video"
+                                >
+                                  <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                <button 
+                                  onClick={handleNextVideo}
+                                  className="p-1.5 rounded-lg text-slate-600 dark:text-zinc-400 hover:bg-white dark:hover:bg-zinc-900 hover:text-slate-950 dark:hover:text-white transition disabled:opacity-40"
+                                  title="Next Video"
+                                >
+                                  <ChevronRight className="w-4 h-4" />
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Save Lecture Pill Button */}
+                            <button
+                              onClick={handleToggleActiveVideoFavorite}
+                              className={`h-11 px-4 rounded-xl text-xs font-bold flex items-center gap-2 transition duration-200 ${
+                                favorites.videos.includes(activeVideoId)
+                                  ? "bg-red-500 text-white shadow hover:bg-red-600"
+                                  : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700"
+                              }`}
+                              title="Save Lecture"
+                            >
+                              <Heart className={`w-4 h-4 ${favorites.videos.includes(activeVideoId) ? "fill-current" : ""}`} />
+                              <span>{favorites.videos.includes(activeVideoId) ? "Saved" : "Save"}</span>
+                            </button>
+                          </div>
+
+                          {/* Right Group: AI Notes split hub & complete lesson buttons */}
+                          <div className="flex items-center gap-2.5">
+                            {/* AI Split Options Dropdown */}
+                            <div className="relative">
+                              <button 
+                                onClick={() => setActiveAiDropdown(prev => !prev)}
+                                className="bg-purple-600 hover:bg-purple-700 text-white font-black text-xs h-11 px-4.5 rounded-xl flex items-center gap-2 transition shadow-sm hover:scale-[1.01] active:scale-[0.99] shrink-0"
+                                title="AI Assistant Study Hub"
+                              >
+                                <Sparkles className="w-4 h-4 text-purple-200 animate-pulse" />
+                                <span>AI Notes Hub</span>
+                                <ChevronDown className="w-3.5 h-3.5 text-purple-200 transition-transform" />
+                              </button>
+
+                              {activeAiDropdown && (
+                                <>
+                                  <div className="fixed inset-0 z-40" onClick={() => setActiveAiDropdown(false)} />
+                                  <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl z-50 p-2 py-2.5 animate-in fade-in slide-in-from-top-2 duration-150">
+                                    <div className="px-3 py-1.5 border-b border-slate-100 dark:border-zinc-850 mb-1.5">
+                                      <span className="text-[10px] font-black uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1">
+                                        <Sparkles className="w-3 h-3" /> CHOOSE AI COGNITIVE MODEL
+                                      </span>
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        setAiCompanionProps({ initialTab: "hub", initialMaterialId: "short" });
+                                        setAiPanelOpen(true);
+                                        setActiveAiDropdown(false);
+                                      }}
+                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
+                                    >
+                                      <span>⚡ Summarize Lecture</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setAiCompanionProps({ initialTab: "hub", initialMaterialId: "flashcards" });
+                                        setAiPanelOpen(true);
+                                        setActiveAiDropdown(false);
+                                      }}
+                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
+                                    >
+                                      <span>🎴 Flashcards Set</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setAiCompanionProps({ initialTab: "quiz" });
+                                        setAiPanelOpen(true);
+                                        setActiveAiDropdown(false);
+                                      }}
+                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
+                                    >
+                                      <span>📝 Quiz Me</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setAiCompanionProps({ initialTab: "chat", initialChatMessage: "Please explain the key concepts of this lecture simply and concisely for a beginner." });
+                                        setAiPanelOpen(true);
+                                        setActiveAiDropdown(false);
+                                      }}
+                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
+                                    >
+                                      <span>🧠 Explain Simply</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setAiCompanionProps({ initialTab: "hub", initialMaterialId: "revision" });
+                                        setAiPanelOpen(true);
+                                        setActiveAiDropdown(false);
+                                      }}
+                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
+                                    >
+                                      <span>📚 Generate Revision Notes</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setAiCompanionProps({ initialTab: "chat", initialChatMessage: "" });
+                                        setAiPanelOpen(true);
+                                        setActiveAiDropdown(false);
+                                      }}
+                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
+                                    >
+                                      <span>💬 Ask AI Chat Companion</span>
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+
+                            {/* Progress Aware Complete Button with full interactive states */}
+                            <button 
+                              onClick={() => {
+                                if (completingState !== 'idle' || isCurrentVideoCompleted) return;
+                                setCompletingState('saving');
+                                setTimeout(() => {
+                                  if (activeSession) {
+                                    handleProgressUpdate(9999, 10000); // Trigger finish
+                                  }
+                                  setCompletingState('completed');
+                                  toast.success("Lesson Completed", "Great job! This lecture has been marked as finished.");
+                                  setTimeout(() => {
+                                    setCompletingState('idle');
+                                  }, 1500);
+                                }, 1200);
+                              }}
+                              disabled={completingState === 'saving' || isCurrentVideoCompleted}
+                              className={`font-extrabold text-xs h-11 px-4.5 rounded-xl flex items-center gap-2 transition duration-200 shrink-0 ${
+                                completingState === 'saving'
+                                  ? "bg-emerald-600/25 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 cursor-wait"
+                                  : (completingState === 'completed' || isCurrentVideoCompleted)
+                                    ? "bg-emerald-600 text-white shadow shadow-emerald-500/25 cursor-default"
+                                    : "bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm hover:shadow active:scale-[0.97]"
+                              }`}
+                              title={isCurrentVideoCompleted ? "Lecture completed" : "Mark lecture as finished"}
+                            >
+                              {completingState === 'saving' ? (
+                                <>
+                                  <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
+                                  <span>Saving Progress...</span>
+                                </>
+                              ) : (completingState === 'completed' || isCurrentVideoCompleted) ? (
+                                <>
+                                  <Check className="w-4 h-4 text-white stroke-[3px] animate-pulse" />
+                                  <span>Completed</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Check className="w-4 h-4 text-emerald-100" />
+                                  <span>Mark Complete</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="h-[1px] bg-slate-100 dark:bg-zinc-800/80" />
+
+                        {/* Row 2: Focus Controls, Speed selection, and View Modes */}
+                        <div className="flex items-center justify-between gap-4">
+                          {/* Left Group: Focus Mode Control */}
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setFocusMode(p => !p)}
+                              className={`h-11 px-4 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 ${
+                                focusMode 
+                                  ? "bg-orange-500 border-transparent text-white hover:bg-orange-600 shadow shadow-orange-500/10" 
+                                  : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700"
+                              }`}
+                            >
+                              <Flame className={`w-4 h-4 ${focusMode ? "text-orange-200 animate-pulse" : "text-orange-500"}`} />
+                              <span>Focus Mode</span>
+                            </button>
+                          </div>
+
+                          {/* Right Group: Playback Speed Chips, View toggles & More Button */}
+                          <div className="flex items-center gap-3">
+                            {/* Playback speed segmented chips */}
+                            <div className="flex items-center bg-slate-100 dark:bg-zinc-850 p-1 rounded-xl border border-slate-200/40 dark:border-zinc-800/80 select-none">
+                              <span className="text-[10px] uppercase font-black px-2 text-slate-400 dark:text-zinc-500">SPEED</span>
+                              {[0.75, 1, 1.25, 1.5, 2].map((s) => (
+                                <button
+                                  key={s}
+                                  onClick={() => handleSettingChange("playbackSpeed", s)}
+                                  className={`px-2.5 py-1 rounded-lg text-xs font-extrabold transition ${
+                                    settings.playbackSpeed === s
+                                      ? "bg-white dark:bg-zinc-700 text-blue-600 dark:text-zinc-50 shadow-sm"
+                                      : "text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+                                  }`}
+                                >
+                                  {s}x
+                                </button>
+                              ))}
+                            </div>
+
+                            {/* Standard View toggles */}
+                            <div className="flex items-center gap-1 bg-slate-50 dark:bg-zinc-850 p-1 rounded-xl border border-slate-200 dark:border-zinc-800">
+                              {/* Wide / Theatre toggle */}
+                              <button
+                                onClick={() => setTheatreMode(p => !p)}
+                                className={`p-2 rounded-lg transition ${theatreMode ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400" : "text-slate-500 hover:bg-slate-150/40 dark:text-zinc-400 dark:hover:bg-zinc-800"}`}
+                                title="Toggle Wide Theatre Mode"
+                              >
+                                <Maximize2 className="w-4 h-4" />
+                              </button>
+
+                              {/* True Screen Fullscreen */}
+                              <button
+                                onClick={() => {
+                                  if (playerContainerRef.current) {
+                                    if (document.fullscreenElement) {
+                                      document.exitFullscreen();
+                                    } else {
+                                      playerContainerRef.current.requestFullscreen().catch(() => {
+                                        toast.error("Fullscreen Failed", "True fullscreen is restricted on this browser frame.");
+                                      });
+                                    }
+                                  }
+                                }}
+                                className="p-2 rounded-lg text-slate-500 hover:bg-slate-150/40 dark:text-zinc-400 dark:hover:bg-zinc-800 transition"
+                                title="Lecture Fullscreen"
+                              >
+                                <Tv className="w-4 h-4" />
+                              </button>
+
+
+                            </div>
+
+                            {/* More Actions Dropdown */}
+                            <div className="relative">
+                              <button
+                                onClick={() => setShowMoreMobileMenu(p => !p)}
+                                className="p-2 rounded-xl border border-slate-200 dark:border-zinc-800 text-slate-600 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-850 transition"
+                                title="More Actions"
+                              >
+                                <MoreVertical className="w-4.5 h-4.5" />
+                              </button>
+
+                              {showMoreMobileMenu && (
+                                <>
+                                  <div className="fixed inset-0 z-45" onClick={() => setShowMoreMobileMenu(false)} />
+                                  <div className="absolute right-0 mt-2 w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl z-50 p-1.5 py-2 text-left">
+                                    <div className="px-2.5 py-1 border-b border-slate-100 dark:border-zinc-850 mb-1.5">
+                                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-zinc-500">UTILITY CONTROLS</span>
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(window.location.href);
+                                        toast.success("Link Copied", "Your shareable study room URL is copied.");
+                                        setShowMoreMobileMenu(false);
+                                      }}
+                                      className="w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-850 transition flex items-center gap-2"
+                                    >
+                                      <Share2 className="w-3.5 h-3.5 text-slate-400" />
+                                      <span>Share Room</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        const savedNotes = Storage.getNoteForVideo(activeVideoId);
+                                        if (!savedNotes.trim()) {
+                                          toast.warning("Empty Pad", "Take some notes in the interactive pad first before export.");
+                                        } else {
+                                          const blob = new Blob([savedNotes], { type: "text/plain;charset=utf-8" });
+                                          const url = URL.createObjectURL(blob);
+                                          const link = document.createElement("a");
+                                          link.href = url;
+                                          link.download = `Lecture_Notes_${activeVideoId}.txt`;
+                                          link.click();
+                                          URL.revokeObjectURL(url);
+                                          toast.success("Export Complete", "Notes saved locally.");
+                                        }
+                                        setShowMoreMobileMenu(false);
+                                      }}
+                                      className="w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-850 transition flex items-center gap-2"
+                                    >
+                                      <Download className="w-3.5 h-3.5 text-slate-400" />
+                                      <span>Download Notes</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        toast.success("Hotkeys Active", "Press key '?' to view all rapid system hotkeys.");
+                                        setShowMoreMobileMenu(false);
+                                      }}
+                                      className="w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-850 transition flex items-center gap-2"
+                                    >
+                                      <Keyboard className="w-3.5 h-3.5 text-slate-400" />
+                                      <span>Keyboard Shortcuts</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        toast.success("Issue Submitted", "Player telemetry stream has been flagged.");
+                                        setShowMoreMobileMenu(false);
+                                      }}
+                                      className="w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/25 transition flex items-center gap-2"
+                                    >
+                                      <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+                                      <span>Report Issue</span>
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* --- UPGRADED BRAND CONTROL BAR (MOBILE) --- */}
+                      <div className="md:hidden flex flex-col gap-3 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-3.5 shadow-sm select-none">
+                        {/* Row 1: Save, AI Notes Hub, Complete */}
+                        <div className="grid grid-cols-3 gap-2">
+                          {/* Save Heart Icon */}
+                          <button
+                            onClick={handleToggleActiveVideoFavorite}
+                            className={`h-12 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black transition duration-200 ${
+                              favorites.videos.includes(activeVideoId)
+                                ? "bg-red-500 text-white"
+                                : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-600 dark:text-zinc-300"
+                            }`}
                           >
-                            <ChevronLeft className="w-4 h-4" />
+                            <Heart className={`w-4 h-4 ${favorites.videos.includes(activeVideoId) ? "fill-current" : ""}`} />
+                            <span>{favorites.videos.includes(activeVideoId) ? "Saved" : "Save"}</span>
                           </button>
-                          <button 
-                            onClick={handleNextVideo}
-                            disabled={activeSession?.type !== "playlist"}
-                            className="p-1.5 rounded-lg text-slate-600 dark:text-zinc-400 hover:bg-white dark:hover:bg-zinc-900 hover:text-slate-950 dark:hover:text-white transition disabled:opacity-40 disabled:hover:bg-transparent"
-                            title="Next Video"
+
+                          {/* AI Quick Menu */}
+                          <button
+                            onClick={() => setActiveAiDropdown(prev => !prev)}
+                            className="h-12 bg-purple-600 text-white rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black transition shadow-sm relative"
                           >
-                            <ChevronRight className="w-4 h-4" />
+                            <Sparkles className="w-4 h-4 text-purple-200" />
+                            <span>AI Notes</span>
+
+                            {activeAiDropdown && (
+                              <>
+                                <div className="fixed inset-0 z-40" onClick={() => setActiveAiDropdown(false)} />
+                                <div className="absolute left-1/2 -translate-x-1/2 bottom-14 w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl z-50 p-1.5 animate-in fade-in zoom-in-95 duration-150 text-left">
+                                  <button
+                                    onClick={() => {
+                                      setAiCompanionProps({ initialTab: "hub", initialMaterialId: "short" });
+                                      setAiPanelOpen(true);
+                                      setActiveAiDropdown(false);
+                                    }}
+                                    className="w-full text-left px-2.5 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/25 transition flex items-center gap-1.5"
+                                  >
+                                    <span>⚡ Summarize Lecture</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setAiCompanionProps({ initialTab: "hub", initialMaterialId: "flashcards" });
+                                      setAiPanelOpen(true);
+                                      setActiveAiDropdown(false);
+                                    }}
+                                    className="w-full text-left px-2.5 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/25 transition flex items-center gap-1.5"
+                                  >
+                                    <span>🎴 Flashcards</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setAiCompanionProps({ initialTab: "quiz" });
+                                      setAiPanelOpen(true);
+                                      setActiveAiDropdown(false);
+                                    }}
+                                    className="w-full text-left px-2.5 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/25 transition flex items-center gap-1.5"
+                                  >
+                                    <span>📝 Quiz Me</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setAiCompanionProps({ initialTab: "chat", initialChatMessage: "Please explain the key concepts of this lecture simply and concisely for a beginner." });
+                                      setAiPanelOpen(true);
+                                      setActiveAiDropdown(false);
+                                    }}
+                                    className="w-full text-left px-2.5 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/25 transition flex items-center gap-1.5"
+                                  >
+                                    <span>🧠 Explain Simply</span>
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </button>
+
+                          {/* Complete Lesson */}
+                          <button
+                            onClick={() => {
+                              if (completingState !== 'idle' || isCurrentVideoCompleted) return;
+                              setCompletingState('saving');
+                              setTimeout(() => {
+                                if (activeSession) {
+                                  handleProgressUpdate(9999, 10000); // Trigger finish
+                                }
+                                setCompletingState('completed');
+                                toast.success("Lesson Completed", "Great job! Lecture marked finished.");
+                                setTimeout(() => {
+                                  setCompletingState('idle');
+                                }, 1500);
+                              }, 1200);
+                            }}
+                            disabled={completingState === 'saving' || isCurrentVideoCompleted}
+                            className={`h-12 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black transition ${
+                              completingState === 'saving'
+                                ? "bg-emerald-600/30 text-emerald-600"
+                                : (completingState === 'completed' || isCurrentVideoCompleted)
+                                  ? "bg-emerald-600 text-white"
+                                  : "bg-emerald-500 text-white hover:bg-emerald-600"
+                            }`}
+                          >
+                            {completingState === 'saving' ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
+                                <span>Saving...</span>
+                              </>
+                            ) : (completingState === 'completed' || isCurrentVideoCompleted) ? (
+                              <>
+                                <Check className="w-4 h-4 text-white stroke-[3px] animate-pulse" />
+                                <span>Completed</span>
+                              </>
+                            ) : (
+                              <>
+                                <Check className="w-4 h-4" />
+                                <span>Complete</span>
+                              </>
+                            )}
                           </button>
                         </div>
 
-                        {/* All other controls grouped properly */}
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {/* Save / Favorite Lecture */}
+                        {/* Row 2: Focus, Speed selection dropdown, and Mobile utility menu */}
+                        <div className="grid grid-cols-3 gap-2">
+                          {/* Focus Button */}
                           <button
-                            onClick={handleToggleActiveVideoFavorite}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition shrink-0 ${
-                              favorites.videos.includes(activeVideoId)
-                                ? "bg-red-50 border-red-200 text-red-600 hover:bg-red-100 dark:bg-red-950/40 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-900"
-                                : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-white"
-                            }`}
-                            title="Save / Favorite Lecture"
-                          >
-                            <Heart className={`w-3.5 h-3.5 ${favorites.videos.includes(activeVideoId) ? "fill-current text-red-500" : ""}`} />
-                            {favorites.videos.includes(activeVideoId) ? "Saved" : "Save Lecture"}
-                          </button>
-
-                          {/* Focus Mode */}
-                          <button 
                             onClick={() => setFocusMode(p => !p)}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition shrink-0 ${
-                              focusMode 
-                                ? "bg-orange-500 border-transparent text-white hover:bg-orange-600" 
-                                : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-white"
+                            className={`h-12 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black transition ${
+                              focusMode
+                                ? "bg-orange-500 text-white"
+                                : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-600 dark:text-zinc-300"
                             }`}
-                            title="Toggle Focus Mode"
                           >
-                            <Flame className={`w-3.5 h-3.5 ${focusMode ? "animate-pulse" : ""}`} />
-                            {focusMode ? "Focused" : "Focus Mode"}
+                            <Flame className={`w-4 h-4 ${focusMode ? "animate-pulse" : ""}`} />
+                            <span>{focusMode ? "Focusing" : "Focus"}</span>
                           </button>
 
-                          {/* Mark Completed */}
-                          <button 
-                            onClick={() => {
-                              if (activeSession) {
-                                handleProgressUpdate(9999, 10000); // Trigger finish
-                                toast.success("Lesson Completed", "Great job! This lecture has been marked as finished.");
-                              }
-                            }}
-                            className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition shadow-sm shrink-0"
-                            title="Complete Lesson"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            Complete
-                          </button>
-
-                          {/* Playback Speed Control */}
-                          <div className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300 px-3 py-2 rounded-xl text-xs font-bold shrink-0">
-                            <span>Speed</span>
+                          {/* Invisible Select wrap for Speed */}
+                          <div className="relative">
                             <select
                               value={settings.playbackSpeed}
                               onChange={(e) => handleSettingChange("playbackSpeed", parseFloat(e.target.value))}
-                              className="bg-transparent border-0 outline-none text-xs font-black text-slate-900 dark:text-zinc-100 cursor-pointer focus:ring-0 px-1 py-0"
+                              className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
                             >
                               {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(s => (
-                                <option key={s} value={s} className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100">{s}x</option>
+                                <option key={s} value={s}>{s}x Speed</option>
                               ))}
                             </select>
+                            <div className="h-12 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black text-slate-600 dark:text-zinc-300">
+                              <Clock className="w-4 h-4 text-blue-500" />
+                              <span>Speed {settings.playbackSpeed}x</span>
+                            </div>
                           </div>
 
-                          {/* Theatre/Wide Mode (Full Screen icon) */}
-                          <button 
-                            onClick={() => setTheatreMode(p => !p)}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition shrink-0 ${
-                              theatreMode 
-                                ? "bg-indigo-600 border-transparent text-white hover:bg-indigo-500" 
-                                : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-white"
-                            }`}
-                            title="Toggle Wide Screen Mode"
+                          {/* Extra bottom sheet action list trigger */}
+                          <button
+                            onClick={() => setShowMoreMobileMenu(p => !p)}
+                            className="h-12 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black text-slate-600 dark:text-zinc-300"
                           >
-                            {theatreMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-                            {theatreMode ? "Standard Mode" : "Wide Screen"}
+                            <MoreVertical className="w-4 h-4" />
+                            <span>More Options</span>
                           </button>
                         </div>
                       </div>
@@ -3547,10 +4303,29 @@ export default function App() {
                             {/* Lecture syllabus description */}
                             {description && (
                               <div className="text-xs text-slate-600 dark:text-zinc-400 border-t border-slate-200/45 dark:border-zinc-800/45 pt-3">
-                                <div className="font-semibold text-[10px] uppercase tracking-wider text-slate-400 dark:text-zinc-500 mb-1.5">Lecture Syllabus & Overview</div>
-                                <p className="line-clamp-4 leading-relaxed whitespace-pre-wrap text-slate-600 dark:text-zinc-400">
-                                  {description}
-                                </p>
+                                <button
+                                  onClick={() => setDescriptionCollapsed(!descriptionCollapsed)}
+                                  className="w-full flex items-center justify-between text-left group focus:outline-none"
+                                  type="button"
+                                >
+                                  <div className="font-semibold text-[10px] uppercase tracking-wider text-slate-400 dark:text-zinc-500 flex items-center gap-1.5 select-none">
+                                    <span>Lecture Syllabus & Overview</span>
+                                    <span className="text-[9px] bg-slate-200/60 dark:bg-zinc-850 px-1.5 py-0.5 rounded text-slate-500 font-bold">
+                                      {descriptionCollapsed ? "Expand" : "Collapse"}
+                                    </span>
+                                  </div>
+                                  {descriptionCollapsed ? (
+                                    <ChevronDown className="w-4 h-4 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-zinc-300 transition" />
+                                  ) : (
+                                    <ChevronUp className="w-4 h-4 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-zinc-300 transition" />
+                                  )}
+                                </button>
+                                
+                                {!descriptionCollapsed && (
+                                  <p className="leading-relaxed whitespace-pre-wrap text-slate-600 dark:text-zinc-400 mt-2 text-xs select-text animate-in fade-in duration-200">
+                                    {renderTextWithLinks(description)}
+                                  </p>
+                                )}
                               </div>
                             )}
                           </div>
@@ -3564,13 +4339,25 @@ export default function App() {
                         <InteractiveNotes videoId={activeVideoId} videoTitle={activeVideoTitle} />
 
                         {/* Timestamp Bookmarks Panel */}
-                        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl flex flex-col h-[400px] shadow-sm">
-                          <div className="p-3 border-b border-slate-200 dark:border-zinc-800 flex items-center gap-2">
-                            <Bookmark className="w-4 h-4 text-purple-500" />
-                            <span className="text-xs font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider">
-                              Timestamp Bookmarks
+                        <div className={`bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl flex flex-col shadow-sm transition-all duration-300 ${bookmarksCollapsed ? "h-auto" : "h-[400px]"}`}>
+                          <div 
+                            onClick={() => setBookmarksCollapsed(!bookmarksCollapsed)}
+                            className="p-3 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between cursor-pointer hover:bg-slate-50/50 dark:hover:bg-zinc-950/25 transition-colors select-none rounded-t-2xl"
+                          >
+                            <div className="flex items-center gap-2">
+                              {bookmarksCollapsed ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+                              <Bookmark className="w-4 h-4 text-purple-500" />
+                              <span className="text-xs font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider">
+                                Timestamp Bookmarks
+                              </span>
+                            </div>
+                            <span className="text-[10px] bg-purple-100 dark:bg-purple-950/55 text-purple-600 dark:text-purple-300 font-bold px-2 py-0.5 rounded-full">
+                              {activeBookmarks.length} saved
                             </span>
                           </div>
+
+                          {!bookmarksCollapsed && (
+                            <>
 
                           {/* Quick bookmark input */}
                           <div className="p-3 border-b border-slate-200 dark:border-zinc-800 bg-slate-50/50 dark:bg-zinc-950/20">
@@ -3653,7 +4440,9 @@ export default function App() {
                               ))
                             )}
                           </div>
-                        </div>
+                        </>
+                      )}
+                    </div>
 
                       </div>
 
@@ -3663,12 +4452,15 @@ export default function App() {
                         videoTitle={activeVideoTitle} 
                         channelName={activeVideoChannel} 
                         onOpenKeyModal={() => setOnboardingOpen(true)} 
+                        initialTab={aiCompanionProps.initialTab}
+                        initialMaterialId={aiCompanionProps.initialMaterialId}
+                        initialChatMessage={aiCompanionProps.initialChatMessage}
                       />
 
                     </div>
 
                     {/* Left/Right scrollable Lecture list (Unless inside theatre mode) */}
-                    {!theatreMode && (
+                    {!theatreMode && !readingMode && (
                       <div className="lg:col-span-4 space-y-6">
                         {/* Compact Study Timer Widget */}
                         <CompactStudyTimer />
@@ -3874,15 +4666,8 @@ export default function App() {
                     </div>
                     
                     <button
-                      onClick={() => {
-                        if (confirm("Are you sure you want to clear your local watch history? playlists and single video files will be removed from shortcuts, but your notes will remain intact.")) {
-                          Storage.savePlaylists([]);
-                          Storage.saveSingleVideos([]);
-                          setPlaylists([]);
-                          setSingleVideos([]);
-                        }
-                      }}
-                      className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-800 font-bold text-xs px-4 py-2 rounded-xl text-red-500 flex items-center gap-1.5 transition"
+                      onClick={() => setShowClearHistoryModal(true)}
+                      className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-800 font-bold text-xs px-4 py-2 rounded-xl text-red-500 flex items-center gap-1.5 transition cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                       Clear All History
@@ -3953,6 +4738,13 @@ export default function App() {
                                       const list = playlists.filter(x => x.id !== p.id);
                                       Storage.savePlaylists(list);
                                       setPlaylists(list);
+                                      // Also remove from favorites to prevent stale favorites
+                                      const favs = Storage.getFavorites();
+                                      if (favs.playlists.includes(p.id)) {
+                                        favs.playlists = favs.playlists.filter(x => x !== p.id);
+                                        localStorage.setItem("studytube_favorites", JSON.stringify(favs));
+                                        setFavorites(favs);
+                                      }
                                     }}
                                     className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition"
                                     title="Remove from history"
@@ -3997,6 +4789,13 @@ export default function App() {
                                       const list = singleVideos.filter(x => x.id !== v.id);
                                       Storage.saveSingleVideos(list);
                                       setSingleVideos(list);
+                                      // Also remove from favorites to prevent stale favorites
+                                      const favs = Storage.getFavorites();
+                                      if (favs.videos.includes(v.id)) {
+                                        favs.videos = favs.videos.filter(x => x !== v.id);
+                                        localStorage.setItem("studytube_favorites", JSON.stringify(favs));
+                                        setFavorites(favs);
+                                      }
                                     }}
                                     className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition"
                                     title="Remove from history"
@@ -4017,123 +4816,188 @@ export default function App() {
               {/* FAVORITES TAB */}
               {activeTab === "favorites" && (
                 <div className="space-y-6 max-w-5xl mx-auto">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center justify-between flex-wrap gap-4">
                     <div>
                       <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-zinc-50">Favorite Modules</h1>
                       <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">Quickly access pinned channels, playlists, or lectures.</p>
                     </div>
 
-                    {/* TWO OPTION SUB-TABS: Playlists vs Particular Lectures */}
-                    <div className="bg-slate-100 dark:bg-zinc-800 p-1 rounded-2xl flex items-center gap-1 self-start">
-                      <button
-                        onClick={() => setFavTypeFilter("playlist")}
-                        className={`px-4 py-2 text-xs font-bold rounded-xl transition flex items-center gap-1.5 ${
-                          favTypeFilter === "playlist"
-                            ? "bg-white dark:bg-zinc-900 text-slate-950 dark:text-white shadow-sm"
-                            : "text-slate-600 dark:text-zinc-400 hover:bg-slate-200 dark:hover:bg-zinc-700/60 hover:text-slate-950 dark:hover:text-white"
-                        }`}
-                      >
-                        📁 Whole Playlists ({playlists.filter(p => favorites.playlists.includes(p.id)).length})
-                      </button>
-                      <button
-                        onClick={() => setFavTypeFilter("video")}
-                        className={`px-4 py-2 text-xs font-bold rounded-xl transition flex items-center gap-1.5 ${
-                          favTypeFilter === "video"
-                            ? "bg-white dark:bg-zinc-900 text-slate-950 dark:text-white shadow-sm"
-                            : "text-slate-600 dark:text-zinc-400 hover:bg-slate-200 dark:hover:bg-zinc-700/60 hover:text-slate-950 dark:hover:text-white"
-                        }`}
-                      >
-                        🎥 Particular Lectures ({singleVideos.filter(v => favorites.videos.includes(v.id)).length})
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => setShowClearFavoritesModal(true)}
+                      className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-800 font-bold text-xs px-4 py-2 rounded-xl text-red-500 flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Clear All Favorites
+                    </button>
                   </div>
 
-                  {favTypeFilter === "playlist" ? (
-                    playlists.filter(p => favorites.playlists.includes(p.id)).length === 0 ? (
-                      <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-3xl border border-slate-200 dark:border-zinc-900">
-                        <Heart className="w-12 h-12 text-slate-300 dark:text-zinc-700 mx-auto" />
-                        <h3 className="text-base font-bold text-slate-700 dark:text-zinc-300 mt-3">No favorite playlists</h3>
-                        <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-xs mx-auto mt-1">
-                          Pin a playlist using the star icon to easily access whole modules here.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {playlists.filter(p => favorites.playlists.includes(p.id)).map((p) => (
-                          <div 
-                            key={p.id} 
-                            onClick={() => resumeLearningSession(p.id, "playlist")}
-                            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
-                          >
-                            <div>
-                              <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full h-full object-cover" alt="" />
-                                <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white">
-                                  Playlist
-                                </span>
-                              </div>
-                              <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
-                                {p.title}
-                              </h3>
-                              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{p.channelName}</p>
-                            </div>
-                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
-                              <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">{p.progress}% done</span>
-                              <button 
-                                onClick={(e) => handleToggleFav("playlist", p.id, e)}
-                                className="p-1 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded-lg text-amber-500 transition"
-                              >
-                                <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )
+                  {sortedFavoriteItems.length === 0 && favTypeFilter === "all" ? (
+                    <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-3xl border border-slate-200 dark:border-zinc-900">
+                      <Heart className="w-12 h-12 text-slate-300 dark:text-zinc-700 mx-auto" />
+                      <h3 className="text-base font-bold text-slate-700 dark:text-zinc-300 mt-3">No favorite modules</h3>
+                      <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-xs mx-auto mt-1">
+                        Pin a playlist or lecture using the star icon to easily access them here.
+                      </p>
+                    </div>
                   ) : (
-                    singleVideos.filter(v => favorites.videos.includes(v.id)).length === 0 ? (
-                      <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-3xl border border-slate-200 dark:border-zinc-900">
-                        <Heart className="w-12 h-12 text-slate-300 dark:text-zinc-700 mx-auto" />
-                        <h3 className="text-base font-bold text-slate-700 dark:text-zinc-300 mt-3">No favorite lectures</h3>
-                        <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-xs mx-auto mt-1">
-                          Click "Save Lecture" inside the study page to add specific lessons here.
-                        </p>
+                    <>
+                      <div className="bg-slate-100 dark:bg-zinc-800 p-1 rounded-2xl flex items-center gap-1 self-start w-max">
+                        <button
+                          onClick={() => setFavTypeFilter("all")}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${favTypeFilter === "all" ? "bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-50 shadow-sm" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-300"}`}
+                        >
+                          <Star className="w-3.5 h-3.5" />
+                          All ({playlists.filter(p => favorites.playlists.includes(p.id)).length + singleVideos.filter(v => favorites.videos.includes(v.id)).length})
+                        </button>
+                        <button
+                          onClick={() => setFavTypeFilter("playlist")}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${favTypeFilter === "playlist" ? "bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-50 shadow-sm" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-300"}`}
+                        >
+                          <Folder className="w-3.5 h-3.5" />
+                          Playlists ({playlists.filter(p => favorites.playlists.includes(p.id)).length})
+                        </button>
+                        <button
+                          onClick={() => setFavTypeFilter("video")}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${favTypeFilter === "video" ? "bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-50 shadow-sm" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-300"}`}
+                        >
+                          <Youtube className="w-3.5 h-3.5" />
+                          Particular Lectures ({singleVideos.filter(v => favorites.videos.includes(v.id)).length})
+                        </button>
                       </div>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {singleVideos.filter(v => favorites.videos.includes(v.id)).map((v) => (
-                          <div 
-                            key={v.id} 
-                            onClick={() => resumeLearningSession(v.id, "video")}
-                            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
-                          >
-                            <div>
-                              <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt="" />
-                                {v.duration !== "LIVE" && (
-                                  <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white">
-                                    {v.duration}
-                                  </span>
-                                )}
-                              </div>
-                              <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
-                                {v.title}
-                              </h3>
-                              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{v.channelName}</p>
-                            </div>
-                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
-                              <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">{v.progress}% done</span>
-                              <button 
-                                onClick={(e) => handleToggleFav("video", v.id, e)}
-                                className="p-1 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded-lg text-amber-500 transition"
-                              >
-                                <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )
+
+                      {sortedFavoriteItems.length === 0 ? (
+                        <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-3xl border border-slate-200 dark:border-zinc-900">
+                          <Heart className="w-12 h-12 text-slate-300 dark:text-zinc-700 mx-auto" />
+                          <h3 className="text-base font-bold text-slate-700 dark:text-zinc-300 mt-3">
+                            {favTypeFilter === "playlist" ? "No favorite playlists" : "No favorite lectures"}
+                          </h3>
+                          <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-xs mx-auto mt-1">
+                            {favTypeFilter === "playlist" 
+                              ? "Pin a playlist using the star icon to easily access whole modules here."
+                              : "Click 'Save Lecture' inside the study page to add specific lessons here."
+                            }
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {sortedFavoriteItems.map((item) => {
+                            if (item.type === "playlist") {
+                              const p = item;
+                              return (
+                                <div 
+                                  key={p.id} 
+                                  onClick={() => resumeLearningSession(p.id, "playlist")}
+                                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
+                                >
+                                  <div>
+                                    <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
+                                      <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full h-full object-cover" alt={p.title} />
+                                      <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white flex items-center gap-1 shadow-xs">
+                                        <Folder className="w-3 h-3 text-blue-400" /> Playlist ({p.totalVideos} videos)
+                                      </span>
+                                    </div>
+                                    <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
+                                      {p.title}
+                                    </h3>
+                                    <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{p.channelName}</p>
+                                  </div>
+                                  <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5">
+                                      <CheckCircle className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
+                                      <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">{p.progress}% done</span>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <button 
+                                        onClick={(e) => handleToggleFav("playlist", p.id, e)}
+                                        className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-lg text-amber-500 transition"
+                                        title="Unfavorite"
+                                      >
+                                        <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
+                                      </button>
+                                      <button 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const list = playlists.filter(x => x.id !== p.id);
+                                          Storage.savePlaylists(list);
+                                          setPlaylists(list);
+                                          const favs = Storage.getFavorites();
+                                          favs.playlists = favs.playlists.filter(x => x !== p.id);
+                                          localStorage.setItem("studytube_favorites", JSON.stringify(favs));
+                                          setFavorites(favs);
+                                          toast.success("Module Deleted", "The playlist has been deleted from history and favorites.");
+                                        }}
+                                        className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition cursor-pointer"
+                                        title="Delete completely"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            } else {
+                              const v = item;
+                              return (
+                                <div 
+                                  key={v.id} 
+                                  onClick={() => resumeLearningSession(v.id, "video")}
+                                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
+                                >
+                                  <div>
+                                    <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
+                                      <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt={v.title} />
+                                      {v.duration !== "LIVE" && (
+                                        <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white flex items-center gap-1 shadow-xs">
+                                          <Youtube className="w-3 h-3 text-red-500" /> {v.duration}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
+                                      {v.title}
+                                    </h3>
+                                    <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{v.channelName}</p>
+                                  </div>
+                                  <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5">
+                                      <CheckCircle className={`w-3.5 h-3.5 ${v.completed ? "text-emerald-500" : "text-slate-400"}`} />
+                                      <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">
+                                        {v.progress}% watched
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <button 
+                                        onClick={(e) => handleToggleFav("video", v.id, e)}
+                                        className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-lg text-amber-500 transition"
+                                        title="Unfavorite"
+                                      >
+                                        <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
+                                      </button>
+                                      <button 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const list = singleVideos.filter(x => x.id !== v.id);
+                                          Storage.saveSingleVideos(list);
+                                          setSingleVideos(list);
+                                          const favs = Storage.getFavorites();
+                                          favs.videos = favs.videos.filter(x => x !== v.id);
+                                          localStorage.setItem("studytube_favorites", JSON.stringify(favs));
+                                          setFavorites(favs);
+                                          toast.success("Lecture Deleted", "The video has been deleted from history and favorites.");
+                                        }}
+                                        className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-slate-400 hover:text-red-500 transition cursor-pointer"
+                                        title="Delete completely"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }
+                          })}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -4144,12 +5008,146 @@ export default function App() {
               {/* STATS TAB */}
               {activeTab === "stats" && <StudyStats />}
 
+              {/* DEVELOPER PROFILE TAB */}
+              {activeTab === "developer" && (
+                <DeveloperProfile 
+                  onBackToHome={() => setActiveTab("home")} 
+                  soundEnabled={soundEnabled}
+                  setSoundEnabled={setSoundEnabled}
+                />
+              )}
+
               {/* SETTINGS TAB */}
               {activeTab === "settings" && (
                 <div className="space-y-6 max-w-3xl mx-auto">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-zinc-50">Applet Settings</h1>
-                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">Configure playback and local cache storage details.</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-zinc-50">Applet Settings & Profile</h1>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">Manage your Google account, cloud sync status, AI engine connections, and playback preferences.</p>
+                  </div>
+                  
+
+
+                  {/* Google Authenticated Account & Cloud Sync Card */}
+                  <div className="bg-gradient-to-r from-blue-600/10 via-indigo-600/10 to-purple-600/10 border border-blue-500/20 dark:border-blue-500/30 rounded-3xl p-6 shadow-sm space-y-4">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="p-2 bg-blue-600 text-white rounded-2xl shadow-md">
+                          <User className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h2 className="text-base font-extrabold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
+                            Google Authenticated Account
+                          </h2>
+                          <p className="text-xs text-slate-500 dark:text-zinc-400">
+                            Real-time Cloud Firestore synchronization across all devices
+                          </p>
+                        </div>
+                      </div>
+
+                      <span className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${
+                        authUser 
+                          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30" 
+                          : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+                      }`}>
+                        {authUser ? (
+                          <>
+                            <Cloud className="w-3.5 h-3.5 text-emerald-500" />
+                            Cloud Synced
+                          </>
+                        ) : (
+                          <>
+                            <CloudOff className="w-3.5 h-3.5 text-amber-500" />
+                            Offline Mode
+                          </>
+                        )}
+                      </span>
+                    </div>
+
+                    {authUser ? (
+                      <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-4 rounded-2xl border border-slate-200/80 dark:border-zinc-800 flex items-center justify-between flex-wrap gap-4">
+                        <div className="flex items-center gap-3 min-w-0">
+                          {authUser.photoURL ? (
+                            <img src={authUser.photoURL} alt="" className="w-12 h-12 rounded-full object-cover border-2 border-blue-500/40 shrink-0" />
+                          ) : (
+                            <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-black text-lg flex items-center justify-center shrink-0 shadow-md">
+                              {(authUser.displayName || authUser.email || "G")[0].toUpperCase()}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-sm text-slate-900 dark:text-zinc-100 truncate">
+                              {authUser.displayName || "Google Account User"}
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-zinc-400 truncate font-mono mt-0.5">
+                              {authUser.email}
+                            </div>
+                            <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mt-1 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Connected & Syncing Notes, Playlists & Flashcards
+                            </div>
+                          </div>
+                        </div>
+
+                        {showSignOutConfirm ? (
+                          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-red-500/5 dark:bg-red-500/10 border border-red-200/50 dark:border-red-950/50 p-3 rounded-2xl w-full">
+                            <div className="text-xs text-slate-800 dark:text-zinc-200 font-bold flex-1">
+                              Confirm sign out? Your session sync will stop.
+                            </div>
+                            <div className="flex gap-1.5 shrink-0 self-end sm:self-auto">
+                              <button
+                                onClick={() => setShowSignOutConfirm(false)}
+                                className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 font-bold text-[11px] px-3 py-1.5 rounded-lg transition cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await signOutUser();
+                                    setAuthUser(null);
+                                    setShowSignOutConfirm(false);
+                                    toast.success("Signed Out", "Google account signed out successfully.");
+                                  } catch (e: any) {
+                                    toast.error("Sign Out Error", e.message);
+                                  }
+                                }}
+                                className="bg-red-600 hover:bg-red-500 text-white font-extrabold text-[11px] px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1"
+                              >
+                                <LogOut className="w-3 h-3" />
+                                Yes, Sign Out
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setShowAuthModal(true)}
+                              className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 font-bold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer"
+                            >
+                              Account Details
+                            </button>
+                            <button
+                              onClick={() => setShowSignOutConfirm(true)}
+                              className="bg-red-50 hover:bg-red-100 dark:bg-red-950/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 font-extrabold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                            >
+                              <LogOut className="w-3.5 h-3.5" />
+                              Sign Out
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-4 rounded-2xl border border-slate-200/80 dark:border-zinc-800 space-y-3">
+                        <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed">
+                          Sign in with Google to automatically backup and sync your playlists, AI notes, custom flashcards, study schedules, and achievements across all your devices.
+                        </p>
+                        <button
+                          onClick={() => setShowAuthModal(true)}
+                          className="bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs px-5 py-2.5 rounded-xl transition shadow-md shadow-blue-500/20 flex items-center gap-2 cursor-pointer"
+                        >
+                          <User className="w-4 h-4" />
+                          Sign In / Sync with Google
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm space-y-6">
@@ -4469,6 +5467,162 @@ export default function App() {
                       </div>
                     )}
                   </div>
+
+                  {/* About Developer Settings Card (Highly visible on Mobile, elegant on Desktop) */}
+                  <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-3">
+                      <div>
+                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50 uppercase tracking-wide">
+                          About the Developer
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">Meet the creator behind LearnStudy.</div>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400 dark:text-zinc-500">
+                        DEVELOPER INFO
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center gap-4 py-2">
+                      {/* Avatar */}
+                      <DeveloperAvatar size="xl" showStatusIndicator={true} />
+
+                      {/* Info & Description */}
+                      <div className="text-center sm:text-left flex-1 space-y-1">
+                        <h4 className="text-base font-extrabold text-slate-900 dark:text-zinc-50">Gagan Pratap</h4>
+                        <p className="text-xs font-semibold text-blue-600 dark:text-blue-400">Creator of LearnStudy</p>
+                        <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed max-w-lg">
+                          Building tools that help students learn smarter and study distraction-free.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Social & Action Row */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-slate-100 dark:border-zinc-800">
+                      <div className="flex items-center justify-center sm:justify-start gap-2.5">
+                        <a
+                          href="https://github.com"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-850 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 dark:hover:text-white transition-all text-slate-600 dark:text-zinc-400 hover:scale-105"
+                          title="GitHub"
+                        >
+                          <Github className="w-4 h-4" />
+                        </a>
+                        <a
+                          href="https://linkedin.com"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-850 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 dark:hover:text-white transition-all text-slate-600 dark:text-zinc-400 hover:scale-105"
+                          title="LinkedIn"
+                        >
+                          <Linkedin className="w-4 h-4" />
+                        </a>
+                        <a
+                          href="https://twitter.com"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-850 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 dark:hover:text-white transition-all text-slate-600 dark:text-zinc-400 hover:scale-105"
+                          title="X / Twitter"
+                        >
+                          <Twitter className="w-4 h-4" />
+                        </a>
+                        <a
+                          href="https://gaganpratap.dev"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-850 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 dark:hover:text-white transition-all text-slate-600 dark:text-zinc-400 hover:scale-105"
+                          title="Portfolio Website"
+                        >
+                          <Globe className="w-4 h-4" />
+                        </a>
+                      </div>
+
+                      <button
+                        onClick={() => { setActiveTab("developer"); setSearchQuery(""); }}
+                        className="w-full sm:w-auto py-2.5 px-4 bg-blue-600 hover:bg-blue-500 text-white text-xs font-extrabold rounded-xl transition-all duration-200 text-center flex items-center justify-center gap-2 shadow-md shadow-blue-500/10 cursor-pointer"
+                      >
+                        <Award className="w-4 h-4" />
+                        View Full Developer Profile
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* COURSE LIBRARY TAB */}
+              {activeTab === "library" && (
+                <div className="max-w-7xl mx-auto py-2">
+                  <CourseLibrary 
+                    onSelectLecture={(videoId, title, channel, playlistInfo, switchToStudyTab) => {
+                      if (playlistInfo && playlistInfo.videos && playlistInfo.videos.length > 0) {
+                        const existingIndex = playlists.findIndex(p => p.id === playlistInfo.id);
+                        let updatedPlaylists = [...playlists];
+                        const playlistObj: any = {
+                          id: playlistInfo.id,
+                          title: playlistInfo.title,
+                          channelName: channel || "Course Library",
+                          thumbnail: playlistInfo.videos[0]?.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                          videos: playlistInfo.videos,
+                          totalVideos: playlistInfo.videos.length,
+                          completedVideos: playlistInfo.videos.filter(v => v.completed).length,
+                          progress: Math.round((playlistInfo.videos.filter(v => v.completed).length / playlistInfo.videos.length) * 100) || 0
+                        };
+
+                        if (existingIndex >= 0) {
+                          updatedPlaylists[existingIndex] = playlistObj;
+                        } else {
+                          updatedPlaylists.unshift(playlistObj);
+                        }
+                        setPlaylists(updatedPlaylists);
+                        Storage.savePlaylist(playlistObj);
+
+                        setActiveVideoId(videoId);
+                        setActiveVideoTitle(title || "Lecture");
+                        setActiveVideoChannel(channel || "Course Library");
+                        setActiveSession({ id: playlistInfo.id, type: "playlist" });
+                      } else {
+                        setActiveVideoId(videoId);
+                        setActiveVideoTitle(title || "Lecture");
+                        setActiveVideoChannel(channel || "Custom Course");
+                        setActiveSession({ id: videoId, type: "video" });
+                      }
+
+                      if (switchToStudyTab !== false) {
+                        setActiveTab("study");
+                      }
+                    }} 
+                    onOpenImportUrl={() => {
+                      setActiveTab("home");
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* FLASHCARDS TAB */}
+              {activeTab === "flashcards" && (
+                <div className="max-w-7xl mx-auto py-2">
+                  <FlashcardsManager />
+                </div>
+              )}
+
+              {/* STUDY PLANNER TAB */}
+              {activeTab === "planner" && (
+                <div className="max-w-7xl mx-auto py-2">
+                  <StudyPlanner />
+                </div>
+              )}
+
+              {/* STUDY CALENDAR TAB */}
+              {activeTab === "calendar" && (
+                <div className="max-w-7xl mx-auto py-2">
+                  <StudyCalendar />
+                </div>
+              )}
+
+              {/* PDF READER TAB */}
+              {activeTab === "pdf" && (
+                <div className="max-w-7xl mx-auto py-2">
+                  <PDFStudyReader />
                 </div>
               )}
             </>
@@ -4477,48 +5631,77 @@ export default function App() {
         </main>
       </div>
 
+      {/* Auth Modal */}
+      <AuthModal 
+        isOpen={showAuthModal} 
+        onClose={() => setShowAuthModal(false)} 
+        currentUser={authUser}
+      />
+
       {/* 4. Mobile Bottom Navigation bar (Only 5 Icons with labels) - Hidden during Focus Mode */}
       {!focusMode && (
-        <nav className="sticky bottom-0 z-40 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border-t border-slate-200 dark:border-zinc-900 py-2.5 px-4 flex md:hidden items-center justify-around select-none shadow-lg">
+        <nav className="sticky bottom-0 z-40 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border-t border-slate-200 dark:border-zinc-900 py-1.5 px-2 flex md:hidden items-center justify-around select-none shadow-xl">
           <button
             onClick={() => { setActiveTab("home"); setSearchQuery(""); }}
-            className={`flex flex-col items-center gap-1 transition ${activeTab === "home" && !searchQuery ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-zinc-500"}`}
+            className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
+              activeTab === "home" && !searchQuery 
+                ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
+                : "text-slate-500 dark:text-zinc-400 font-bold hover:text-slate-900 dark:hover:text-zinc-200 opacity-80"
+            }`}
           >
-            <Home className="w-5 h-5" />
-            <span className="text-[10px] font-bold">Home</span>
+            <Home className="w-5 h-5 stroke-[2.25]" />
+            <span className="text-[10px] mt-0.5">Home</span>
           </button>
 
           <button
             onClick={() => { setActiveTab("study"); setSearchQuery(""); }}
             disabled={!activeVideoId && !activeSession}
-            className={`flex flex-col items-center gap-1 transition ${!activeVideoId && !activeSession ? "opacity-40 cursor-not-allowed" : ""} ${activeTab === "study" && !searchQuery ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-zinc-500"}`}
+            className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
+              !activeVideoId && !activeSession ? "opacity-35 cursor-not-allowed" : ""
+            } ${
+              activeTab === "study" && !searchQuery 
+                ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
+                : "text-slate-500 dark:text-zinc-400 font-bold hover:text-slate-900 dark:hover:text-zinc-200 opacity-80"
+            }`}
           >
-            <Tv className="w-5 h-5" />
-            <span className="text-[10px] font-bold">Study</span>
+            <Tv className="w-5 h-5 stroke-[2.25]" />
+            <span className="text-[10px] mt-0.5">Study</span>
           </button>
 
           <button
-            onClick={() => { setActiveTab("history"); setSearchQuery(""); }}
-            className={`flex flex-col items-center gap-1 transition ${activeTab === "history" && !searchQuery ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-zinc-500"}`}
+            onClick={() => { setActiveTab("library"); setSearchQuery(""); }}
+            className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
+              activeTab === "library" && !searchQuery 
+                ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
+                : "text-slate-500 dark:text-zinc-400 font-bold hover:text-slate-900 dark:hover:text-zinc-200 opacity-80"
+            }`}
           >
-            <History className="w-5 h-5" />
-            <span className="text-[10px] font-bold">History</span>
+            <Folder className="w-5 h-5 stroke-[2.25]" />
+            <span className="text-[10px] mt-0.5">Library</span>
           </button>
 
           <button
-            onClick={() => { setActiveTab("favorites"); setSearchQuery(""); }}
-            className={`flex flex-col items-center gap-1 transition ${activeTab === "favorites" && !searchQuery ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-zinc-500"}`}
+            onClick={() => { setActiveTab("planner"); setSearchQuery(""); }}
+            className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
+              activeTab === "planner" && !searchQuery 
+                ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
+                : "text-slate-500 dark:text-zinc-400 font-bold hover:text-slate-900 dark:hover:text-zinc-200 opacity-80"
+            }`}
           >
-            <Heart className="w-5 h-5" />
-            <span className="text-[10px] font-bold">Favorites</span>
+            <Calendar className="w-5 h-5 stroke-[2.25]" />
+            <span className="text-[10px] mt-0.5">Tasks</span>
           </button>
 
           <button
             onClick={() => { setActiveTab("settings"); setSearchQuery(""); }}
-            className={`flex flex-col items-center gap-1 transition ${activeTab === "settings" && !searchQuery ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-zinc-500"}`}
+            className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
+              activeTab === "settings" && !searchQuery 
+                ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
+                : "text-slate-500 dark:text-zinc-400 font-bold hover:text-slate-900 dark:hover:text-zinc-200 opacity-80"
+            }`}
           >
-            <Settings className="w-5 h-5" />
-            <span className="text-[10px] font-bold">Settings</span>
+            <User className="w-5 h-5 stroke-[2.25]" />
+            <span className="text-[10px] mt-0.5">Profile</span>
           </button>
         </nav>
       )}
@@ -4592,6 +5775,277 @@ export default function App() {
         allowClose={true}
         onClose={() => setOnboardingOpen(false)}
       />
+
+      {/* 9. Sliding AI Notes Hub Side Panel Drawer */}
+      {aiPanelOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          {/* Backdrop */}
+          <div 
+            className="absolute inset-0 bg-black/40 backdrop-blur-xs transition-opacity duration-300 animate-in fade-in cursor-pointer"
+            onClick={() => {
+              setAiPanelOpen(false);
+              setAiCompanionProps({});
+            }}
+          />
+          {/* Sliding drawer content */}
+          <div className="relative w-full max-w-lg md:max-w-xl h-full bg-white dark:bg-zinc-900 shadow-2xl flex flex-col z-10 animate-in slide-in-from-right duration-300">
+            <div className="flex-1 overflow-hidden h-full">
+              <AIStudyCompanion 
+                videoId={activeVideoId}
+                videoTitle={activeVideoTitle}
+                channelName={activeVideoChannel}
+                onOpenKeyModal={() => setOnboardingOpen(true)}
+                onClose={() => {
+                  setAiPanelOpen(false);
+                  setAiCompanionProps({});
+                }}
+                initialTab={aiCompanionProps.initialTab}
+                initialMaterialId={aiCompanionProps.initialMaterialId}
+                initialChatMessage={aiCompanionProps.initialChatMessage}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 10. Sticky Bottom Study Bar */}
+      {scrolledPast && activeTab === "study" && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border-t border-slate-200 dark:border-zinc-800 shadow-xl py-3 px-4 z-40 animate-in slide-in-from-bottom duration-300">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+            {/* Left Column: Video thumbnail, Title, & Progress Indicator */}
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className="hidden sm:block w-14 aspect-video rounded-lg bg-black overflow-hidden relative border border-slate-200 dark:border-zinc-800 shrink-0">
+                <img 
+                  src={`https://img.youtube.com/vi/${activeVideoId}/mqdefault.jpg`} 
+                  alt="Current Study Video" 
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
+                  {activeVideoTitle || "Untitled Lecture"}
+                </div>
+                <div className="text-[10px] text-slate-500 dark:text-zinc-400 font-medium mt-0.5 flex items-center gap-1">
+                  <span>{activeVideoChannel || "LearnStudy Instructor"}</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-zinc-750" />
+                  <span className="text-blue-500 font-extrabold">{settings.playbackSpeed}x Speed</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column: Key Compact Buttons */}
+            <div className="flex items-center gap-2 shrink-0">
+              {/* Favorites Save Button */}
+              <button
+                onClick={handleToggleActiveVideoFavorite}
+                className={`p-2 rounded-xl transition ${favorites.videos.includes(activeVideoId) ? "text-red-500 bg-red-50 dark:bg-red-950/20" : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"}`}
+                title="Save Lecture"
+              >
+                <Heart className={`w-5 h-5 ${favorites.videos.includes(activeVideoId) ? "fill-current" : ""}`} />
+              </button>
+
+              {/* AI Hub Shortcuts */}
+              <button 
+                onClick={() => {
+                  setAiCompanionProps({ initialTab: "hub" });
+                  setAiPanelOpen(true);
+                }}
+                className="bg-purple-600 hover:bg-purple-700 text-white font-black text-xs h-9 px-3.5 rounded-xl flex items-center gap-1.5 transition shadow-sm shrink-0"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-purple-200" />
+                <span>AI Companion</span>
+              </button>
+
+              {/* Complete Lesson Button */}
+              <button 
+                onClick={() => {
+                  if (completingState !== 'idle' || isCurrentVideoCompleted) return;
+                  setCompletingState('saving');
+                  setTimeout(() => {
+                    if (activeSession) {
+                      handleProgressUpdate(9999, 10000); // Trigger finish
+                    }
+                    setCompletingState('completed');
+                    toast.success("Lesson Completed", "Great job! Lecture marked finished.");
+                    setTimeout(() => {
+                      setCompletingState('idle');
+                    }, 1500);
+                  }, 1200);
+                }}
+                disabled={completingState === 'saving' || isCurrentVideoCompleted}
+                className={`font-black text-xs h-9 px-3.5 rounded-xl flex items-center gap-1.5 transition shrink-0 ${
+                  completingState === 'saving'
+                    ? "bg-emerald-600/30 text-emerald-600"
+                    : (completingState === 'completed' || isCurrentVideoCompleted)
+                      ? "bg-emerald-600 text-white"
+                      : "bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm"
+                }`}
+              >
+                {completingState === 'saving' ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (completingState === 'completed' || isCurrentVideoCompleted) ? (
+                  <Check className="w-3.5 h-3.5 text-white stroke-[3px] animate-pulse" />
+                ) : (
+                  <Check className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden md:inline">
+                  {completingState === 'saving' ? "Saving..." : (completingState === 'completed' || isCurrentVideoCompleted) ? "Completed" : "Complete"}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 11. Mobile Options Bottom Sheet */}
+      {showMoreMobileMenu && (
+        <div className="md:hidden fixed inset-0 z-50 flex items-end justify-center select-none">
+          {/* Backdrop */}
+          <div 
+            className="absolute inset-0 bg-black/50 backdrop-blur-xs transition-opacity"
+            onClick={() => setShowMoreMobileMenu(false)}
+          />
+          {/* Sheet */}
+          <div className="relative w-full bg-white dark:bg-zinc-900 rounded-t-3xl p-5 shadow-2xl z-10 animate-in slide-in-from-bottom duration-300">
+            <div className="w-12 h-1 bg-slate-200 dark:bg-zinc-800 rounded-full mx-auto mb-4" />
+            <h3 className="text-sm font-extrabold text-slate-900 dark:text-zinc-100 uppercase tracking-wider mb-3">
+              Lecture Options & Utilities
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(window.location.href);
+                  toast.success("Link Copied", "Your study room URL is copied.");
+                  setShowMoreMobileMenu(false);
+                }}
+                className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 text-xs font-bold flex flex-col items-center justify-center gap-2"
+              >
+                <Share2 className="w-5 h-5 text-indigo-500" />
+                <span>Share Lecture Link</span>
+              </button>
+              <button
+                onClick={() => {
+                  const savedNotes = Storage.getNoteForVideo(activeVideoId);
+                  if (!savedNotes.trim()) {
+                    toast.warning("Empty Notes", "Add some notes in the scratchpad first.");
+                  } else {
+                    const blob = new Blob([savedNotes], { type: "text/plain;charset=utf-8" });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.download = `Lecture_Notes_${activeVideoId}.txt`;
+                    link.click();
+                    URL.revokeObjectURL(url);
+                    toast.success("Saved Notes", "Export complete.");
+                  }
+                  setShowMoreMobileMenu(false);
+                }}
+                className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 text-xs font-bold flex flex-col items-center justify-center gap-2"
+              >
+                <Download className="w-5 h-5 text-emerald-500" />
+                <span>Download Study Notes</span>
+              </button>
+              <button
+                onClick={() => {
+                  toast.success("Shortcuts Active", "Press '?' on desktop to see keyboard hotkeys.");
+                  setShowMoreMobileMenu(false);
+                }}
+                className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 text-xs font-bold flex flex-col items-center justify-center gap-2"
+              >
+                <Keyboard className="w-5 h-5 text-blue-500" />
+                <span>Hotkey Shortcuts</span>
+              </button>
+              <button
+                onClick={() => {
+                  toast.success("Issue Submitted", "Lecture stream telemetry reported.");
+                  setShowMoreMobileMenu(false);
+                }}
+                className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 hover:bg-rose-100 text-xs font-bold flex flex-col items-center justify-center gap-2"
+              >
+                <AlertTriangle className="w-5 h-5 text-rose-500 animate-pulse" />
+                <span>Report Issue</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear History Modal */}
+      {showClearHistoryModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-5 animate-in zoom-in-95 duration-200">
+            <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-500 rounded-2xl flex items-center justify-center mb-2 mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div className="text-center">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Clear Watch History?</h3>
+              <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2">
+                This will permanently delete all your watch history and saved lectures. This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setShowClearHistoryModal(false)}
+                className="flex-1 py-3 px-4 rounded-xl font-bold text-sm bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  Storage.clearWatchHistory();
+                  setPlaylists([]);
+                  setSingleVideos([]);
+                  setFavorites({ playlists: [], videos: [] });
+                  toast.success("Watch History Cleared", "All watch history and saved lectures have been removed.");
+                  setShowClearHistoryModal(false);
+                }}
+                className="flex-1 py-3 px-4 rounded-xl font-bold text-sm bg-red-600 hover:bg-red-700 text-white shadow-md shadow-red-500/20 transition"
+              >
+                Clear History
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear Favorites Modal */}
+      {showClearFavoritesModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-5 animate-in zoom-in-95 duration-200">
+            <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-500 rounded-2xl flex items-center justify-center mb-2 mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div className="text-center">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Clear All Favorites?</h3>
+              <p className="text-sm text-slate-500 dark:text-zinc-400 mt-2">
+                This will permanently remove all your favorite modules. This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setShowClearFavoritesModal(false)}
+                className="flex-1 py-3 px-4 rounded-xl font-bold text-sm bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  Storage.clearFavorites();
+                  setFavorites({ playlists: [], videos: [] });
+                  setPlaylists(Storage.getPlaylists());
+                  setSingleVideos(Storage.getSingleVideos());
+                  toast.success("Favorites Cleared", "All favorite modules have been removed.");
+                  setShowClearFavoritesModal(false);
+                }}
+                className="flex-1 py-3 px-4 rounded-xl font-bold text-sm bg-red-600 hover:bg-red-700 text-white shadow-md shadow-red-500/20 transition"
+              >
+                Clear Favorites
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

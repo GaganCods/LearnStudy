@@ -1,4 +1,17 @@
-import { PlaylistInfo, SingleVideoInfo, Bookmark, StudySessionLog, StudySettings } from "../types";
+import { 
+  PlaylistInfo, 
+  SingleVideoInfo, 
+  Bookmark, 
+  StudySessionLog, 
+  StudySettings,
+  Flashcard,
+  StudyPlanItem,
+  CourseFolder,
+  CustomSubjectFolder,
+  PDFDocument,
+  UserProfile
+} from "../types";
+import { PdfDb } from "./pdfDb";
 
 // Default settings
 const DEFAULT_SETTINGS: StudySettings = {
@@ -10,7 +23,128 @@ const DEFAULT_SETTINGS: StudySettings = {
 };
 
 export const Storage = {
+  // Flashcards
+  getFlashcards(): Flashcard[] {
+    try {
+      const data = localStorage.getItem("studytube_flashcards");
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  saveFlashcards(flashcards: Flashcard[]) {
+    localStorage.setItem("studytube_flashcards", JSON.stringify(flashcards));
+  },
+
+  saveFlashcard(card: Flashcard) {
+    const cards = this.getFlashcards();
+    const index = cards.findIndex(c => c.id === card.id);
+    if (index > -1) {
+      cards[index] = card;
+    } else {
+      cards.unshift(card);
+    }
+    this.saveFlashcards(cards);
+  },
+
+  deleteFlashcard(id: string) {
+    const cards = this.getFlashcards().filter(c => c.id !== id);
+    this.saveFlashcards(cards);
+  },
+
+  // Study Plans / Homework Tasks
+  getStudyPlans(): StudyPlanItem[] {
+    try {
+      const data = localStorage.getItem("studytube_study_plans");
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  saveStudyPlans(plans: StudyPlanItem[]) {
+    localStorage.setItem("studytube_study_plans", JSON.stringify(plans));
+  },
+
+  saveStudyPlan(plan: StudyPlanItem) {
+    const plans = this.getStudyPlans();
+    const index = plans.findIndex(p => p.id === plan.id);
+    if (index > -1) {
+      plans[index] = plan;
+    } else {
+      plans.unshift(plan);
+    }
+    this.saveStudyPlans(plans);
+  },
+
+  deleteStudyPlan(id: string) {
+    const plans = this.getStudyPlans().filter(p => p.id !== id);
+    this.saveStudyPlans(plans);
+  },
+
+  // Course Folders (e.g. "Algorithms", "Machine Learning")
+  getCourseFolders(): CourseFolder[] {
+    try {
+      const data = localStorage.getItem("studytube_course_folders");
+      return data ? JSON.parse(data) : [
+        { id: "c1", name: "Computer Science", color: "blue", playlistIds: [], singleVideoIds: [] },
+        { id: "c2", name: "Mathematics & Physics", color: "purple", playlistIds: [], singleVideoIds: [] },
+        { id: "c3", name: "General Engineering", color: "emerald", playlistIds: [], singleVideoIds: [] }
+      ];
+    } catch {
+      return [];
+    }
+  },
+
+  saveCourseFolders(folders: CourseFolder[]) {
+    localStorage.setItem("studytube_course_folders", JSON.stringify(folders));
+  },
+
+  // PDF Documents
+  getPDFDocuments(): PDFDocument[] {
+    try {
+      const data = localStorage.getItem("studytube_pdf_docs");
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  savePDFDocument(pdf: PDFDocument) {
+    const docs = this.getPDFDocuments();
+    
+    // Save heavy file contents to IndexedDB
+    const heavyData = pdf.fileDataUrl || pdf.fileData;
+    if (heavyData) {
+      PdfDb.savePdfFile(pdf.id, heavyData).catch(err => {
+        console.error("Failed to background-save PDF content to IndexedDB", err);
+      });
+    }
+
+    // Strip out heavy content for localStorage
+    const { fileData, fileDataUrl, ...metadataOnly } = pdf;
+
+    const index = docs.findIndex(d => d.id === pdf.id);
+    if (index > -1) {
+      docs[index] = metadataOnly;
+    } else {
+      docs.unshift(metadataOnly);
+    }
+    localStorage.setItem("studytube_pdf_docs", JSON.stringify(docs));
+  },
+
+  deletePDFDocument(id: string) {
+    const docs = this.getPDFDocuments().filter(d => d.id !== id);
+    localStorage.setItem("studytube_pdf_docs", JSON.stringify(docs));
+    // Also delete from IndexedDB
+    PdfDb.deletePdfFile(id).catch(err => {
+      console.error("Failed to delete PDF from IndexedDB", err);
+    });
+  },
+
   // Playlists (contains lists of playlists fetched and saved)
+
   getPlaylists(): PlaylistInfo[] {
     try {
       const data = localStorage.getItem("studytube_playlists");
@@ -158,6 +292,34 @@ export const Storage = {
     localStorage.setItem("studytube_study_logs", JSON.stringify(logs));
   },
 
+  saveStudyLogs(logs: any[]) {
+    localStorage.setItem("studytube_study_logs", JSON.stringify(logs));
+  },
+
+  toggleDateStudied(dateStr: string, studyMinutes: number = 60) {
+    const logs = this.getStudyLogs();
+    const dateLogs = logs.filter(l => l.date === dateStr);
+    const totalSeconds = dateLogs.reduce((acc, curr) => acc + curr.secondsStudied, 0);
+    
+    if (totalSeconds >= 3600) {
+      // It is studied, let's remove logs for this date to mark it as unstudied/rest day
+      const updatedLogs = logs.filter(l => l.date !== dateStr);
+      this.saveStudyLogs(updatedLogs);
+      return false;
+    } else {
+      // It is not studied, let's add a manual log for 60 mins (3600 secs)
+      const neededSeconds = (studyMinutes * 60) - totalSeconds;
+      logs.push({
+        date: dateStr,
+        secondsStudied: neededSeconds > 0 ? neededSeconds : 3600,
+        videoId: "manual",
+        videoTitle: "Manual/Quick Study Session"
+      });
+      this.saveStudyLogs(logs);
+      return true;
+    }
+  },
+
   // Settings
   getSettings(): StudySettings {
     try {
@@ -170,6 +332,36 @@ export const Storage = {
 
   saveSettings(settings: StudySettings) {
     localStorage.setItem("studytube_settings", JSON.stringify(settings));
+  },
+
+  // Custom Subjects with Chapter-wise Lectures
+  getCustomSubjects(): CustomSubjectFolder[] {
+    try {
+      const data = localStorage.getItem("studytube_custom_subjects");
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  saveCustomSubjects(subjects: CustomSubjectFolder[]) {
+    localStorage.setItem("studytube_custom_subjects", JSON.stringify(subjects));
+  },
+
+  saveCustomSubject(subject: CustomSubjectFolder) {
+    const subjects = this.getCustomSubjects();
+    const idx = subjects.findIndex((s) => s.id === subject.id);
+    if (idx > -1) {
+      subjects[idx] = subject;
+    } else {
+      subjects.unshift(subject);
+    }
+    this.saveCustomSubjects(subjects);
+  },
+
+  deleteCustomSubject(id: string) {
+    const subjects = this.getCustomSubjects().filter((s) => s.id !== id);
+    this.saveCustomSubjects(subjects);
   },
 
   // Favorites (list of favorites, can be playlist ID or video ID)
@@ -222,6 +414,20 @@ export const Storage = {
     }
     
     return isFavNow;
+  },
+
+  clearFavorites(): void {
+    localStorage.setItem("studytube_favorites", JSON.stringify({ playlists: [], videos: [] }));
+    const playlists = this.getPlaylists().map(p => ({ ...p, isFavorite: false }));
+    this.savePlaylists(playlists);
+    const vids = this.getSingleVideos().map(v => ({ ...v, isFavorite: false }));
+    this.saveSingleVideos(vids);
+  },
+
+  clearWatchHistory(): void {
+    this.savePlaylists([]);
+    this.saveSingleVideos([]);
+    this.clearFavorites();
   },
 
   // Streaks calculation
@@ -343,5 +549,12 @@ export const Storage = {
     localStorage.removeItem("studytube_study_logs");
     localStorage.removeItem("studytube_favorites");
     localStorage.removeItem("studytube_settings");
+    localStorage.removeItem("studytube_pdf_docs");
+    localStorage.removeItem("studytube_study_plans");
+    localStorage.removeItem("studytube_flashcards");
+    localStorage.removeItem("studytube_custom_subjects");
+    localStorage.removeItem("studytube_course_folders");
+    localStorage.removeItem("studytube_target_hours");
+    PdfDb.clearAllPdfFiles().catch(err => console.error("Failed to clear PDF DB", err));
   }
 };

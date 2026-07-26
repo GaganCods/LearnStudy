@@ -3,7 +3,8 @@ import { Storage } from "../utils/storage";
 import { useToast } from "./ToastContext";
 import { 
   FileText, Save, CheckCircle, Bold, Italic, Heading1, 
-  List, Code, CheckSquare, Download, Clipboard, Sparkles 
+  List, Code, CheckSquare, Download, Clipboard, Sparkles,
+  ChevronDown, ChevronRight, Trash2
 } from "lucide-react";
 
 interface InteractiveNotesProps {
@@ -16,6 +17,7 @@ export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps)
   const [noteText, setNoteText] = useState("");
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "idle">("idle");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   // Load notes when video changes
   useEffect(() => {
@@ -126,10 +128,14 @@ export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps)
   const wordCount = noteText.trim() === "" ? 0 : noteText.trim().split(/\s+/).length;
 
   return (
-    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl flex flex-col h-[400px] shadow-sm">
+    <div className={`bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl flex flex-col shadow-sm transition-all duration-300 ${isCollapsed ? "h-auto" : "h-[400px]"}`}>
       {/* Header Toolbar */}
-      <div className="p-3 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between flex-wrap gap-2">
+      <div 
+        onClick={() => setIsCollapsed(!isCollapsed)}
+        className="p-3 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between flex-wrap gap-2 cursor-pointer hover:bg-slate-50/50 dark:hover:bg-zinc-950/25 transition-colors select-none rounded-t-2xl"
+      >
         <div className="flex items-center gap-2">
+          {isCollapsed ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
           <FileText className="w-4 h-4 text-blue-500" />
           <span className="text-xs font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider">
             Lecture Notes
@@ -140,7 +146,7 @@ export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps)
         </div>
 
         {/* Action icons / Saved indicators */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
           {saveStatus === "saving" && (
             <span className="text-[10px] text-slate-400 flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
@@ -156,6 +162,16 @@ export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps)
           
           <div className="flex gap-1">
             <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent("studytube-improve-notes", { detail: { noteText } }));
+              }}
+              title="Restructure and expand notes with AI"
+              className="p-1.5 hover:bg-indigo-50/50 dark:hover:bg-zinc-800/50 rounded text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-extrabold flex items-center gap-1 transition text-xs mr-1"
+            >
+              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+              <span>Improve</span>
+            </button>
+            <button
               onClick={() => handleExport("md")}
               title="Download Markdown (.md)"
               className="p-1.5 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded text-slate-500 dark:text-zinc-400 hover:text-slate-900 transition"
@@ -169,9 +185,24 @@ export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps)
             >
               <Clipboard className="w-3.5 h-3.5" />
             </button>
+            <button
+              onClick={() => {
+                setNoteText("");
+                Storage.saveNoteForVideo(videoId, "");
+                setSaveStatus("saved");
+                toast.success("Notes Cleared", "Lecture notes have been deleted.");
+              }}
+              title="Clear Notes"
+              className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded text-slate-500 hover:text-red-500 dark:text-zinc-400 dark:hover:text-red-400 transition cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       </div>
+
+      {!isCollapsed && (
+        <>
 
       {/* Formatting bar */}
       <div className="px-3 py-1.5 bg-slate-50 dark:bg-zinc-950 border-b border-slate-200 dark:border-zinc-800 flex items-center gap-1 overflow-x-auto select-none">
@@ -236,6 +267,8 @@ export function InteractiveNotes({ videoId, videoTitle }: InteractiveNotesProps)
         <Sparkles className="w-3 h-3 text-blue-400" />
         <span>Press Bold/Italic tools to format selected text block.</span>
       </div>
-    </div>
+    </>
+  )}
+</div>
   );
 }

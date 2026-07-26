@@ -1,0 +1,296 @@
+import React from "react";
+import { 
+  Sparkles, Flame, Clock, BookOpen, Brain, Award, 
+  TrendingUp, Cloud, Plus, FileText, Timer, ArrowUpRight
+} from "lucide-react";
+import { Storage } from "../utils/storage";
+import { ActiveTab } from "../types";
+
+interface PersonalDashboardProps {
+  user?: any;
+  onOpenAuth?: () => void;
+  setActiveTab?: (tab: ActiveTab) => void;
+}
+
+export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({ 
+  user, 
+  onOpenAuth, 
+  setActiveTab 
+}) => {
+  const stats = Storage.getStreakStats();
+  const flashcards = Storage.getFlashcards();
+  const studyLogs = Storage.getStudyLogs();
+  
+  const totalSeconds = studyLogs.reduce((acc, l) => acc + (l.secondsStudied || 0), 0);
+  const totalHours = (totalSeconds / 3600).toFixed(1);
+  const totalMins = Math.round(totalSeconds / 60);
+  const level = Math.floor(totalMins / 120) + 1;
+
+  const plannerTargetHours = Number(localStorage.getItem("studytube_target_hours")) || 3;
+  const plans = Storage.getStudyPlans();
+  const completedPlans = plans.filter(p => p.completed && !p.skipped).length;
+  const totalPlans = plans.filter(p => !p.skipped).length;
+
+  const todayStr = new Date().toLocaleDateString("en-CA");
+  const todaySeconds = studyLogs.filter(log => log.date === todayStr).reduce((acc, l) => acc + (l.secondsStudied || 0), 0);
+  const todayHours = (todaySeconds / 3600).toFixed(1);
+  const todayProgressPercent = plannerTargetHours > 0 ? Math.min(100, Math.round((todaySeconds / 3600) / plannerTargetHours * 100)) : 0;
+
+  const now = new Date();
+  const oneWeekAgo = new Date();
+  oneWeekAgo.setDate(now.getDate() - 7);
+  const daysStudiedThisWeek = stats.datesStudied.filter(dStr => {
+    const d = new Date(dStr);
+    return d >= oneWeekAgo && d <= now;
+  }).length;
+
+  const displayName = user?.displayName || user?.email?.split("@")[0] || "Student";
+
+  return (
+    <div className="relative overflow-hidden bg-[#09090B] border border-[rgba(255,255,255,0.06)] rounded-3xl p-6 md:p-8 text-[#F8F8F8] shadow-[0_8px_30px_rgb(0,0,0,0.6)] animate-in fade-in slide-in-from-bottom-4 duration-500 text-left">
+      {/* Soft radial glow with orange lighting */}
+      <div className="absolute top-0 left-1/4 -translate-y-1/2 w-[400px] h-[400px] bg-[#FF6A00]/10 rounded-full blur-[110px] pointer-events-none" />
+      <div className="absolute bottom-0 right-1/4 translate-y-1/2 w-[300px] h-[300px] bg-emerald-500/5 rounded-full blur-[90px] pointer-events-none" />
+      
+      {/* Grid background pattern */}
+      <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.012)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.012)_1px,transparent_1px)] bg-[size:32px_32px] pointer-events-none opacity-45" />
+
+      {/* Lighting accent border */}
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(255,106,0,0.2)] to-transparent" />
+
+      <div className="relative z-10 flex flex-col lg:grid lg:grid-cols-12 gap-8 items-start lg:items-center">
+        {/* Left Section (Heading & Badges) - Col Span 8 */}
+        <div className="space-y-4 lg:col-span-8 text-left w-full">
+          {/* Workspace badge */}
+          <div className="inline-flex items-center gap-1.5 bg-[#111113] border border-[rgba(255,255,255,0.06)] px-3 py-1 rounded-full text-[11px] font-semibold text-zinc-400 uppercase tracking-widest">
+            <Sparkles className="w-3.5 h-3.5 text-[#FF6A00] fill-[#FF6A00]" />
+            <span>LearnStudy Workspace</span>
+          </div>
+
+          <div className="space-y-2">
+            <h1 className="text-2xl md:text-3xl lg:text-4xl font-extrabold tracking-tight text-[#F8F8F8] leading-tight">
+              Welcome back, <span className="text-[#FF6A00] font-black">{displayName}</span> 👋
+            </h1>
+            <div className="text-sm md:text-base text-zinc-400 font-medium leading-relaxed max-w-xl">
+              Ready to continue today's study session?
+              <p className="text-zinc-500 text-xs md:text-sm mt-1">
+                Import lectures, review flashcards, track focus hours, and stay consistent.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Section (Compact Account Panel) - Col Span 4 */}
+        <div className="lg:col-span-4 w-full">
+          <div className="bg-[#111113] border border-[rgba(255,255,255,0.06)] rounded-2xl p-4 w-full md:max-w-[320px] lg:ml-auto space-y-3.5 shadow-lg relative overflow-hidden group">
+            {/* Left orange bar indicator */}
+            <div className="absolute top-0 left-0 w-1 h-full bg-[#FF6A00]/40 group-hover:bg-[#FF6A00] transition-colors duration-300" />
+            
+            <div className="flex items-center gap-3 pl-1.5">
+              <div className="w-10 h-10 rounded-xl bg-[#FF6A00] text-white font-black flex items-center justify-center text-base shadow-[0_0_12px_rgba(255,106,0,0.3)] shrink-0">
+                {displayName[0].toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-xs font-black text-[#F8F8F8] truncate">{displayName}</h4>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  {user ? (
+                    <>
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#22C55E] animate-ping" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#22C55E]" />
+                      <span className="text-[10px] font-bold text-zinc-400 pl-1">Cloud Synced</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-1.5 h-1.5 rounded-full bg-zinc-600" />
+                      <span className="text-[10px] font-bold text-zinc-500">Local Space</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Cloud detail statistics */}
+            <div className="grid grid-cols-2 gap-2 bg-[#09090B]/60 border border-[rgba(255,255,255,0.03)] rounded-xl p-2.5 pl-3 text-[11px]">
+              <div>
+                <span className="text-zinc-500 block text-[9px] uppercase tracking-wider font-bold">Plan Type</span>
+                <span className="text-[#FF6A00] font-bold flex items-center gap-0.5">
+                  <Sparkles className="w-2.5 h-2.5 fill-[#FF6A00]" />
+                  Premium
+                </span>
+              </div>
+              <div>
+                <span className="text-zinc-500 block text-[9px] uppercase tracking-wider font-bold">Last Synced</span>
+                <span className="text-zinc-300 font-semibold">{user ? "Just now" : "Not backed up"}</span>
+              </div>
+            </div>
+
+            {/* Enable Cloud Sync prompt */}
+            {!user && (
+              <button
+                onClick={onOpenAuth}
+                className="w-full py-2 px-3 rounded-xl bg-[#FF6A00] hover:bg-[#FF8C00] text-white text-[11px] font-extrabold transition-all duration-200 flex items-center justify-center gap-1.5 active:scale-95 shadow-lg shadow-[#FF6A00]/10"
+              >
+                <Cloud className="w-3.5 h-3.5" />
+                Enable Cloud Backup
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 3 compact statistics glass cards with micro-visualizations */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-8">
+        {/* Card 1: Streak */}
+        <div className="bg-[#111113] border border-[rgba(255,255,255,0.06)] rounded-2xl p-4 h-[110px] flex flex-col justify-between hover:-translate-y-1 hover:border-[#FF6A00]/40 hover:shadow-[0_4px_20px_rgba(255,106,0,0.08)] transition-all duration-250 group cursor-pointer shadow-md">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Current Streak</span>
+            <div className="p-1.5 bg-[#FF6A00]/10 rounded-lg text-[#FF6A00] group-hover:scale-110 transition-transform">
+              <Flame className="w-4 h-4 fill-[#FF6A00]" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between">
+            <div className="text-left">
+              <span className="text-2xl font-black text-[#F8F8F8] tracking-tight">{stats.current} {stats.current === 1 ? "Day" : "Days"}</span>
+              <span className="text-[10px] text-[#22C55E] block mt-0.5 font-bold flex items-center gap-0.5">
+                <TrendingUp className="w-3 h-3" />
+                ↑ {daysStudiedThisWeek} {daysStudiedThisWeek === 1 ? "day" : "days"} this week
+              </span>
+            </div>
+            
+            {/* Heatmap Dots visualizer */}
+            <div className="flex gap-1 mb-1 bg-[#09090B]/85 px-2 py-1.5 rounded-lg border border-[rgba(255,255,255,0.03)] shrink-0">
+              {[...Array(7)].map((_, i) => (
+                <div 
+                  key={i} 
+                  className={`w-1.5 h-1.5 rounded-full ${i < Math.min(stats.current, 7) || i < 4 ? "bg-[#FF6A00] shadow-[0_0_6px_rgba(255,106,0,0.4)]" : "bg-zinc-800"}`} 
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Card 2: Focus Hours */}
+        <div 
+          className="bg-[#111113] border border-[rgba(255,255,255,0.06)] rounded-2xl p-4 h-[110px] flex flex-col justify-between hover:border-[rgba(255,255,255,0.12)] transition-all duration-250 group shadow-md"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Focus Hours</span>
+            <div className="p-1.5 bg-sky-500/10 rounded-lg text-sky-400 group-hover:scale-110 transition-transform">
+              <Clock className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between w-full">
+            <div className="w-full text-left">
+              <div className="flex items-baseline justify-between w-full">
+                <span className="text-2xl font-black text-[#F8F8F8] tracking-tight">{todayHours}h <span className="text-[10px] text-zinc-500 font-bold">today</span></span>
+                <span className="text-[10px] text-zinc-400 font-extrabold bg-zinc-900 px-1.5 py-0.5 rounded border border-[rgba(255,255,255,0.03)]">Goal: {plannerTargetHours}h</span>
+              </div>
+              <span className="text-[10px] text-zinc-500 block mt-0.5 font-bold flex items-center justify-between">
+                <span>{todayProgressPercent}% reached • {totalHours}h total</span>
+                {totalPlans > 0 ? (
+                  <span className="text-[#FF6A00] font-extrabold text-[9px] uppercase tracking-wider">Tasks: {completedPlans}/{totalPlans}</span>
+                ) : (
+                  <span className="text-zinc-600 font-bold text-[9px] uppercase tracking-wider">No plans today</span>
+                )}
+              </span>
+              {/* Mini progress bar */}
+              <div className="w-full bg-zinc-900 h-1 rounded-full overflow-hidden mt-1.5">
+                <div 
+                  className="bg-[#FF6A00] h-full rounded-full transition-all duration-500 shadow-[0_0_6px_rgba(255,106,0,0.3)]" 
+                  style={{ width: `${todayProgressPercent}%` }} 
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 3: Saved Cards */}
+        <div className="bg-[#111113] border border-[rgba(255,255,255,0.06)] rounded-2xl p-4 h-[110px] flex flex-col justify-between hover:-translate-y-1 hover:border-[#FF6A00]/40 hover:shadow-[0_4px_20px_rgba(255,106,0,0.08)] transition-all duration-250 group cursor-pointer shadow-md">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Flashcards</span>
+            <div className="p-1.5 bg-purple-500/10 rounded-lg text-purple-400 group-hover:scale-110 transition-transform">
+              <Brain className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-end justify-between">
+            <div className="text-left">
+              <span className="text-2xl font-black text-[#F8F8F8] tracking-tight">{flashcards.length} Cards</span>
+              <span className="text-[10px] text-zinc-500 block mt-0.5 font-bold">
+                Smart spacing active
+              </span>
+            </div>
+            
+            {/* Tiny progress ring */}
+            <div className="mb-0.5 bg-[#09090B]/85 p-1.5 rounded-lg border border-[rgba(255,255,255,0.03)] shrink-0">
+              <svg className="w-6 h-6 transform -rotate-90 text-[#FF6A00]" viewBox="0 0 20 20">
+                <circle cx="10" cy="10" r="8" className="stroke-zinc-800" strokeWidth="2" fill="none" />
+                <circle cx="10" cy="10" r="8" className="stroke-[#FF6A00]" strokeWidth="2" fill="none" strokeDasharray="50" strokeDashoffset={flashcards.length > 0 ? "15" : "38"} />
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Horizontal Command Quick Actions Menu */}
+      <div className="mt-8 border-t border-[rgba(255,255,255,0.06)] pt-6">
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-[11px] font-extrabold text-zinc-500 uppercase tracking-widest">Quick Commands</span>
+          <div className="h-px bg-[rgba(255,255,255,0.06)] flex-1" />
+        </div>
+        
+        <div className="flex flex-wrap gap-2.5">
+          <button
+            onClick={() => {
+              const input = document.getElementById("youtube-url-input");
+              if (input) {
+                input.focus();
+                input.scrollIntoView({ behavior: "smooth", block: "center" });
+              }
+            }}
+            className="group relative flex items-center gap-2 px-4 py-2.5 bg-[#111113] border border-[rgba(255,255,255,0.06)] hover:border-[#FF6A00]/40 text-zinc-300 hover:text-white rounded-xl text-xs font-bold shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_4px_12px_rgba(255,106,0,0.12)] cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5 text-[#FF6A00]" />
+            <span>Import Playlist</span>
+            <ArrowUpRight className="w-3 h-3 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+          </button>
+
+          <button
+            onClick={() => setActiveTab?.("pdf")}
+            className="group relative flex items-center gap-2 px-4 py-2.5 bg-[#111113] border border-[rgba(255,255,255,0.06)] hover:border-[#FF6A00]/40 text-zinc-300 hover:text-white rounded-xl text-xs font-bold shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_4px_12px_rgba(255,106,0,0.12)] cursor-pointer"
+          >
+            <FileText className="w-3.5 h-3.5 text-[#FF6A00]" />
+            <span>Open PDF</span>
+            <ArrowUpRight className="w-3 h-3 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+          </button>
+
+          <button
+            onClick={() => setActiveTab?.("library")}
+            className="group relative flex items-center gap-2 px-4 py-2.5 bg-[#111113] border border-[rgba(255,255,255,0.06)] hover:border-[#FF6A00]/40 text-zinc-300 hover:text-white rounded-xl text-xs font-bold shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_4px_12px_rgba(255,106,0,0.12)] cursor-pointer"
+          >
+            <BookOpen className="w-3.5 h-3.5 text-[#FF6A00]" />
+            <span>Course Library</span>
+            <ArrowUpRight className="w-3 h-3 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+          </button>
+
+          <button
+            onClick={() => setActiveTab?.("planner")}
+            className="group relative flex items-center gap-2 px-4 py-2.5 bg-[#111113] border border-[rgba(255,255,255,0.06)] hover:border-[#FF6A00]/40 text-zinc-300 hover:text-white rounded-xl text-xs font-bold shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_4px_12px_rgba(255,106,0,0.12)] cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#FF6A00]" />
+            <span>AI Planner</span>
+            <ArrowUpRight className="w-3 h-3 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+          </button>
+
+          <button
+            onClick={() => setActiveTab?.("pomodoro")}
+            className="group relative flex items-center gap-2 px-4 py-2.5 bg-[#111113] border border-[rgba(255,255,255,0.06)] hover:border-[#FF6A00]/40 text-zinc-300 hover:text-white rounded-xl text-xs font-bold shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_4px_12px_rgba(255,106,0,0.12)] cursor-pointer"
+          >
+            <Timer className="w-3.5 h-3.5 text-[#FF6A00]" />
+            <span>Focus Mode</span>
+            <ArrowUpRight className="w-3 h-3 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};

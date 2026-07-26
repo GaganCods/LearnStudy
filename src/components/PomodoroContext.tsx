@@ -24,13 +24,16 @@ interface PomodoroContextType {
   skipSession: () => void;
   addMinute: () => void;
   subMinute: () => void;
-  selectPreset: (name: "pomodoro" | "long" | "deep" | "quick" | "custom") => void;
+  selectPreset: (name: string) => void;
   updateGoals: (daily: number, weekly: number, monthly: number) => Promise<void>;
   deleteHistory: (id: string) => Promise<void>;
   clearHistory: () => Promise<void>;
   exportHistory: () => void;
   activeVideoInfo: { playlistTitle?: string; lectureTitle?: string } | null;
   setActiveVideoInfo: (info: { playlistTitle?: string; lectureTitle?: string } | null) => void;
+  isAlarmRinging: boolean;
+  stopAlarm: () => void;
+  snoozeAlarm: (mins: number) => void;
 }
 
 const PomodoroContext = createContext<PomodoroContextType | undefined>(undefined);
@@ -57,8 +60,27 @@ export const PomodoroProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Currently studied lecture details passed from player
   const [activeVideoInfo, setActiveVideoInfo] = useState<{ playlistTitle?: string; lectureTitle?: string } | null>(null);
 
+  
+  // Background sound effect
+  useEffect(() => {
+    if (activeState && !activeState.isPaused && activeState.mode !== "focus") {
+      if (settings && settings.backgroundSound && settings.backgroundSound !== "none") {
+        import("../utils/pomodoroSounds").then(({ startBackgroundSound }) => {
+          startBackgroundSound(settings.backgroundSound, settings.backgroundVolume);
+        });
+      }
+    } else {
+      import("../utils/pomodoroSounds").then(({ stopBackgroundSound }) => {
+        stopBackgroundSound();
+      });
+    }
+  }, [activeState?.isPaused, activeState?.mode, settings?.backgroundSound, settings?.backgroundVolume]);
+
   // References for the timestamp countdown
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const alarmRef = useRef<NodeJS.Timeout | null>(null);
+  const alarmTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isAlarmRinging, setIsAlarmRinging] = useState(false);
   const endTimeRef = useRef<number | null>(null);
 
   // Load initial data from IndexedDB
@@ -129,9 +151,62 @@ export const PomodoroProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   activeStateRef.current = activeState;
 
   // Sound play helper
-  const playAlert = (type: string) => {
+
+  const snoozeAlarm = (mins: number) => {
+    stopAlarm();
+    if (!activeState) return;
+    const newState = {
+      ...activeState,
+      isPaused: false,
+      remainingMs: activeState.remainingMs + (mins * 60 * 1000),
+      lastTimestamp: Date.now()
+    };
+    setActiveState(newState);
+    endTimeRef.current = Date.now() + newState.remainingMs;
+  };
+
+  const stopAlarm = () => {
+    if (alarmRef.current) clearInterval(alarmRef.current);
+    if (alarmTimeoutRef.current) clearTimeout(alarmTimeoutRef.current);
+    alarmRef.current = null;
+    alarmTimeoutRef.current = null;
+    setIsAlarmRinging(false);
+  };
+
+  const triggerAlarm = (isFocus: boolean) => {
     if (!settings) return;
-    playPomodoroSound(type, settings.volume);
+    stopAlarm();
+    
+    if (settings.voiceReminders) {
+      import("../utils/pomodoroSounds").then(({ speakVoiceReminder }) => {
+        speakVoiceReminder(isFocus ? "Study session completed." : "Break is over. Time to focus.");
+      });
+    }
+
+    import("../utils/pomodoroSounds").then(({ playPomodoroSound }) => {
+      playPomodoroSound(settings.notificationSound, settings.volume);
+      
+      if (settings.loopAlarm !== "off" && settings.loopAlarm !== "once") {
+        setIsAlarmRinging(true);
+        let intervalSecs = settings.loopInterval || 5;
+        if (settings.loopAlarm === "until_stopped") intervalSecs = 5;
+        
+        alarmRef.current = setInterval(() => {
+          playPomodoroSound(settings.notificationSound, settings.volume);
+          if (settings.enableVibration) triggerVibration();
+        }, intervalSecs * 1000);
+        
+        let maxDur = settings.maxRepeatDuration || 30;
+        if (settings.autoStopAlarm === 30) maxDur = 30;
+        else if (settings.autoStopAlarm === 60) maxDur = 60;
+        
+        if (settings.autoStopAlarm !== "never" && settings.autoStopAlarm !== "one_ring") {
+          alarmTimeoutRef.current = setTimeout(() => {
+            stopAlarm();
+          }, maxDur * 1000);
+        }
+      }
+    });
   };
 
   // Browser notification helper
@@ -237,7 +312,7 @@ export const PomodoroProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const isFocus = stateOnCompletion.mode === "focus";
     const durationMins = isFocus ? currentSettings.focusDuration : (stateOnCompletion.mode === "shortBreak" ? currentSettings.shortBreakDuration : currentSettings.longBreakDuration);
 
-    playAlert(currentSettings.notificationSound);
+    triggerAlarm(isFocus);
     triggerVibration();
 
     // Browser Notification & Toast
@@ -307,6 +382,9 @@ export const PomodoroProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (nextIndex >= currentSettings.sessionsBeforeLongBreak) {
           nextMode = "longBreak";
           nextIndex = 1;
+          import("canvas-confetti").then((confetti) => {
+            confetti.default({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+          });
         } else {
           nextMode = "shortBreak";
           nextIndex = nextIndex + 1;
@@ -496,19 +574,29 @@ export const PomodoroProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   };
 
-  const selectPreset = (name: "pomodoro" | "long" | "deep" | "quick" | "custom") => {
+  const selectPreset = (name: string) => {
     if (!settings) return;
     let focus = 25, short = 5, long = 15;
-    if (name === "long") { focus = 50; short = 10; long = 20; }
-    else if (name === "deep") { focus = 90; short = 20; long = 30; }
-    else if (name === "quick") { focus = 15; short = 3; long = 10; }
+    if (name === "50/10") { focus = 50; short = 10; long = 20; }
+    else if (name === "60/15") { focus = 60; short = 15; long = 20; }
+    else if (name === "90/20") { focus = 90; short = 20; long = 30; }
     else if (name === "custom") { focus = settings.focusDuration; short = settings.shortBreakDuration; long = settings.longBreakDuration; }
+    else {
+      // Find custom preset
+      const customPreset = settings.customPresets?.find(p => p.id === name);
+      if (customPreset) {
+        focus = customPreset.focusDuration;
+        short = customPreset.shortBreakDuration;
+        long = customPreset.longBreakDuration;
+      }
+    }
 
-    const updatedSettings = {
+        const updatedSettings = {
       ...settings,
       focusDuration: focus,
       shortBreakDuration: short,
       longBreakDuration: long,
+      selectedPresetId: name,
     };
 
     setSettings(updatedSettings);

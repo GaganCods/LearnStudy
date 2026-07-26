@@ -1,147 +1,20 @@
-import React, { useState, useMemo } from "react";
-import { usePomodoro } from "./PomodoroContext";
+const fs = require('fs');
+let code = fs.readFileSync('src/components/PomodoroTimer.tsx', 'utf8');
 
-import { playPomodoroSound } from "../utils/pomodoroSounds";
-import { PomodoroSettingsPanel } from "./PomodoroSettingsPanel";
-import { Clock, 
-  Play, Pause, RotateCcw, ChevronRight, SkipForward, Plus, Minus,
-  Maximize2, Minimize2, Settings, BarChart2, History, Award, 
-  Flame, Volume2, Bell, AlertTriangle, Search, Trash2, Download, 
-  Sparkles, CheckCircle, Smartphone, ExternalLink, Moon, HelpCircle
-} from "lucide-react";
-import { 
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid 
-} from "recharts";
-
-export function PomodoroTimer() {
-  const {
-    settings,
-    activeState,
-    history,
-    stats,
-    isFullScreen,
-    isFloating,
-    setFullScreen,
-    setFloating,
-    updateSettings,
-    startTimer,
-    pauseTimer,
-    resetTimer,
-    skipSession,
-    addMinute,
-    subMinute,
-    selectPreset,
-    updateGoals,
-    deleteHistory,
-    clearHistory,
-    exportHistory,
-    activeVideoInfo,
-    isAlarmRinging,
-    stopAlarm,
-    snoozeAlarm
-  } = usePomodoro();
-
-  const [showSettingsSheet, setShowSettingsSheet] = useState(false);
-  const [activeSubTab, setActiveSubTab] = useState<"timer" | "stats" | "history" | "settings">("timer");
-  const [historySearch, setHistorySearch] = useState("");
-  const [historyFilter, setHistoryFilter] = useState<"all" | "completed" | "interrupted">("all");
-
-  // Timer values calculation
-
-  const builtinPresets = [
-    { id: "25/5", label: "25 / 5 (Classic)" },
-    { id: "50/10", label: "50 / 10" },
-    { id: "60/15", label: "60 / 15" },
-    { id: "90/20", label: "90 / 20" },
-    { id: "custom", label: "Custom Mode" }
-  ];
-  const selectedPresetLabel = builtinPresets.find(p => p.id === settings.selectedPresetId)?.label 
-      || settings.customPresets?.find(p => p.id === settings.selectedPresetId)?.name;
-
-  const totalDurationSeconds = activeState.durationMs / 1000;
-  const remainingSeconds = Math.ceil(activeState.remainingMs / 1000);
-  const elapsedSeconds = totalDurationSeconds - remainingSeconds;
+const renderStart = code.indexOf('  return (\n    <div className="max-w-5xl mx-auto');
+if (renderStart !== -1) {
+  let headerCode = code.substring(0, renderStart);
   
-  // Progress ratio (0 to 1) for the circular indicator
-  const progressRatio = totalDurationSeconds > 0 ? elapsedSeconds / totalDurationSeconds : 0;
-  // SVG Ring Calculations
-  const radius = 120;
-  const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference * (1 - progressRatio);
-
-  const formatTime = (seconds: number) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-
-    const pad = (num: number) => String(num).padStart(2, "0");
-
-    if (settings.countdownFormat === "HH:MM:SS" || hrs > 0) {
-      return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
-    }
-    return `${pad(mins)}:${pad(secs)}`;
-  };
-
-  // Recharts past 7 days focus minutes processing
-  const focusChartData = useMemo(() => {
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const result = [];
-    const today = new Date();
-
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(today.getDate() - i);
-      const dateStr = d.toLocaleDateString("en-CA");
-      const dayName = days[d.getDay()];
-
-      // Filter focus time from history for this date
-      const daysHistory = history.filter(h => h.date === dateStr);
-      const focusMins = daysHistory.reduce((acc, curr) => acc + curr.focusDuration, 0);
-      const breakMins = daysHistory.reduce((acc, curr) => acc + curr.breakDuration, 0);
-
-      result.push({
-        day: dayName,
-        date: dateStr.substring(5), // MM-DD format
-        "Focus Time": focusMins,
-        "Break Time": breakMins,
-      });
-    }
-    return result;
-  }, [history]);
-
-  // Goal percentage
-  const todayGoalPercent = Math.min(
-    100,
-    stats.dailyGoalMins > 0 ? Math.round((stats.totalFocusToday / stats.dailyGoalMins) * 100) : 0
-  );
-
-  // Filtered History
-  const filteredHistory = useMemo(() => {
-    return history.filter(item => {
-      const matchesSearch = 
-        (item.lectureTitle?.toLowerCase() || "").includes(historySearch.toLowerCase()) ||
-        (item.playlistTitle?.toLowerCase() || "").includes(historySearch.toLowerCase());
-      
-      if (historyFilter === "all") return matchesSearch;
-      if (historyFilter === "completed") return matchesSearch && item.completed;
-      if (historyFilter === "interrupted") return matchesSearch && !item.completed;
-      return matchesSearch;
-    });
-  }, [history, historySearch, historyFilter]);
-
-  // Handle auto-vibrate, test sounds
-  const handleTestSound = () => {
-    playPomodoroSound(settings.notificationSound, settings.volume);
-  };
-
-  // Active video studied reminder
-  const currentStudyingString = activeVideoInfo 
-    ? `${activeVideoInfo.lectureTitle} (${activeVideoInfo.playlistTitle || "Single Video"})`
-    : activeState.lectureTitle 
-    ? `${activeState.lectureTitle} (${activeState.playlistTitle || "Offline Video"})`
-    : null;
-
-  return (
+  // We need to add state for mobile settings sheet
+  if (!headerCode.includes('showSettingsSheet')) {
+    headerCode = headerCode.replace(
+      'const [activeSubTab, setActiveSubTab] = useState',
+      'const [showSettingsSheet, setShowSettingsSheet] = useState(false);\n  const [activeSubTab, setActiveSubTab] = useState'
+    );
+  }
+  
+  // Now I will append my own clean render block
+  const newRender = `  return (
     <div className="max-w-7xl mx-auto px-4 py-4 select-none" id="pomodoro-engine-dashboard">
       
       {/* Header Panel */}
@@ -160,11 +33,11 @@ export function PomodoroTimer() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setFloating(!isFloating)}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 ${
+            className={\`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 \${
               isFloating 
                 ? "bg-indigo-600 border-transparent text-white shadow-sm"
                 : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-700"
-            }`}
+            }\`}
             title="Toggle Floating Widget Overlay"
           >
             <Smartphone className="w-3.5 h-3.5" />
@@ -179,31 +52,36 @@ export function PomodoroTimer() {
             <Maximize2 className="w-4 h-4" />
           </button>
           
-
+          {/* Mobile settings toggle */}
+          <button
+            onClick={() => setShowSettingsSheet(true)}
+            className="lg:hidden p-2 bg-white border border-slate-200 rounded-xl text-slate-700 hover:bg-slate-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-700 transition"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
         {/* Main Content Area (Timer/Stats/History) */}
-        <div className="lg:col-span-12 space-y-6 max-w-4xl mx-auto w-full">
+        <div className="lg:col-span-8 space-y-6">
           
           {/* Sub Navigation */}
           <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
             {[
               { id: "timer", label: "Timer", icon: Clock },
               { id: "stats", label: "Statistics", icon: BarChart2 },
-              { id: "history", label: "History Log", icon: History },
-              { id: "settings", label: "Settings", icon: Settings }
+              { id: "history", label: "History Log", icon: History }
             ].map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveSubTab(tab.id as any)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold whitespace-nowrap transition border ${
+                className={\`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold whitespace-nowrap transition border \${
                   activeSubTab === tab.id 
                     ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
                     : "border-transparent text-slate-500 dark:text-zinc-400 hover:text-slate-800 dark:hover:text-zinc-200"
-                }`}
+                }\`}
               >
                 <tab.icon className="w-4 h-4" />
                 {tab.label}
@@ -215,10 +93,10 @@ export function PomodoroTimer() {
             <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800/80 rounded-3xl p-6 flex flex-col items-center justify-center text-center shadow-sm relative min-h-[460px]">
               {/* Session indicator */}
               <div className="absolute top-6 flex items-center gap-2 px-3 py-1 bg-slate-50 dark:bg-zinc-950 border border-slate-200/50 dark:border-zinc-800 rounded-full">
-                <span className={`w-2.5 h-2.5 rounded-full ${activeState.mode === "focus" ? "bg-orange-500 animate-pulse" : activeState.mode === "shortBreak" ? "bg-emerald-500 animate-ping" : "bg-blue-500"}`} />
+                <span className={\`w-2.5 h-2.5 rounded-full \${activeState.mode === "focus" ? "bg-orange-500 animate-pulse" : activeState.mode === "shortBreak" ? "bg-emerald-500 animate-ping" : "bg-blue-500"}\`} />
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-zinc-300">
                   {activeState.mode === "focus" 
-                    ? `Focus Session (${activeState.sessionIndex}/${settings.sessionsBeforeLongBreak})`
+                    ? \`Focus Session (\${activeState.sessionIndex}/\${settings.sessionsBeforeLongBreak})\`
                     : activeState.mode === "shortBreak" ? "Short Break" : "Long Break"
                   }
                 </span>
@@ -232,11 +110,11 @@ export function PomodoroTimer() {
                   {/* Progress Ring */}
                   <circle
                     cx="128" cy="128" r={radius}
-                    className={`${
+                    className={\`\${
                       activeState.mode === "focus" 
                         ? "stroke-orange-500" 
                         : activeState.mode === "shortBreak" ? "stroke-emerald-500" : "stroke-blue-500"
-                    }${activeState.isPaused ? " opacity-50" : ""} transition-all duration-1000 ease-linear`}
+                    }\${activeState.isPaused ? " opacity-50" : ""} transition-all duration-1000 ease-linear\`}
                     strokeWidth="8"
                     strokeLinecap="round"
                     fill="none"
@@ -246,11 +124,11 @@ export function PomodoroTimer() {
                 </svg>
 
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <div className={`text-5xl font-black tracking-tight font-mono transition-colors ${
+                  <div className={\`text-5xl font-black tracking-tight font-mono transition-colors \${
                       activeState.mode === "focus" 
                         ? "text-slate-900 dark:text-white" 
                         : activeState.mode === "shortBreak" ? "text-emerald-600 dark:text-emerald-400" : "text-blue-600 dark:text-blue-400"
-                    }`}>
+                    }\`}>
                     {formatTime(remainingSeconds)}
                   </div>
                   <div className="text-xs font-bold text-slate-400 mt-2 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -261,11 +139,6 @@ export function PomodoroTimer() {
               </div>
 
               {/* Controls */}
-              {selectedPresetLabel && (
-                <div className="mt-1 text-xs font-bold text-slate-500 dark:text-zinc-400 flex items-center justify-center gap-1.5 opacity-60">
-                  <Clock className="w-3.5 h-3.5" /> {selectedPresetLabel}
-                </div>
-              )}
               <div className="flex items-center gap-4 mt-2">
                 <button
                   onClick={subMinute}
@@ -277,11 +150,11 @@ export function PomodoroTimer() {
 
                 <button
                   onClick={activeState.isPaused ? startTimer : pauseTimer}
-                  className={`w-14 h-14 flex items-center justify-center rounded-full shadow-lg transition transform hover:scale-105 active:scale-95 ${
+                  className={\`w-14 h-14 flex items-center justify-center rounded-full shadow-lg transition transform hover:scale-105 active:scale-95 \${
                     activeState.isPaused
                       ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30"
                       : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-                  }`}
+                  }\`}
                 >
                   {activeState.isPaused ? <Play className="w-6 h-6 ml-1" /> : <Pause className="w-6 h-6" />}
                 </button>
@@ -311,12 +184,6 @@ export function PomodoroTimer() {
                   <SkipForward className="w-3.5 h-3.5" />
                 </button>
               </div>
-            </div>
-          )}
-
-                    {activeSubTab === "settings" && (
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4">
-              <PomodoroSettingsPanel />
             </div>
           )}
 
@@ -415,13 +282,13 @@ export function PomodoroTimer() {
                     <div key={item.id} className="p-3 rounded-xl border border-slate-100 dark:border-zinc-800/50 bg-slate-50/50 dark:bg-zinc-900/50 flex items-center justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          <span className={`w-2 h-2 rounded-full ${item.completed ? "bg-emerald-500" : "bg-amber-500"}`} />
+                          <span className={\`w-2 h-2 rounded-full \${item.completed ? "bg-emerald-500" : "bg-amber-500"}\`} />
                           <span className="text-xs font-bold text-slate-700 dark:text-zinc-300">{item.date} • {item.startTime} - {item.endTime}</span>
                         </div>
                         <div className="text-[11px] text-slate-500 dark:text-zinc-500 truncate">
                           Focus: <span className="font-semibold text-slate-600 dark:text-zinc-400">{item.focusDuration}m</span> | 
                           Break: <span className="font-semibold text-slate-600 dark:text-zinc-400">{item.breakDuration}m</span>
-                          {item.lectureTitle && ` | ${item.lectureTitle}`}
+                          {item.lectureTitle && \` | \${item.lectureTitle}\`}
                         </div>
                       </div>
                       <button onClick={() => deleteHistory(item.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition">
@@ -434,48 +301,40 @@ export function PomodoroTimer() {
             </div>
           )}
         </div>
-      </div>
 
-      {/* Smart Snooze Overlay */}
-      {isAlarmRinging && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-2xl max-w-sm w-full text-center relative overflow-hidden">
-            <div className="absolute inset-0 bg-indigo-500/10 dark:bg-indigo-500/5 animate-pulse" />
-            <div className="relative z-10">
-              <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/50 rounded-2xl flex items-center justify-center mx-auto mb-4 animate-bounce">
-                <Bell className="w-8 h-8 text-indigo-600 dark:text-indigo-400" />
+        {/* Desktop Side Panel Settings */}
+        <div className="hidden lg:block lg:col-span-4 h-full">
+          <div className="sticky top-6">
+            <PomodoroSettingsPanel />
+          </div>
+        </div>
+
+        {/* Mobile Settings Bottom Sheet */}
+        {showSettingsSheet && (
+          <div className="lg:hidden fixed inset-0 z-50 flex justify-center items-end">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowSettingsSheet(false)} />
+            <div className="w-full max-h-[85vh] bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl relative flex flex-col animate-in slide-in-from-bottom duration-300">
+              <div className="shrink-0 flex justify-center pt-3 pb-2">
+                <div className="w-12 h-1.5 bg-slate-200 dark:bg-zinc-700 rounded-full" />
               </div>
-              <h2 className="text-xl font-black text-slate-900 dark:text-zinc-50">Session Complete!</h2>
-              <p className="text-sm font-bold text-slate-500 dark:text-zinc-400 mt-2">
-                {selectedPresetLabel ? `Selected Preset: ${selectedPresetLabel}` : 'Time for your next step.'}
-              </p>
-              
-              <div className="flex flex-col gap-3 mt-6">
-                <button 
-                  onClick={() => stopAlarm()} 
-                  className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-500/30 transition text-sm"
-                >
-                  Stop Alarm
-                </button>
-                <div className="flex gap-3">
-                  <button 
-                    onClick={() => snoozeAlarm(1)} 
-                    className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 font-bold rounded-xl transition text-sm"
-                  >
-                    Snooze 1 min
-                  </button>
-                  <button 
-                    onClick={() => { stopAlarm(); skipSession(); }} 
-                    className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 font-bold rounded-xl transition text-sm"
-                  >
-                    Skip 
-                  </button>
-                </div>
+              <div className="shrink-0 px-6 pb-4 border-b border-slate-100 dark:border-zinc-800 flex justify-between items-center">
+                <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-100 flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-indigo-500" /> Settings
+                </h2>
+                <button onClick={() => setShowSettingsSheet(false)} className="text-sm font-bold text-indigo-600 dark:text-indigo-400">Done</button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 scrollbar-hide">
+                <PomodoroSettingsPanel />
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+      </div>
     </div>
   );
+}`;
+  
+  code = headerCode + newRender + '\n}\n';
+  fs.writeFileSync('src/components/PomodoroTimer.tsx', code);
 }
