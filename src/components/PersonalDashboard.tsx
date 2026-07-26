@@ -7,14 +7,10 @@ import { Storage } from "../utils/storage";
 import { ActiveTab } from "../types";
 
 interface PersonalDashboardProps {
-  user?: any;
-  onOpenAuth?: () => void;
   setActiveTab?: (tab: ActiveTab) => void;
 }
 
 export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({ 
-  user, 
-  onOpenAuth, 
   setActiveTab 
 }) => {
   const stats = Storage.getStreakStats();
@@ -44,7 +40,7 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
     return d >= oneWeekAgo && d <= now;
   }).length;
 
-  const displayName = user?.displayName || user?.email?.split("@")[0] || "Student";
+  const displayName = "Scholar";
 
   return (
     <div className="relative overflow-hidden bg-white dark:bg-[#09090B] border border-slate-200 dark:border-[rgba(255,255,255,0.06)] rounded-3xl p-6 md:p-8 text-slate-900 dark:text-[#F8F8F8] shadow-sm dark:shadow-[0_8px_30px_rgb(0,0,0,0.6)] animate-in fade-in slide-in-from-bottom-4 duration-500 text-left">
@@ -93,18 +89,8 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
               <div className="flex-1 min-w-0">
                 <h4 className="text-xs font-black text-slate-900 dark:text-[#F8F8F8] truncate">{displayName}</h4>
                 <div className="flex items-center gap-1.5 mt-0.5">
-                  {user ? (
-                    <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#22C55E] animate-ping" />
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#22C55E]" />
-                      <span className="text-[10px] font-bold text-slate-600 dark:text-zinc-400 pl-1">Cloud Synced</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-zinc-600" />
-                      <span className="text-[10px] font-bold text-slate-500 dark:text-zinc-500">Local Space</span>
-                    </>
-                  )}
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  <span className="text-[10px] font-bold text-slate-600 dark:text-zinc-400">Local Workspace Active</span>
                 </div>
               </div>
             </div>
@@ -119,21 +105,10 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
                 </span>
               </div>
               <div>
-                <span className="text-slate-500 dark:text-zinc-500 block text-[9px] uppercase tracking-wider font-bold">Last Synced</span>
-                <span className="text-slate-700 dark:text-zinc-300 font-semibold">{user ? "Just now" : "Not backed up"}</span>
+                <span className="text-slate-500 dark:text-zinc-500 block text-[9px] uppercase tracking-wider font-bold">Storage</span>
+                <span className="text-slate-700 dark:text-zinc-300 font-semibold">Local IndexedDB</span>
               </div>
             </div>
-
-            {/* Enable Cloud Sync prompt */}
-            {!user && (
-              <button
-                onClick={onOpenAuth}
-                className="w-full py-2 px-3 rounded-xl bg-[#FF6A00] hover:bg-[#FF8C00] text-white text-[11px] font-extrabold transition-all duration-200 flex items-center justify-center gap-1.5 active:scale-95 shadow-lg shadow-[#FF6A00]/10 cursor-pointer"
-              >
-                <Cloud className="w-3.5 h-3.5" />
-                Enable Cloud Backup
-              </button>
-            )}
           </div>
         </div>
       </div>

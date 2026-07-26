@@ -32,14 +32,12 @@ import { DeveloperProfile } from "./components/DeveloperProfile";
 import { DeveloperAvatar } from "./components/DeveloperAvatar";
 
 // LearnStudy 2.0 Platform Components
-import { AuthModal } from "./components/AuthModal";
 import { PersonalDashboard } from "./components/PersonalDashboard";
 import { CourseLibrary } from "./components/CourseLibrary";
 import { FlashcardsManager } from "./components/FlashcardsManager";
 import { StudyPlanner } from "./components/StudyPlanner";
 import { PDFStudyReader } from "./components/PDFStudyReader";
 import { StudyCalendar } from "./components/StudyCalendar";
-import { getCurrentUser, signOutUser, onAuthChange } from "./lib/firebase";
 
 declare global {
   interface Window {
@@ -293,20 +291,11 @@ export default function App() {
   const [settingsKeyTestLoading, setSettingsKeyTestLoading] = useState(false);
   const [settingsKeyTestResult, setSettingsKeyTestResult] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Firebase Auth state & Modal
-  const [authUser, setAuthUser] = useState<any>(getCurrentUser());
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showClearHistoryModal, setShowClearHistoryModal] = useState(false);
   const [showClearFavoritesModal, setShowClearFavoritesModal] = useState(false);
 
-  useEffect(() => {
-    const unsubscribe = onAuthChange((user) => {
-      setAuthUser(user);
-    });
-    return () => unsubscribe();
-  }, []);
+
 
   // Trigger Onboarding Modal on launch if no key exists
   useEffect(() => {
@@ -2614,43 +2603,30 @@ export default function App() {
 
             {/* Bottom Account Drawer Section */}
             <div className="p-3.5 border-t border-slate-100 dark:border-zinc-850 bg-slate-50/80 dark:bg-zinc-900/80 shrink-0">
-              {authUser ? (
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-black flex items-center justify-center text-xs shrink-0">
-                      {(authUser.displayName || authUser.email || "G")[0].toUpperCase()}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-black flex items-center justify-center text-xs shrink-0">
+                    S
+                  </div>
+                  <div className="truncate">
+                    <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
+                      Scholar Workspace
                     </div>
-                    <div className="truncate">
-                      <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
-                        {authUser.displayName || "Google User"}
-                      </div>
-                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
-                        <Cloud className="w-3 h-3 text-emerald-500" /> Synced
-                      </div>
+                    <div className="text-[10px] text-slate-500 dark:text-zinc-400 font-semibold">
+                      Local Offline Mode
                     </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      setMobileSidebarOpen(false);
-                      setActiveTab("settings");
-                    }}
-                    className="p-2 text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200 bg-white dark:bg-zinc-800 rounded-xl border border-slate-200 dark:border-zinc-700 cursor-pointer text-xs font-bold"
-                  >
-                    Manage
-                  </button>
                 </div>
-              ) : (
                 <button
                   onClick={() => {
                     setMobileSidebarOpen(false);
                     setActiveTab("settings");
                   }}
-                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs py-2.5 rounded-xl transition flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                  className="p-2 text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200 bg-white dark:bg-zinc-800 rounded-xl border border-slate-200 dark:border-zinc-700 cursor-pointer text-xs font-bold"
                 >
-                  <User className="w-4 h-4" />
-                  Google Account Settings
+                  Settings
                 </button>
-              )}
+              </div>
             </div>
           </div>
         </div>
@@ -3039,8 +3015,6 @@ export default function App() {
                 <div className="space-y-8 max-w-6xl mx-auto py-2">
                   {/* Personal Dashboard Header */}
                   <PersonalDashboard 
-                    user={authUser} 
-                    onOpenAuth={() => setShowAuthModal(true)} 
                     setActiveTab={setActiveTab}
                   />
 
@@ -5027,127 +5001,34 @@ export default function App() {
                   
 
 
-                  {/* Google Authenticated Account & Cloud Sync Card */}
+                  {/* Storage Status Card */}
                   <div className="bg-gradient-to-r from-blue-600/10 via-indigo-600/10 to-purple-600/10 border border-blue-500/20 dark:border-blue-500/30 rounded-3xl p-6 shadow-sm space-y-4">
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <div className="flex items-center gap-2">
                         <div className="p-2 bg-blue-600 text-white rounded-2xl shadow-md">
-                          <User className="w-5 h-5" />
+                          <Cloud className="w-5 h-5" />
                         </div>
                         <div>
                           <h2 className="text-base font-extrabold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
-                            Google Authenticated Account
+                            Workspace Storage
                           </h2>
                           <p className="text-xs text-slate-500 dark:text-zinc-400">
-                            Real-time Cloud Firestore synchronization across all devices
+                            Fast browser IndexedDB & LocalStorage persistent cache
                           </p>
                         </div>
                       </div>
 
-                      <span className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${
-                        authUser 
-                          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30" 
-                          : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
-                      }`}>
-                        {authUser ? (
-                          <>
-                            <Cloud className="w-3.5 h-3.5 text-emerald-500" />
-                            Cloud Synced
-                          </>
-                        ) : (
-                          <>
-                            <CloudOff className="w-3.5 h-3.5 text-amber-500" />
-                            Offline Mode
-                          </>
-                        )}
+                      <span className="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider flex items-center gap-1.5 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                        Local Storage Active
                       </span>
                     </div>
 
-                    {authUser ? (
-                      <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-4 rounded-2xl border border-slate-200/80 dark:border-zinc-800 flex items-center justify-between flex-wrap gap-4">
-                        <div className="flex items-center gap-3 min-w-0">
-                          {authUser.photoURL ? (
-                            <img src={authUser.photoURL} alt="" className="w-12 h-12 rounded-full object-cover border-2 border-blue-500/40 shrink-0" />
-                          ) : (
-                            <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-black text-lg flex items-center justify-center shrink-0 shadow-md">
-                              {(authUser.displayName || authUser.email || "G")[0].toUpperCase()}
-                            </div>
-                          )}
-                          <div className="min-w-0">
-                            <div className="font-extrabold text-sm text-slate-900 dark:text-zinc-100 truncate">
-                              {authUser.displayName || "Google Account User"}
-                            </div>
-                            <div className="text-xs text-slate-500 dark:text-zinc-400 truncate font-mono mt-0.5">
-                              {authUser.email}
-                            </div>
-                            <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mt-1 flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Connected & Syncing Notes, Playlists & Flashcards
-                            </div>
-                          </div>
-                        </div>
-
-                        {showSignOutConfirm ? (
-                          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-red-500/5 dark:bg-red-500/10 border border-red-200/50 dark:border-red-950/50 p-3 rounded-2xl w-full">
-                            <div className="text-xs text-slate-800 dark:text-zinc-200 font-bold flex-1">
-                              Confirm sign out? Your session sync will stop.
-                            </div>
-                            <div className="flex gap-1.5 shrink-0 self-end sm:self-auto">
-                              <button
-                                onClick={() => setShowSignOutConfirm(false)}
-                                className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 font-bold text-[11px] px-3 py-1.5 rounded-lg transition cursor-pointer"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  try {
-                                    await signOutUser();
-                                    setAuthUser(null);
-                                    setShowSignOutConfirm(false);
-                                    toast.success("Signed Out", "Google account signed out successfully.");
-                                  } catch (e: any) {
-                                    toast.error("Sign Out Error", e.message);
-                                  }
-                                }}
-                                className="bg-red-600 hover:bg-red-500 text-white font-extrabold text-[11px] px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1"
-                              >
-                                <LogOut className="w-3 h-3" />
-                                Yes, Sign Out
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => setShowAuthModal(true)}
-                              className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 font-bold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer"
-                            >
-                              Account Details
-                            </button>
-                            <button
-                              onClick={() => setShowSignOutConfirm(true)}
-                              className="bg-red-50 hover:bg-red-100 dark:bg-red-950/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 font-extrabold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer flex items-center gap-1.5"
-                            >
-                              <LogOut className="w-3.5 h-3.5" />
-                              Sign Out
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-4 rounded-2xl border border-slate-200/80 dark:border-zinc-800 space-y-3">
-                        <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed">
-                          Sign in with Google to automatically backup and sync your playlists, AI notes, custom flashcards, study schedules, and achievements across all your devices.
-                        </p>
-                        <button
-                          onClick={() => setShowAuthModal(true)}
-                          className="bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs px-5 py-2.5 rounded-xl transition shadow-md shadow-blue-500/20 flex items-center gap-2 cursor-pointer"
-                        >
-                          <User className="w-4 h-4" />
-                          Sign In / Sync with Google
-                        </button>
-                      </div>
-                    )}
+                    <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-4 rounded-2xl border border-slate-200/80 dark:border-zinc-800">
+                      <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed">
+                        All your course chapters, custom flashcards, study schedules, AI notes, and playback settings are saved automatically in your browser storage.
+                      </p>
+                    </div>
                   </div>
 
                   <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm space-y-6">
@@ -5631,12 +5512,7 @@ export default function App() {
         </main>
       </div>
 
-      {/* Auth Modal */}
-      <AuthModal 
-        isOpen={showAuthModal} 
-        onClose={() => setShowAuthModal(false)} 
-        currentUser={authUser}
-      />
+
 
       {/* 4. Mobile Bottom Navigation bar (Only 5 Icons with labels) - Hidden during Focus Mode */}
       {!focusMode && (

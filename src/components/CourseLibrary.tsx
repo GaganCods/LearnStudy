@@ -10,7 +10,7 @@ import {
 import { Storage } from "../utils/storage";
 import { CustomSubjectFolder, CourseChapter, ChapterLecture } from "../types";
 import { useToast } from "./ToastContext";
-import { parseYoutubeUrl } from "../utils/youtubeParser";
+import { parseYoutubeUrl, fetchPlaylistWithFallback } from "../utils/youtubeParser";
 
 const YoutubeBrandIcon = ({ className = "w-4 h-4 shrink-0" }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
@@ -460,23 +460,31 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
   };
 
   // Helper to fetch playlist for Subject Creation
-  const handleFetchSubjectPlaylist = async (urlVal: string) => {
+  const handleFetchSubjectPlaylist = async (urlVal: string, isExplicitClick = false) => {
     setNewSubjectPlaylistUrl(urlVal);
     setSubjectPlaylistError(null);
 
-    const parsed = parseYoutubeUrl(urlVal);
-    const playlistId = parsed?.id || urlVal.trim();
+    const trimmed = urlVal.trim();
+    if (!trimmed) {
+      setSubjectPlaylistPreview(null);
+      return;
+    }
 
-    if (!playlistId || playlistId.length < 5) return;
+    const parsed = parseYoutubeUrl(trimmed);
+    if (!parsed) {
+      if (isExplicitClick) {
+        setSubjectPlaylistError("Please enter a valid YouTube playlist link or ID.");
+      }
+      setSubjectPlaylistPreview(null);
+      return;
+    }
+
+    const playlistId = parsed.id;
+    if (!playlistId) return;
 
     setIsFetchingSubjectPlaylist(true);
     try {
-      const res = await fetch(`/api/playlist?id=${encodeURIComponent(playlistId)}`);
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || "Could not fetch playlist from YouTube.");
-      }
-      const data = await res.json();
+      const data = await fetchPlaylistWithFallback(playlistId);
       if (!data || !data.videos || data.videos.length === 0) {
         throw new Error("No videos found in this playlist.");
       }
@@ -734,23 +742,31 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
   };
 
   // Helper to fetch playlist details for standalone import modal
-  const handleFetchImportPlaylist = async (urlVal: string) => {
+  const handleFetchImportPlaylist = async (urlVal: string, isExplicitClick = false) => {
     setImportPlaylistUrl(urlVal);
     setImportPlaylistError(null);
 
-    const parsed = parseYoutubeUrl(urlVal);
-    const playlistId = parsed?.id || urlVal.trim();
+    const trimmed = urlVal.trim();
+    if (!trimmed) {
+      setImportPlaylistPreview(null);
+      return;
+    }
 
-    if (!playlistId || playlistId.length < 5) return;
+    const parsed = parseYoutubeUrl(trimmed);
+    if (!parsed) {
+      if (isExplicitClick) {
+        setImportPlaylistError("Please enter a valid YouTube playlist link or ID.");
+      }
+      setImportPlaylistPreview(null);
+      return;
+    }
+
+    const playlistId = parsed.id;
+    if (!playlistId) return;
 
     setIsFetchingImportPlaylist(true);
     try {
-      const res = await fetch(`/api/playlist?id=${encodeURIComponent(playlistId)}`);
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || "Could not fetch playlist from YouTube. Please verify the link.");
-      }
-      const data = await res.json();
+      const data = await fetchPlaylistWithFallback(playlistId);
       if (!data || !data.videos || data.videos.length === 0) {
         throw new Error("No videos found in this playlist or playlist is private.");
       }
@@ -773,10 +789,52 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
   };
 
   // Execute standalone Import Playlist as Chapter or directly into existing Chapter
-  const handleExecuteImportPlaylist = (e: React.FormEvent) => {
+  const handleExecuteImportPlaylist = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!importPlaylistPreview || importPlaylistPreview.videos.length === 0) {
-      toast.error("Invalid Playlist", "Please enter and fetch a valid YouTube playlist URL.");
+
+    let preview = importPlaylistPreview;
+
+    if (!preview || preview.videos.length === 0) {
+      const urlVal = importPlaylistUrl.trim();
+      if (!urlVal) {
+        toast.error("Missing Link", "Please paste a YouTube playlist URL.");
+        return;
+      }
+      const parsed = parseYoutubeUrl(urlVal);
+      if (!parsed || !parsed.id) {
+        setImportPlaylistError("Please enter a valid YouTube playlist link or ID.");
+        toast.error("Invalid Link", "Please enter a valid YouTube playlist link.");
+        return;
+      }
+      setIsFetchingImportPlaylist(true);
+      try {
+        const data = await fetchPlaylistWithFallback(parsed.id);
+        if (!data || !data.videos || data.videos.length === 0) {
+          throw new Error("No videos found in this YouTube playlist.");
+        }
+        preview = {
+          title: data.title || "Imported Playlist",
+          channelName: data.channelName || "YouTube Channel",
+          thumbnail: data.thumbnail || (data.videos[0] ? `https://i.ytimg.com/vi/${data.videos[0].id}/hqdefault.jpg` : ""),
+          videosCount: data.videos.length,
+          videos: data.videos
+        };
+        setImportPlaylistPreview(preview);
+        if (!importChapterTitle.trim()) {
+          setImportChapterTitle(data.title || "Playlist Chapter");
+        }
+      } catch (err: any) {
+        const errorMsg = err.message || "Failed to fetch playlist.";
+        setImportPlaylistError(errorMsg);
+        toast.error("Import Failed", errorMsg);
+        return;
+      } finally {
+        setIsFetchingImportPlaylist(false);
+      }
+    }
+
+    if (!preview || preview.videos.length === 0) {
+      toast.error("Invalid Playlist", "Could not load videos from this YouTube playlist.");
       return;
     }
 
@@ -784,13 +842,13 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
 
     if (importTargetSubjectId === "NEW" || subjects.length === 0) {
       // Create a brand new subject for this playlist
-      const newSubjectNameVal = importChapterTitle.trim() || importPlaylistPreview.title || "New Course Subject";
+      const newSubjectNameVal = importChapterTitle.trim() || preview.title || "New Course Subject";
       targetSubj = {
         id: `subj-${Date.now()}`,
         subjectName: newSubjectNameVal,
         category: "General Studies",
         color: "blue",
-        description: `Imported subject for ${importPlaylistPreview.title}`,
+        description: `Imported subject for ${preview.title}`,
         createdAt: new Date().toISOString(),
         chapters: []
       };
@@ -805,7 +863,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
       const existingChapter = targetSubj.chapters.find(c => c.id === importTargetChapterId);
       if (existingChapter) {
         const existingCount = existingChapter.lectures.length;
-        const convertedLectures: ChapterLecture[] = importPlaylistPreview.videos.map((vid: any, idx: number) => ({
+        const convertedLectures: ChapterLecture[] = preview.videos.map((vid: any, idx: number) => ({
           id: `lec-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
           title: vid.title || `Lecture ${existingCount + idx + 1}`,
           videoUrl: `https://www.youtube.com/watch?v=${vid.id}`,
@@ -854,11 +912,11 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
 
     // SCENARIO 2: Import playlist as a NEW Chapter inside targetSubj
     const nextChapterNum = targetSubj.chapters.length + 1;
-    const rawTitle = importChapterTitle.trim() || importPlaylistPreview.title || `Chapter ${nextChapterNum}`;
+    const rawTitle = importChapterTitle.trim() || preview.title || `Chapter ${nextChapterNum}`;
     const finalChapterTitle = rawTitle.startsWith("Chapter") ? rawTitle : `Chapter ${nextChapterNum}: ${rawTitle}`;
-    const finalChapterDesc = importChapterDesc.trim() || `Imported playlist from ${importPlaylistPreview.channelName} (${importPlaylistPreview.videosCount} lectures)`;
+    const finalChapterDesc = importChapterDesc.trim() || `Imported playlist from ${preview.channelName} (${preview.videosCount} lectures)`;
 
-    const convertedLectures: ChapterLecture[] = importPlaylistPreview.videos.map((vid: any, idx: number) => ({
+    const convertedLectures: ChapterLecture[] = preview.videos.map((vid: any, idx: number) => ({
       id: `lec-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
       title: vid.title || `Lecture ${idx + 1}`,
       videoUrl: `https://www.youtube.com/watch?v=${vid.id}`,
@@ -907,23 +965,31 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
   };
 
   // Helper to fetch playlist in Chapter Creation modal
-  const handleFetchChapterPlaylist = async (urlVal: string) => {
+  const handleFetchChapterPlaylist = async (urlVal: string, isExplicitClick = false) => {
     setChapterPlaylistUrl(urlVal);
     setChapterPlaylistError(null);
 
-    const parsed = parseYoutubeUrl(urlVal);
-    const playlistId = parsed?.id || urlVal.trim();
+    const trimmed = urlVal.trim();
+    if (!trimmed) {
+      setChapterPlaylistPreview(null);
+      return;
+    }
 
-    if (!playlistId || playlistId.length < 5) return;
+    const parsed = parseYoutubeUrl(trimmed);
+    if (!parsed) {
+      if (isExplicitClick) {
+        setChapterPlaylistError("Please enter a valid YouTube playlist link or ID.");
+      }
+      setChapterPlaylistPreview(null);
+      return;
+    }
+
+    const playlistId = parsed.id;
+    if (!playlistId) return;
 
     setIsFetchingChapterPlaylist(true);
     try {
-      const res = await fetch(`/api/playlist?id=${encodeURIComponent(playlistId)}`);
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || "Could not fetch playlist.");
-      }
-      const data = await res.json();
+      const data = await fetchPlaylistWithFallback(playlistId);
       if (!data || !data.videos || data.videos.length === 0) {
         throw new Error("No videos found in this playlist.");
       }
@@ -945,7 +1011,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
   };
 
   // Create Chapter inside active subject
-  const handleCreateChapter = (e: React.FormEvent) => {
+  const handleCreateChapter = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSubject) return;
 
@@ -954,11 +1020,57 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     let finalDesc = newChapterDesc.trim();
     const nextChapterNum = selectedSubject.chapters.length + 1;
 
-    if (chapterModalTab === "playlist" && chapterPlaylistPreview && chapterPlaylistPreview.videos.length > 0) {
-      if (!finalTitle) finalTitle = chapterPlaylistPreview.title || `Chapter ${nextChapterNum}`;
-      if (!finalDesc) finalDesc = `Imported playlist from ${chapterPlaylistPreview.channelName} (${chapterPlaylistPreview.videosCount} lectures)`;
+    if (chapterModalTab === "playlist") {
+      let preview = chapterPlaylistPreview;
 
-      newLectures = chapterPlaylistPreview.videos.map((vid: any, idx: number) => ({
+      if (!preview || preview.videos.length === 0) {
+        const urlVal = chapterPlaylistUrl.trim();
+        if (!urlVal) {
+          setChapterPlaylistError("Please enter a YouTube playlist URL.");
+          toast.error("Missing Link", "Please enter a YouTube playlist URL.");
+          return;
+        }
+        const parsed = parseYoutubeUrl(urlVal);
+        if (!parsed || !parsed.id) {
+          setChapterPlaylistError("Please enter a valid YouTube playlist link or ID.");
+          toast.error("Invalid Link", "Please enter a valid YouTube playlist URL.");
+          return;
+        }
+        setIsFetchingChapterPlaylist(true);
+        try {
+          const data = await fetchPlaylistWithFallback(parsed.id);
+          if (!data || !data.videos || data.videos.length === 0) {
+            throw new Error("No videos found in this YouTube playlist.");
+          }
+          preview = {
+            title: data.title || "Imported Playlist",
+            channelName: data.channelName || "YouTube",
+            videosCount: data.videos.length,
+            videos: data.videos
+          };
+          setChapterPlaylistPreview(preview);
+          if (!finalTitle && data.title) {
+            finalTitle = data.title;
+          }
+        } catch (err: any) {
+          const msg = err.message || "Failed to fetch YouTube playlist.";
+          setChapterPlaylistError(msg);
+          toast.error("Import Failed", msg);
+          return;
+        } finally {
+          setIsFetchingChapterPlaylist(false);
+        }
+      }
+
+      if (!preview || preview.videos.length === 0) {
+        setChapterPlaylistError("No videos found in YouTube playlist.");
+        return;
+      }
+
+      if (!finalTitle) finalTitle = preview.title || `Chapter ${nextChapterNum}`;
+      if (!finalDesc) finalDesc = `Imported playlist from ${preview.channelName} (${preview.videosCount} lectures)`;
+
+      newLectures = preview.videos.map((vid: any, idx: number) => ({
         id: `lec-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
         title: vid.title || `Lecture ${idx + 1}`,
         videoUrl: `https://www.youtube.com/watch?v=${vid.id}`,
@@ -1059,12 +1171,70 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     if (playlistPlayerSubject?.id === updatedSubj.id) setPlaylistPlayerSubject(updatedSubj);
   };
 
-  // Add Lecture to Chapter
-  const handleCreateLecture = (e: React.FormEvent) => {
+  // Add Lecture to Chapter (with Playlist URL auto-import support)
+  const handleCreateLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSubject || !targetChapterId) return;
 
     const trimmedUrl = newLectureUrl.trim();
+    if (!trimmedUrl) return;
+
+    // Check if the link is a YouTube playlist link or ID
+    const parsed = parseYoutubeUrl(trimmedUrl);
+    if (parsed && parsed.type === "playlist" && parsed.id) {
+      setIsFetchingMetadata(true);
+      try {
+        const playlistData = await fetchPlaylistWithFallback(parsed.id);
+        if (playlistData && playlistData.videos && playlistData.videos.length > 0) {
+          const targetChapter = selectedSubject.chapters.find(c => c.id === targetChapterId);
+          const existingCount = targetChapter?.lectures.length || 0;
+
+          const importedLectures: ChapterLecture[] = playlistData.videos.map((vid: any, idx: number) => ({
+            id: `lec-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+            title: vid.title || `Lecture ${existingCount + idx + 1}`,
+            videoUrl: `https://www.youtube.com/watch?v=${vid.id}`,
+            youtubeVideoId: vid.id,
+            duration: vid.duration || "15:00",
+            completed: false,
+            progress: 0,
+            lectureNumber: existingCount + idx + 1
+          }));
+
+          const updatedChapters = selectedSubject.chapters.map(ch => {
+            if (ch.id === targetChapterId) {
+              return {
+                ...ch,
+                lectures: [...ch.lectures, ...importedLectures]
+              };
+            }
+            return ch;
+          });
+
+          const updatedSubj: CustomSubjectFolder = {
+            ...selectedSubject,
+            chapters: updatedChapters
+          };
+
+          Storage.saveCustomSubject(updatedSubj);
+          setSelectedSubject(updatedSubj);
+          setSubjects(subjects.map(s => s.id === updatedSubj.id ? updatedSubj : s));
+
+          setNewLectureTitle("");
+          setNewLectureUrl("");
+          setNewLectureDuration("");
+          setAutoFetchedStatus(null);
+          setShowLectureModal(false);
+
+          toast.success("Playlist Imported", `Added ${importedLectures.length} lectures from playlist into chapter.`);
+          return;
+        }
+      } catch (err: any) {
+        console.warn("[Add Lecture] Playlist fetch failed, falling back to single video...", err);
+      } finally {
+        setIsFetchingMetadata(false);
+      }
+    }
+
     const ytId = extractYoutubeId(trimmedUrl);
     if (!trimmedUrl && !ytId) return;
 
@@ -1109,6 +1279,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     setNewLectureDuration("");
     setAutoFetchedStatus(null);
     setShowLectureModal(false);
+    toast.success("Lecture Added", `Added "${finalTitle}" to chapter.`);
   };
 
   // Toggle Lecture Completed Status
@@ -2063,7 +2234,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleFetchImportPlaylist(importPlaylistUrl)}
+                  onClick={() => handleFetchImportPlaylist(importPlaylistUrl, true)}
                   disabled={isFetchingImportPlaylist || !importPlaylistUrl.trim()}
                   className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl transition cursor-pointer shrink-0 flex items-center gap-1.5"
                 >
@@ -3311,7 +3482,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                       </div>
                       <button
                         type="button"
-                        onClick={() => handleFetchChapterPlaylist(chapterPlaylistUrl)}
+                        onClick={() => handleFetchChapterPlaylist(chapterPlaylistUrl, true)}
                         disabled={isFetchingChapterPlaylist || !chapterPlaylistUrl.trim()}
                         className="px-3.5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition cursor-pointer"
                       >
@@ -3965,7 +4136,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                   </div>
                   <button
                     type="button"
-                    onClick={() => handleFetchSubjectPlaylist(newSubjectPlaylistUrl)}
+                    onClick={() => handleFetchSubjectPlaylist(newSubjectPlaylistUrl, true)}
                     disabled={isFetchingSubjectPlaylist || !newSubjectPlaylistUrl.trim()}
                     className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition cursor-pointer shrink-0"
                   >

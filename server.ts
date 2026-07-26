@@ -154,8 +154,8 @@ app.get("/api/playlist", async (req, res) => {
     }
   }
 
-  // 1. Single video check (exact 11 character YouTube video ID)
-  const isPlaylistId = /^(PL|UU|FL|WL|RD|OLAK5uy_)[a-zA-Z0-9_-]+$/.test(cleanId);
+  // 1. Single video check (exact 11 character YouTube video ID, non-playlist)
+  const isPlaylistId = cleanId.length !== 11 || /^(PL|UU|FL|WL|RD|OLAK5uy_)[a-zA-Z0-9_-]+$/.test(cleanId);
 
   if (!isPlaylistId && /^[a-zA-Z0-9_-]{11}$/.test(cleanId)) {
     console.log(`[YouTube API] ID ${cleanId} detected as single video. Wrapping as single-video chapter.`);

@@ -94,7 +94,7 @@ export function GeminiOnboardingModal({
       {/* Main Container: responsive layout */}
       <div 
         id="gemini-onboarding-modal"
-        className="relative w-full md:max-w-[520px] bg-zinc-900 border-t md:border border-zinc-800 rounded-t-[24px] md:rounded-[24px] shadow-2xl p-6 md:p-8 overflow-hidden transform transition-all duration-300 scale-100 flex flex-col max-h-[92vh] md:max-h-none animate-in fade-in slide-in-from-bottom-12 duration-300 md:zoom-in-95"
+        className="relative w-full md:max-w-[520px] bg-white dark:bg-zinc-900 border-t md:border border-slate-200 dark:border-zinc-800 rounded-t-[24px] md:rounded-[24px] shadow-2xl p-6 md:p-8 overflow-hidden transform transition-all duration-300 scale-100 flex flex-col max-h-[92vh] md:max-h-none animate-in fade-in slide-in-from-bottom-12 duration-300 md:zoom-in-95 text-slate-900 dark:text-zinc-50"
       >
         {/* Glowing Ambient Top Background Accent */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-80 h-32 bg-blue-500/10 rounded-full blur-[60px] pointer-events-none" />
@@ -163,7 +163,7 @@ export function GeminiOnboardingModal({
                   setErrorMsg(null);
                 }}
                 disabled={loading}
-                className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 hover:border-zinc-750 focus:border-blue-500 focus:outline-none text-xs pl-3.5 pr-24 py-3 rounded-xl font-mono transition"
+                className="w-full bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 border border-slate-200 dark:border-zinc-800 hover:border-slate-300 dark:hover:border-zinc-750 focus:border-blue-500 focus:outline-none text-xs pl-3.5 pr-24 py-3 rounded-xl font-mono transition"
               />
 
               {/* Input utilities */}
