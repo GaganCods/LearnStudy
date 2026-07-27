@@ -40,6 +40,7 @@ function getHeaders(): HeadersInit {
   const key = getGeminiKey();
   if (key) {
     headers["x-gemini-key"] = key;
+    headers["Authorization"] = `Bearer ${key}`;
   }
   return headers;
 }
@@ -62,6 +63,7 @@ export async function validateGeminiKey(key: string): Promise<boolean> {
       headers: {
         "Content-Type": "application/json",
         "x-gemini-key": trimmed,
+        "Authorization": `Bearer ${trimmed}`
       },
       body: JSON.stringify({ key: trimmed, apiKey: trimmed }),
     });

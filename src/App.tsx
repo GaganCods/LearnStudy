@@ -6,6 +6,7 @@ import {
   Sparkles, TrendingUp, Plus, Edit2, X, Clock, Flame, 
   ShieldAlert, Share2, Moon, Sun, Laptop, ChevronDown, ChevronUp, CheckCircle,
   Eye, EyeOff, Star, Calendar, Download, Upload, Info, RefreshCw, ArrowUpDown, Filter,
+  ArrowUp,
   Github, Linkedin, Twitter, Globe, Award, User, Folder, Brain, Users, Cloud, CloudOff,
   Layers, LogOut, Crown, CheckCircle2, Menu, Loader2, MoreVertical, Keyboard, AlertTriangle
 } from "lucide-react";
@@ -442,6 +443,35 @@ export default function App() {
   const playerRef = useRef<any>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const mainScrollRef = useRef<HTMLElement>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+
+  useEffect(() => {
+    const mainElement = mainScrollRef.current;
+
+    const handleScroll = () => {
+      const scrollPos = (mainElement?.scrollTop || 0) + (window.scrollY || 0);
+      setShowBackToTop(scrollPos > 500);
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    if (mainElement) {
+      mainElement.addEventListener("scroll", handleScroll, { passive: true });
+    }
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+      if (mainElement) {
+        mainElement.removeEventListener("scroll", handleScroll);
+      }
+    };
+  }, []);
+
+  const scrollToTop = () => {
+    if (mainScrollRef.current && mainScrollRef.current.scrollTop > 0) {
+      mainScrollRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   // Refs to keep track of latest state inside player event listeners (avoids stale closures)
   const activeVideoIdRef = useRef<string>("");
@@ -2488,6 +2518,17 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Back to Top Button */}
+      {showBackToTop && (
+        <button
+          onClick={scrollToTop}
+          className="fixed bottom-24 right-6 md:bottom-12 md:right-12 z-[60] p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-xl border border-white/20 transition-all hover:scale-110 active:scale-95 animate-in fade-in slide-in-from-bottom-4 duration-300 group cursor-pointer"
+          title="Back to Top"
+        >
+          <ArrowUp className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" />
+        </button>
       )}
 
       {/* 1. Header / Top App Bar */}

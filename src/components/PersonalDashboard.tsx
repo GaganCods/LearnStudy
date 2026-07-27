@@ -1,7 +1,7 @@
 import React from "react";
 import { 
-  Sparkles, Flame, Clock, BookOpen, Brain, Award, 
-  TrendingUp, Cloud, Plus, FileText, Timer, ArrowUpRight
+  Sparkles, Flame, Clock, BookOpen,
+  TrendingUp, Plus, FileText, Timer, ArrowUpRight
 } from "lucide-react";
 import { Storage } from "../utils/storage";
 import { ActiveTab } from "../types";
@@ -16,7 +16,6 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
   userName
 }) => {
   const stats = Storage.getStreakStats();
-  const flashcards = Storage.getFlashcards();
   const studyLogs = Storage.getStudyLogs();
   
   const totalSeconds = studyLogs.reduce((acc, l) => acc + (l.secondsStudied || 0), 0);
@@ -81,8 +80,8 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
         {/* Right Section Removed per user request */}
       </div>
 
-      {/* 3 compact statistics glass cards with micro-visualizations */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-8">
+      {/* 2 compact statistics glass cards with micro-visualizations */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-8">
         {/* Card 1: Streak */}
         <div className="bg-slate-50 dark:bg-[#111113] border border-slate-200 dark:border-[rgba(255,255,255,0.06)] rounded-2xl p-4 h-[110px] flex flex-col justify-between hover:-translate-y-1 hover:border-[#FF6A00]/40 hover:shadow-[0_4px_20px_rgba(255,106,0,0.08)] transition-all duration-250 group cursor-pointer shadow-xs dark:shadow-md">
           <div className="flex items-center justify-between">
@@ -147,31 +146,6 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
           </div>
         </div>
 
-        {/* Card 3: Saved Cards */}
-        <div className="bg-slate-50 dark:bg-[#111113] border border-slate-200 dark:border-[rgba(255,255,255,0.06)] rounded-2xl p-4 h-[110px] flex flex-col justify-between hover:-translate-y-1 hover:border-[#FF6A00]/40 hover:shadow-[0_4px_20px_rgba(255,106,0,0.08)] transition-all duration-250 group cursor-pointer shadow-xs dark:shadow-md">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Flashcards</span>
-            <div className="p-1.5 bg-purple-500/10 rounded-lg text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
-              <Brain className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="flex items-end justify-between">
-            <div className="text-left">
-              <span className="text-2xl font-black text-slate-900 dark:text-[#F8F8F8] tracking-tight">{flashcards.length} Cards</span>
-              <span className="text-[10px] text-slate-500 dark:text-zinc-500 block mt-0.5 font-bold">
-                Smart spacing active
-              </span>
-            </div>
-            
-            {/* Tiny progress ring */}
-            <div className="mb-0.5 bg-white dark:bg-[#09090B]/85 p-1.5 rounded-lg border border-slate-200 dark:border-[rgba(255,255,255,0.03)] shrink-0">
-              <svg className="w-6 h-6 transform -rotate-90 text-[#FF6A00]" viewBox="0 0 20 20">
-                <circle cx="10" cy="10" r="8" className="stroke-slate-200 dark:stroke-zinc-800" strokeWidth="2" fill="none" />
-                <circle cx="10" cy="10" r="8" className="stroke-[#FF6A00]" strokeWidth="2" fill="none" strokeDasharray="50" strokeDashoffset={flashcards.length > 0 ? "15" : "38"} />
-              </svg>
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* Horizontal Command Quick Actions Menu */}

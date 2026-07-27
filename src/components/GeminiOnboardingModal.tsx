@@ -132,7 +132,7 @@ export function GeminiOnboardingModal({
           <div className="bg-blue-950/30 border border-blue-500/15 rounded-xl p-3 flex items-start gap-2.5">
             <ShieldCheck className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
             <span className="text-[11px] text-blue-300/90 leading-normal">
-              Your API key stays securely on your device, stored in local storage, and is <strong>never uploaded to our servers</strong>. All requests go directly to Google.
+              Your API key stays securely on your device and is only used to authorize AI requests via our secure server proxy. It is <strong>never saved or logged</strong> on our servers.
             </span>
           </div>
 

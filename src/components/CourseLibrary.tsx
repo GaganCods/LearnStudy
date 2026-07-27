@@ -232,6 +232,35 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     };
   }, [showSubjectHeaderMenu, openChapterMenuId, openSubjectCardMenuId]);
 
+  // Reorder Chapters
+  const handleMoveChapter = (subjectId: string, chapterId: string, direction: 'up' | 'down', e: React.MouseEvent) => {
+    e.stopPropagation();
+    const subject = subjects.find(s => s.id === subjectId);
+    if (!subject) return;
+
+    const chapters = [...subject.chapters];
+    const index = chapters.findIndex(c => c.id === chapterId);
+    if (index === -1) return;
+
+    if (direction === 'up' && index > 0) {
+      [chapters[index], chapters[index - 1]] = [chapters[index - 1], chapters[index]];
+    } else if (direction === 'down' && index < chapters.length - 1) {
+      [chapters[index], chapters[index + 1]] = [chapters[index + 1], chapters[index]];
+    } else {
+      return;
+    }
+
+    // Update chapter numbers if needed (optional, but keep it consistent with the UI if it relies on it)
+    const updatedChapters = chapters.map((c, i) => ({ ...c, chapterNumber: i + 1 }));
+
+    const updatedSubject = { ...subject, chapters: updatedChapters };
+    Storage.saveCustomSubject(updatedSubject);
+    setSubjects(subjects.map(s => s.id === subjectId ? updatedSubject : s));
+    if (selectedSubject?.id === subjectId) setSelectedSubject(updatedSubject);
+    
+    toast.success("Chapter Reordered", `Moved "${updatedChapters[direction === 'up' ? index - 1 : index + 1].title}" ${direction}.`);
+  };
+
   // Chapter Edit Modal State
   const [showEditChapterModal, setShowEditChapterModal] = useState(false);
   const [editingChapter, setEditingChapter] = useState<CourseChapter | null>(null);
@@ -402,14 +431,13 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     if (ytId && ytId.length === 11) {
       setIsFetchingMetadata(true);
       try {
-        const res = await fetch(`/api/video-metadata?id=${ytId}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.title) {
-            setNewLectureTitle(data.title);
-            if (data.duration) setNewLectureDuration(data.duration);
-            setAutoFetchedStatus(`✨ Auto-fetched: "${data.title}" (${data.duration || "Video"})`);
-          }
+        // Use the more robust universal fetcher which has oembed fallback and handles API keys
+        const data = await fetchPlaylistWithFallback(ytId);
+        if (data && data.videos && data.videos.length > 0) {
+          const video = data.videos[0];
+          setNewLectureTitle(video.title);
+          if (video.duration) setNewLectureDuration(video.duration);
+          setAutoFetchedStatus(`✨ Auto-fetched: "${video.title}" (${video.duration || "Video"})`);
         }
       } catch (err) {
         console.warn("Could not auto-fetch video details:", err);
@@ -1267,14 +1295,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
 
     if (ytId && ytId.length === 11 && (!finalTitle || !finalDuration || finalTitle.startsWith("Lecture") || finalDuration === "15:00")) {
       try {
-        const metaRes = await fetch(`/api/video-metadata?id=${ytId}`);
-        if (metaRes.ok) {
-          const metaData = await metaRes.json();
-          if (metaData.title && (!finalTitle || finalTitle.startsWith("Lecture"))) {
-            finalTitle = metaData.title;
+        const data = await fetchPlaylistWithFallback(ytId);
+        if (data && data.videos && data.videos.length > 0) {
+          const video = data.videos[0];
+          if (!finalTitle || finalTitle.startsWith("Lecture")) {
+            finalTitle = video.title;
           }
-          if (metaData.duration && (!finalDuration || finalDuration === "15:00")) {
-            finalDuration = metaData.duration;
+          if (!finalDuration || finalDuration === "15:00") {
+            finalDuration = video.duration;
           }
         }
       } catch (e) {}
@@ -2797,8 +2825,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     return (
       <div className="space-y-6 animate-in fade-in duration-300">
         {/* Header Breadcrumb & Control Bar */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm relative pr-14 md:pr-6">
-          <div>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm relative">
+          <div className="flex-1">
             <button
               onClick={() => setSelectedSubject(null)}
               className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 mb-2 cursor-pointer"
@@ -2806,67 +2834,71 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               <ArrowLeft className="w-3.5 h-3.5" />
               Back to All Subjects
             </button>
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold uppercase bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900">
-                {selectedSubject.category}
-              </span>
-              <h1 className="text-2xl font-extrabold text-slate-900 dark:text-zinc-50">
-                {selectedSubject.subjectName}
-              </h1>
-            </div>
-            {selectedSubject.description && (
-              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-2xl">
-                {selectedSubject.description}
-              </p>
-            )}
-          </div>
-
-          {/* Subject Header Three Dots Options Menu - Top Right Corner */}
-          <div className="absolute top-4 right-4 md:relative md:top-auto md:right-auto order-first md:order-last">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowSubjectHeaderMenu(!showSubjectHeaderMenu);
-              }}
-              className={`p-1.5 rounded-xl border transition cursor-pointer ${
-                showSubjectHeaderMenu
-                  ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
-                  : "bg-slate-50 dark:bg-zinc-800/50 hover:bg-slate-100 dark:hover:bg-zinc-800 border-slate-100 dark:border-zinc-700/50 text-slate-500 dark:text-zinc-400"
-              }`}
-              title="More options"
-            >
-              <MoreVertical className="w-4 h-4" />
-            </button>
-
-            {showSubjectHeaderMenu && (
-                <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowSubjectHeaderMenu(false);
-                      handleOpenEditSubject(selectedSubject, e);
-                    }}
-                    className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
-                  >
-                    <Edit2 className="w-4 h-4 text-blue-500" />
-                    <span>Edit Subject</span>
-                  </button>
-
-                  <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
-
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowSubjectHeaderMenu(false);
-                      onRequestDeleteSubject(selectedSubject, e);
-                    }}
-                    className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    <span>Delete Subject</span>
-                  </button>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold uppercase bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900">
+                    {selectedSubject.category}
+                  </span>
                 </div>
-            )}
+                <h1 className="text-2xl font-extrabold text-slate-900 dark:text-zinc-50 leading-tight">
+                  {selectedSubject.subjectName}
+                </h1>
+                {selectedSubject.description && (
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-2xl">
+                    {selectedSubject.description}
+                  </p>
+                )}
+              </div>
+
+              {/* Subject Header Three Dots Options Menu */}
+              <div className="relative shrink-0">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowSubjectHeaderMenu(!showSubjectHeaderMenu);
+                  }}
+                  className={`p-1.5 rounded-xl border transition cursor-pointer ${
+                    showSubjectHeaderMenu
+                      ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
+                      : "bg-slate-50 dark:bg-zinc-800/50 hover:bg-slate-100 dark:hover:bg-zinc-800 border-slate-100 dark:border-zinc-700/50 text-slate-500 dark:text-zinc-400"
+                  }`}
+                  title="More options"
+                >
+                  <MoreVertical className="w-4 h-4" />
+                </button>
+
+                {showSubjectHeaderMenu && (
+                    <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowSubjectHeaderMenu(false);
+                          handleOpenEditSubject(selectedSubject, e);
+                        }}
+                        className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                      >
+                        <Edit2 className="w-4 h-4 text-blue-500" />
+                        <span>Edit Subject</span>
+                      </button>
+
+                      <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowSubjectHeaderMenu(false);
+                          onRequestDeleteSubject(selectedSubject, e);
+                        }}
+                        className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Delete Subject</span>
+                      </button>
+                    </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -2949,101 +2981,129 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               return (
                 <div 
                   key={ch.id} 
-                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4 relative pr-14"
+                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4"
                 >
                   {/* Chapter Header Bar */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800/80 pb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-extrabold text-sm flex items-center justify-center border border-blue-200/50 dark:border-blue-900/40 shrink-0">
-                        Ch.{ch.chapterNumber}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-base font-extrabold text-slate-900 dark:text-zinc-50">
+                  <div className="flex flex-col gap-4 border-b border-slate-100 dark:border-zinc-800/80 pb-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-extrabold text-sm flex items-center justify-center border border-blue-200/50 dark:border-blue-900/40 shrink-0">
+                          Ch.{ch.chapterNumber}
+                        </div>
+                        <div>
+                          <h3 className="text-base font-extrabold text-slate-900 dark:text-zinc-50 leading-tight">
                             {ch.title}
                           </h3>
+                          {ch.description && (
+                            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                              {ch.description}
+                            </p>
+                          )}
                         </div>
-                        {ch.description && (
-                          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                            {ch.description}
-                          </p>
+                      </div>
+
+                      {/* Chapter Three Dots Options Menu */}
+                      <div className="relative shrink-0">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenChapterMenuId(openChapterMenuId === ch.id ? null : ch.id);
+                          }}
+                          className={`p-1.5 rounded-xl border transition cursor-pointer ${
+                            openChapterMenuId === ch.id
+                              ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
+                              : "bg-slate-50 dark:bg-zinc-800/50 hover:bg-slate-100 dark:hover:bg-zinc-800 border-slate-100 dark:border-zinc-700/50 text-slate-500 dark:text-zinc-400"
+                          }`}
+                          title="More options"
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+
+                        {openChapterMenuId === ch.id && (
+                          <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenChapterMenuId(null);
+                                  toggleChapterManageMode(ch.id, e);
+                                }}
+                                className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                              >
+                                <Edit2 className="w-4 h-4 text-blue-500" />
+                                <span>{managingChapterIds[ch.id] ? "Done Editing" : "Edit Chapter"}</span>
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenChapterMenuId(null);
+                                  handleToggleSplitChapterMode(ch.id, e);
+                                }}
+                                className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                              >
+                                <Scissors className="w-4 h-4 text-purple-500" />
+                                <span>{splittingChapterId === ch.id ? "Cancel Split" : "Split Chapter"}</span>
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenChapterMenuId(null);
+                                  handleOpenImportPlaylistModal(selectedSubject, ch);
+                                }}
+                                className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                              >
+                                <YoutubeBrandIcon className="w-4 h-4" />
+                                <span>Import Playlist</span>
+                              </button>
+
+                              <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
+
+                              <button
+                                disabled={selectedSubject.chapters.indexOf(ch) === 0}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenChapterMenuId(null);
+                                  handleMoveChapter(selectedSubject.id, ch.id, 'up', e);
+                                }}
+                                className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                              >
+                                <ArrowUp className="w-4 h-4 text-blue-500" />
+                                <span>Move Chapter Up</span>
+                              </button>
+
+                              <button
+                                disabled={selectedSubject.chapters.indexOf(ch) === selectedSubject.chapters.length - 1}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenChapterMenuId(null);
+                                  handleMoveChapter(selectedSubject.id, ch.id, 'down', e);
+                                }}
+                                className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                              >
+                                <ArrowDown className="w-4 h-4 text-blue-500" />
+                                <span>Move Chapter Down</span>
+                              </button>
+
+                              <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenChapterMenuId(null);
+                                  onRequestDeleteChapter(selectedSubject.id, ch.id, ch.title, e);
+                                }}
+                                className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
+                                >
+                                <Trash2 className="w-4 h-4" />
+                                <span>Delete Chapter</span>
+                              </button>
+                            </div>
                         )}
                       </div>
                     </div>
 
-                    {/* Chapter Three Dots Options Menu - Absolute top-right Corner */}
-                    <div className="absolute top-4 right-4">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenChapterMenuId(openChapterMenuId === ch.id ? null : ch.id);
-                        }}
-                        className={`p-1.5 rounded-xl border transition cursor-pointer ${
-                          openChapterMenuId === ch.id
-                            ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
-                            : "bg-slate-50 dark:bg-zinc-800/50 hover:bg-slate-100 dark:hover:bg-zinc-800 border-slate-100 dark:border-zinc-700/50 text-slate-500 dark:text-zinc-400"
-                        }`}
-                        title="More options"
-                      >
-                        <MoreVertical className="w-4 h-4" />
-                      </button>
-
-                      {openChapterMenuId === ch.id && (
-                        <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenChapterMenuId(null);
-                                toggleChapterManageMode(ch.id, e);
-                              }}
-                              className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
-                            >
-                              <Edit2 className="w-4 h-4 text-blue-500" />
-                              <span>{managingChapterIds[ch.id] ? "Done Editing" : "Edit Chapter"}</span>
-                            </button>
-
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenChapterMenuId(null);
-                                handleToggleSplitChapterMode(ch.id, e);
-                              }}
-                              className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
-                            >
-                              <Scissors className="w-4 h-4 text-purple-500" />
-                              <span>{splittingChapterId === ch.id ? "Cancel Split" : "Split Chapter"}</span>
-                            </button>
-
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenChapterMenuId(null);
-                                handleOpenImportPlaylistModal(selectedSubject, ch);
-                              }}
-                              className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
-                            >
-                              <YoutubeBrandIcon className="w-4 h-4" />
-                              <span>Import Playlist</span>
-                            </button>
-
-                            <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
-
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenChapterMenuId(null);
-                                onRequestDeleteChapter(selectedSubject.id, ch.id, ch.title, e);
-                              }}
-                              className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                              <span>Delete Chapter</span>
-                            </button>
-                          </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-bold text-slate-500 dark:text-zinc-400 mr-1">
                         {chDone}/{chTotal} ({chPct}%)
                       </span>
@@ -3936,14 +3996,13 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                 className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm hover:shadow-md transition cursor-pointer flex flex-col justify-between group relative"
               >
                 <div>
-                  <div className="flex items-center justify-between mb-3 pr-8">
-                    <span className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 text-[10px] font-extrabold uppercase border border-blue-100 dark:border-blue-900/40">
-                      {subj.category}
-                    </span>
-                  </div>
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <span className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 text-[10px] font-extrabold uppercase border border-blue-100 dark:border-blue-900/40">
+                    {subj.category}
+                  </span>
 
-                  {/* Three dots menu for Subject card anchored at top right corner */}
-                  <div className="absolute top-4 right-4 z-10">
+                  {/* Three dots menu for Subject card */}
+                  <div className="relative z-10">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -3997,10 +4056,11 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                         </div>
                     )}
                   </div>
+                </div>
 
-                  <h3 className="font-extrabold text-base text-slate-900 dark:text-zinc-50 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition">
-                    {subj.subjectName}
-                  </h3>
+                <h3 className="font-extrabold text-base text-slate-900 dark:text-zinc-50 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition leading-tight">
+                  {subj.subjectName}
+                </h3>
 
                   {subj.description && (
                     <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 line-clamp-2">

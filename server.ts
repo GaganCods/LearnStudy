@@ -472,7 +472,7 @@ app.get("/api/video-metadata", async (req, res) => {
         });
       }
     } catch (apiErr: any) {
-      console.warn("[YouTube API] Single video details API call failed. Falling back to scraper:", apiErr.message || apiErr);
+      console.warn("[YouTube API] Single video details API call failed. Falling back to oEmbed/scraper:", apiErr.message || apiErr);
       const errMsg = apiErr.message || String(apiErr);
       if (!ytDiagnostics.lastError) {
         updateDiagnostics("API_FALLBACK_TRIGGERED", {
@@ -481,6 +481,27 @@ app.get("/api/video-metadata", async (req, res) => {
         });
       }
     }
+  }
+
+  // --- OEMBED FALLBACK (Reliable for titles) ---
+  try {
+    const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`;
+    const oembedRes = await fetch(oembedUrl);
+    if (oembedRes.ok) {
+      const oembedData = await oembedRes.json();
+      console.log(`[YouTube API] oEmbed fallback success for video: ${id}`);
+      return res.json({
+        id,
+        title: oembedData.title || "YouTube Video",
+        channelName: oembedData.author_name || "Unknown Channel",
+        duration: "10:00", // oEmbed doesn't provide duration
+        description: "Metadata fetched via oEmbed.",
+        publishDate: "Unknown date",
+        thumbnail: oembedData.thumbnail_url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+      });
+    }
+  } catch (e) {
+    console.warn("[YouTube API] oEmbed fallback failed:", e);
   }
 
   // --- SCRAPER FALLBACK ---
@@ -595,19 +616,29 @@ app.get("/api/youtube-diagnostics", (req, res) => {
 // =========================================================================
 
 function getGeminiClient(req: express.Request): GoogleGenAI {
-  let userKey = (req.headers["x-gemini-key"] as string)
-    || (req.headers["authorization"]?.replace("Bearer ", ""))
+  const headers = req.headers;
+  let userKey = (headers["x-gemini-key"] as string)
+    || (headers["authorization"]?.replace(/^Bearer\s+/i, ""))
     || req.body?.apiKey
-    || req.body?.key;
+    || req.body?.key
+    || req.query?.apiKey as string
+    || req.query?.key as string;
 
   if (userKey) {
     userKey = userKey.trim().replace(/^["']|["']$/g, "");
   }
 
-  const apiKey = (userKey && userKey.length >= 20) ? userKey : process.env.GEMINI_API_KEY;
-  if (!apiKey || !apiKey.trim()) {
-    throw new Error("No Gemini API key detected. Please connect your API key in the Study Hub settings.");
+  // System key safety check
+  const systemKey = process.env.GEMINI_API_KEY;
+  const isSystemKeyValid = systemKey && systemKey.length >= 20 && systemKey !== "undefined" && systemKey !== "null";
+
+  // Priority: 1. User provided key (must be valid length) 2. Valid system environment key
+  const apiKey = (userKey && userKey.length >= 20) ? userKey : (isSystemKeyValid ? systemKey : null);
+
+  if (!apiKey) {
+    throw new Error("No Gemini API key detected. Please connect your API key in the settings to enable AI features.");
   }
+
   return new GoogleGenAI({
     apiKey: apiKey.trim(),
     httpOptions: {
