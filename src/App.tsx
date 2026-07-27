@@ -315,7 +315,18 @@ export default function App() {
     return () => clearInterval(checkInterval);
   }, [hasGeminiKeyInState]);
 
-  // Active study session
+  const [isNamePromptOpen, setIsNamePromptOpen] = useState(false);
+  const [tempName, setTempName] = useState("");
+
+  // Trigger name prompt on launch if no name is set
+  useEffect(() => {
+    const currentSettings = Storage.getSettings();
+    if (!currentSettings.userName) {
+      setIsNamePromptOpen(true);
+    }
+  }, []);
+
+  // Sync active study session
   const [activeSession, setActiveSession] = useState<{
     id: string; // playlist ID or single video ID
     type: "playlist" | "video";
@@ -2433,6 +2444,52 @@ export default function App() {
   return (
     <div className="min-h-screen md:h-screen md:max-h-screen bg-slate-50 dark:bg-[#09090B] text-slate-900 dark:text-zinc-100 flex flex-col font-sans transition-colors duration-300 md:overflow-hidden">
       
+      {/* Username Initial Onboarding Prompt */}
+      {isNamePromptOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95 duration-300">
+            <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white mb-6 shadow-lg shadow-blue-500/20 mx-auto">
+              <User className="w-8 h-8" />
+            </div>
+            <div className="text-center mb-8">
+              <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Welcome to LearnStudy!</h2>
+              <p className="text-slate-500 dark:text-zinc-400 text-sm mt-2">What should we call you in your study workspace?</p>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 dark:text-zinc-500 tracking-widest ml-1 mb-1.5 block">Your Display Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Alex, Sarah, Student..."
+                  autoFocus
+                  value={tempName}
+                  onChange={(e) => setTempName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && tempName.trim()) {
+                      handleSettingChange("userName", tempName.trim());
+                      setIsNamePromptOpen(false);
+                    }
+                  }}
+                  className="w-full bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-2xl px-5 py-4 text-sm font-bold text-slate-900 dark:text-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition"
+                />
+              </div>
+
+              <button
+                disabled={!tempName.trim()}
+                onClick={() => {
+                  handleSettingChange("userName", tempName.trim());
+                  setIsNamePromptOpen(false);
+                }}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-sm py-4 rounded-2xl shadow-xl shadow-blue-500/20 transition-all active:scale-[0.98] cursor-pointer"
+              >
+                Set Name & Get Started
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 1. Header / Top App Bar */}
       {!focusMode && (
         <header className="sticky top-0 z-40 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md border-b border-slate-200 dark:border-zinc-900 px-4 md:px-8 py-3.5 flex items-center justify-between">
@@ -2606,11 +2663,11 @@ export default function App() {
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-black flex items-center justify-center text-xs shrink-0">
-                    S
+                    {(settings.userName || "Scholar")[0].toUpperCase()}
                   </div>
                   <div className="truncate">
                     <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
-                      Scholar Workspace
+                      {settings.userName || "Scholar"} Workspace
                     </div>
                     <div className="text-[10px] text-slate-500 dark:text-zinc-400 font-semibold">
                       Local Offline Mode
@@ -3016,6 +3073,7 @@ export default function App() {
                   {/* Personal Dashboard Header */}
                   <PersonalDashboard 
                     setActiveTab={setActiveTab}
+                    userName={settings.userName}
                   />
 
                   {/* Quick Import Lecture URL Box */}
@@ -5032,6 +5090,21 @@ export default function App() {
                   </div>
 
                   <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm space-y-6">
+                    {/* User Profile Name */}
+                    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
+                      <div className="flex-1">
+                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Display Name</div>
+                        <div className="text-xs text-slate-500 dark:text-zinc-400">This name will be displayed on your dashboard and workspace</div>
+                        <input
+                          type="text"
+                          placeholder="Enter your name..."
+                          value={settings.userName || ""}
+                          onChange={(e) => handleSettingChange("userName", e.target.value)}
+                          className="mt-2 w-full max-w-xs bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-xs font-bold px-3 py-2 rounded-xl text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition"
+                        />
+                      </div>
+                    </div>
+
                     {/* Playback default speed */}
                     <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
                       <div>

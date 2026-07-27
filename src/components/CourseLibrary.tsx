@@ -4,7 +4,7 @@ import {
   Trash2, Edit2, Play, FolderPlus, X, AlertTriangle,
   ChevronRight, ChevronDown, ListVideo, Sparkles, Check, ArrowLeft,
   ArrowUpDown, FileText, ExternalLink, Layers, GraduationCap, Video,
-  Loader2, RefreshCw, ArrowUp, ArrowDown, Palette, Film, Download, Link2,
+  Loader2, RefreshCw, ArrowUp, ArrowDown, ArrowRight, Palette, Film, Download, Link2,
   Scissors, CheckSquare, Square, MoreVertical
 } from "lucide-react";
 import { Storage } from "../utils/storage";
@@ -195,6 +195,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
   const [selectedSplitLectureIds, setSelectedSplitLectureIds] = useState<string[]>([]);
   const [showSplitChapterModal, setShowSplitChapterModal] = useState(false);
   const [splitDestinationType, setSplitDestinationType] = useState<"NEW" | "EXISTING">("NEW");
+  const [splitRangeStart, setSplitRangeStart] = useState<string>("");
+  const [splitRangeEnd, setSplitRangeEnd] = useState<string>("");
   const [splitNewChapterTitle, setSplitNewChapterTitle] = useState("");
   const [splitNewChapterDesc, setSplitNewChapterDesc] = useState("");
   const [splitExistingChapterId, setSplitExistingChapterId] = useState<string>("");
@@ -210,6 +212,25 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     videos: any[];
   } | null>(null);
   const [chapterPlaylistError, setChapterPlaylistError] = useState<string | null>(null);
+
+  // Close any open menus when clicking outside (allows scrolling unlike fixed overlays)
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent | TouchEvent) => {
+      if (showSubjectHeaderMenu || openChapterMenuId || openSubjectCardMenuId) {
+        setShowSubjectHeaderMenu(false);
+        setOpenChapterMenuId(null);
+        setOpenSubjectCardMenuId(null);
+      }
+    };
+    if (showSubjectHeaderMenu || openChapterMenuId || openSubjectCardMenuId) {
+      document.addEventListener('click', handleDocumentClick);
+      document.addEventListener('touchend', handleDocumentClick);
+    }
+    return () => {
+      document.removeEventListener('click', handleDocumentClick);
+      document.removeEventListener('touchend', handleDocumentClick);
+    };
+  }, [showSubjectHeaderMenu, openChapterMenuId, openSubjectCardMenuId]);
 
   // Chapter Edit Modal State
   const [showEditChapterModal, setShowEditChapterModal] = useState(false);
@@ -1835,6 +1856,31 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     setSelectedSplitLectureIds(prev => Array.from(new Set([...prev, ...idsFromHere])));
   };
 
+  const handleSelectRangeSplitLectures = (chapterLectures: ChapterLecture[]) => {
+    const start = parseInt(splitRangeStart);
+    const end = parseInt(splitRangeEnd);
+    
+    if (isNaN(start) || isNaN(end)) {
+      toast.error("Invalid Range", "Please enter valid lecture numbers.");
+      return;
+    }
+    
+    if (start < 1 || end > chapterLectures.length || start > end) {
+      toast.error("Invalid Range", `Please enter a range between 1 and ${chapterLectures.length}.`);
+      return;
+    }
+    
+    // Lectures are usually sorted by lectureNumber, but we'll be safe and use actual number
+    const rangeIds = chapterLectures
+      .filter(l => l.lectureNumber >= start && l.lectureNumber <= end)
+      .map(l => l.id);
+      
+    setSelectedSplitLectureIds(prev => Array.from(new Set([...prev, ...rangeIds])));
+    setSplitRangeStart("");
+    setSplitRangeEnd("");
+    toast.success("Range Selected", `Selected ${rangeIds.length} lectures from #${start} to #${end}.`);
+  };
+
   const handleClearSplitSelection = () => {
     setSelectedSplitLectureIds([]);
   };
@@ -2751,7 +2797,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     return (
       <div className="space-y-6 animate-in fade-in duration-300">
         {/* Header Breadcrumb & Control Bar */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm relative pr-14 md:pr-6">
           <div>
             <button
               onClick={() => setSelectedSubject(null)}
@@ -2772,6 +2818,54 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-2xl">
                 {selectedSubject.description}
               </p>
+            )}
+          </div>
+
+          {/* Subject Header Three Dots Options Menu - Top Right Corner */}
+          <div className="absolute top-4 right-4 md:relative md:top-auto md:right-auto order-first md:order-last">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowSubjectHeaderMenu(!showSubjectHeaderMenu);
+              }}
+              className={`p-1.5 rounded-xl border transition cursor-pointer ${
+                showSubjectHeaderMenu
+                  ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
+                  : "bg-slate-50 dark:bg-zinc-800/50 hover:bg-slate-100 dark:hover:bg-zinc-800 border-slate-100 dark:border-zinc-700/50 text-slate-500 dark:text-zinc-400"
+              }`}
+              title="More options"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
+
+            {showSubjectHeaderMenu && (
+                <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowSubjectHeaderMenu(false);
+                      handleOpenEditSubject(selectedSubject, e);
+                    }}
+                    className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                  >
+                    <Edit2 className="w-4 h-4 text-blue-500" />
+                    <span>Edit Subject</span>
+                  </button>
+
+                  <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowSubjectHeaderMenu(false);
+                      onRequestDeleteSubject(selectedSubject, e);
+                    }}
+                    className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Delete Subject</span>
+                  </button>
+                </div>
             )}
           </div>
 
@@ -2798,75 +2892,6 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               <Plus className="w-3.5 h-3.5" />
               <span>Add Chapter</span>
             </button>
-
-            {/* Subject Header Three Dots Options Menu */}
-            <div className="relative">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowSubjectHeaderMenu(!showSubjectHeaderMenu);
-                }}
-                className={`p-2 rounded-xl border transition cursor-pointer ${
-                  showSubjectHeaderMenu
-                    ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
-                    : "bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300"
-                }`}
-                title="More options"
-              >
-                <MoreVertical className="w-4 h-4" />
-              </button>
-
-              {showSubjectHeaderMenu && (
-                <>
-                  <div 
-                    className="fixed inset-0 z-20" 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowSubjectHeaderMenu(false);
-                    }} 
-                  />
-                  <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowSubjectHeaderMenu(false);
-                        handleOpenEditSubject(selectedSubject, e);
-                      }}
-                      className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
-                    >
-                      <Edit2 className="w-3.5 h-3.5 text-blue-500" />
-                      <span>Edit Subject</span>
-                    </button>
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowSubjectHeaderMenu(false);
-                        handleOpenImportPlaylistModal(selectedSubject);
-                      }}
-                      className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
-                    >
-                      <YoutubeBrandIcon className="w-3.5 h-3.5" />
-                      <span>Import Playlist</span>
-                    </button>
-
-                    <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowSubjectHeaderMenu(false);
-                        onRequestDeleteSubject(selectedSubject.id, selectedSubject.subjectName, e);
-                      }}
-                      className="w-full text-left px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2 cursor-pointer transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete Subject</span>
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
           </div>
         </div>
 
@@ -2924,7 +2949,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               return (
                 <div 
                   key={ch.id} 
-                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4"
+                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4 relative pr-14"
                 >
                   {/* Chapter Header Bar */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800/80 pb-4">
@@ -2944,6 +2969,78 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                           </p>
                         )}
                       </div>
+                    </div>
+
+                    {/* Chapter Three Dots Options Menu - Absolute top-right Corner */}
+                    <div className="absolute top-4 right-4">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenChapterMenuId(openChapterMenuId === ch.id ? null : ch.id);
+                        }}
+                        className={`p-1.5 rounded-xl border transition cursor-pointer ${
+                          openChapterMenuId === ch.id
+                            ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
+                            : "bg-slate-50 dark:bg-zinc-800/50 hover:bg-slate-100 dark:hover:bg-zinc-800 border-slate-100 dark:border-zinc-700/50 text-slate-500 dark:text-zinc-400"
+                        }`}
+                        title="More options"
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                      </button>
+
+                      {openChapterMenuId === ch.id && (
+                        <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenChapterMenuId(null);
+                                toggleChapterManageMode(ch.id, e);
+                              }}
+                              className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                            >
+                              <Edit2 className="w-4 h-4 text-blue-500" />
+                              <span>{managingChapterIds[ch.id] ? "Done Editing" : "Edit Chapter"}</span>
+                            </button>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenChapterMenuId(null);
+                                handleToggleSplitChapterMode(ch.id, e);
+                              }}
+                              className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                            >
+                              <Scissors className="w-4 h-4 text-purple-500" />
+                              <span>{splittingChapterId === ch.id ? "Cancel Split" : "Split Chapter"}</span>
+                            </button>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenChapterMenuId(null);
+                                handleOpenImportPlaylistModal(selectedSubject, ch);
+                              }}
+                              className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                            >
+                              <YoutubeBrandIcon className="w-4 h-4" />
+                              <span>Import Playlist</span>
+                            </button>
+
+                            <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenChapterMenuId(null);
+                                onRequestDeleteChapter(selectedSubject.id, ch.id, ch.title, e);
+                              }}
+                              className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              <span>Delete Chapter</span>
+                            </button>
+                          </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
@@ -2973,87 +3070,6 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                         <Plus className="w-3.5 h-3.5" />
                         <span>Add Lecture</span>
                       </button>
-
-                      {/* Chapter Three Dots Options Menu */}
-                      <div className="relative">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenChapterMenuId(openChapterMenuId === ch.id ? null : ch.id);
-                          }}
-                          className={`p-1.5 rounded-xl border transition cursor-pointer ${
-                            openChapterMenuId === ch.id
-                              ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
-                              : "bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300"
-                          }`}
-                          title="More options"
-                        >
-                          <MoreVertical className="w-4 h-4" />
-                        </button>
-
-                        {openChapterMenuId === ch.id && (
-                          <>
-                            <div 
-                              className="fixed inset-0 z-20" 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenChapterMenuId(null);
-                              }} 
-                            />
-                            <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setOpenChapterMenuId(null);
-                                  toggleChapterManageMode(ch.id, e);
-                                }}
-                                className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
-                              >
-                                <Edit2 className="w-3.5 h-3.5 text-blue-500" />
-                                <span>{managingChapterIds[ch.id] ? "Done Editing" : "Edit Chapter"}</span>
-                              </button>
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setOpenChapterMenuId(null);
-                                  handleToggleSplitChapterMode(ch.id, e);
-                                }}
-                                className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
-                              >
-                                <Scissors className="w-3.5 h-3.5 text-purple-500" />
-                                <span>{splittingChapterId === ch.id ? "Cancel Split" : "Split Chapter"}</span>
-                              </button>
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setOpenChapterMenuId(null);
-                                  handleOpenImportPlaylistModal(selectedSubject, ch);
-                                }}
-                                className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
-                              >
-                                <YoutubeBrandIcon className="w-3.5 h-3.5" />
-                                <span>Import Playlist</span>
-                              </button>
-
-                              <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setOpenChapterMenuId(null);
-                                  onRequestDeleteChapter(selectedSubject.id, ch.id, ch.title, e);
-                                }}
-                                className="w-full text-left px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2 cursor-pointer transition-colors"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>Delete Chapter</span>
-                              </button>
-                            </div>
-                          </>
-                        )}
-                      </div>
                     </div>
                   </div>
 
@@ -3109,6 +3125,34 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                         >
                           Select All ({ch.lectures.length})
                         </button>
+
+                        {/* Range Selection Inputs */}
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-white/50 dark:bg-zinc-800/50 border border-purple-200/50 dark:border-purple-800/40 rounded-xl">
+                          <span className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-zinc-400 font-bold">Range:</span>
+                          <input 
+                            type="number" 
+                            placeholder="From" 
+                            className="w-12 px-1.5 py-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-lg text-[10px] focus:ring-1 focus:ring-purple-500 outline-none text-slate-900 dark:text-zinc-100"
+                            value={splitRangeStart}
+                            onChange={(e) => setSplitRangeStart(e.target.value)}
+                          />
+                          <span className="text-slate-400">-</span>
+                          <input 
+                            type="number" 
+                            placeholder="To" 
+                            className="w-12 px-1.5 py-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-lg text-[10px] focus:ring-1 focus:ring-purple-500 outline-none text-slate-900 dark:text-zinc-100"
+                            value={splitRangeEnd}
+                            onChange={(e) => setSplitRangeEnd(e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSelectRangeSplitLectures(ch.lectures)}
+                            className="p-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors cursor-pointer"
+                            title="Select Range"
+                          >
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
 
                         {selectedSplitLectureIds.length > 0 && (
                           <button
@@ -3291,8 +3335,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                                   onClick={(e) => handleToggleLectureCompleted(selectedSubject.id, ch.id, lec.id, e)}
                                   className={`flex items-center gap-1 text-[11px] font-extrabold transition px-2 py-1 rounded-lg ${
                                     lec.completed 
-                                      ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40" 
-                                      : "text-slate-500 dark:text-zinc-400 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-zinc-800"
+                                      ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60" 
+                                      : "text-slate-500 dark:text-zinc-400 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                                   }`}
                                   title={lec.completed ? "Mark as uncompleted" : "Mark as completed"}
                                 >
@@ -3912,24 +3956,16 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                     </button>
 
                     {openSubjectCardMenuId === subj.id && (
-                      <>
-                        <div 
-                          className="fixed inset-0 z-20" 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenSubjectCardMenuId(null);
-                          }} 
-                        />
-                        <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+                      <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               setOpenSubjectCardMenuId(null);
                               handleOpenEditSubject(subj, e);
                             }}
-                            className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
+                            className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
                           >
-                            <Edit2 className="w-3.5 h-3.5 text-blue-500" />
+                            <Edit2 className="w-4 h-4 text-blue-500" />
                             <span>Edit Subject</span>
                           </button>
 
@@ -3939,9 +3975,9 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                               setOpenSubjectCardMenuId(null);
                               handleOpenImportPlaylistModal(subj);
                             }}
-                            className="w-full text-left px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2 cursor-pointer transition-colors"
+                            className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
                           >
-                            <YoutubeBrandIcon className="w-3.5 h-3.5" />
+                            <YoutubeBrandIcon className="w-4 h-4" />
                             <span>Import Playlist</span>
                           </button>
 
@@ -3953,13 +3989,12 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                               setOpenSubjectCardMenuId(null);
                               onRequestDeleteSubject(subj.id, subj.subjectName, e);
                             }}
-                            className="w-full text-left px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2 cursor-pointer transition-colors"
+                            className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-4 h-4" />
                             <span>Delete Subject</span>
                           </button>
                         </div>
-                      </>
                     )}
                   </div>
 

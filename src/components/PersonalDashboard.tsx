@@ -8,10 +8,12 @@ import { ActiveTab } from "../types";
 
 interface PersonalDashboardProps {
   setActiveTab?: (tab: ActiveTab) => void;
+  userName?: string;
 }
 
 export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({ 
-  setActiveTab 
+  setActiveTab,
+  userName
 }) => {
   const stats = Storage.getStreakStats();
   const flashcards = Storage.getFlashcards();
@@ -40,7 +42,7 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
     return d >= oneWeekAgo && d <= now;
   }).length;
 
-  const displayName = "Scholar";
+  const displayName = userName || "Scholar";
 
   return (
     <div className="relative overflow-hidden bg-white dark:bg-[#09090B] border border-slate-200 dark:border-[rgba(255,255,255,0.06)] rounded-3xl p-6 md:p-8 text-slate-900 dark:text-[#F8F8F8] shadow-sm dark:shadow-[0_8px_30px_rgb(0,0,0,0.6)] animate-in fade-in slide-in-from-bottom-4 duration-500 text-left">
@@ -76,41 +78,7 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
           </div>
         </div>
 
-        {/* Right Section (Compact Account Panel) - Col Span 4 */}
-        <div className="lg:col-span-4 w-full">
-          <div className="bg-slate-50 dark:bg-[#111113] border border-slate-200 dark:border-[rgba(255,255,255,0.06)] rounded-2xl p-4 w-full md:max-w-[320px] lg:ml-auto space-y-3.5 shadow-sm dark:shadow-lg relative overflow-hidden group">
-            {/* Left orange bar indicator */}
-            <div className="absolute top-0 left-0 w-1 h-full bg-[#FF6A00]/40 group-hover:bg-[#FF6A00] transition-colors duration-300" />
-            
-            <div className="flex items-center gap-3 pl-1.5">
-              <div className="w-10 h-10 rounded-xl bg-[#FF6A00] text-white font-black flex items-center justify-center text-base shadow-[0_0_12px_rgba(255,106,0,0.3)] shrink-0">
-                {displayName[0].toUpperCase()}
-              </div>
-              <div className="flex-1 min-w-0">
-                <h4 className="text-xs font-black text-slate-900 dark:text-[#F8F8F8] truncate">{displayName}</h4>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span className="text-[10px] font-bold text-slate-600 dark:text-zinc-400">Local Workspace Active</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Cloud detail statistics */}
-            <div className="grid grid-cols-2 gap-2 bg-white/80 dark:bg-[#09090B]/60 border border-slate-200/60 dark:border-[rgba(255,255,255,0.03)] rounded-xl p-2.5 pl-3 text-[11px]">
-              <div>
-                <span className="text-slate-500 dark:text-zinc-500 block text-[9px] uppercase tracking-wider font-bold">Plan Type</span>
-                <span className="text-[#FF6A00] font-bold flex items-center gap-0.5">
-                  <Sparkles className="w-2.5 h-2.5 fill-[#FF6A00]" />
-                  Premium
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-500 dark:text-zinc-500 block text-[9px] uppercase tracking-wider font-bold">Storage</span>
-                <span className="text-slate-700 dark:text-zinc-300 font-semibold">Local IndexedDB</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* Right Section Removed per user request */}
       </div>
 
       {/* 3 compact statistics glass cards with micro-visualizations */}

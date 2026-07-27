@@ -60,6 +60,7 @@ export interface StudySettings {
   theme: "light" | "dark" | "system";
   enableShortcuts?: boolean;
   youtubeApiKey?: string;
+  userName?: string;
 }
 
 export interface Flashcard {

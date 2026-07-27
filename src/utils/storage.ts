@@ -20,6 +20,7 @@ const DEFAULT_SETTINGS: StudySettings = {
   skipCompleted: false,
   theme: "system",
   enableShortcuts: true,
+  userName: "",
 };
 
 export const Storage = {
