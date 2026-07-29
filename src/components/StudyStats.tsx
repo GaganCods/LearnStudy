@@ -1,9 +1,22 @@
-import React, { useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Storage } from "../utils/storage";
 import { Calendar, Flame, Clock, Play, Award, BarChart2 } from "lucide-react";
 
 export function StudyStats() {
-  const logs = useMemo(() => Storage.getStudyLogs(), []);
+  const [logs, setLogs] = useState(() => Storage.getStudyLogs());
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      setLogs(Storage.getStudyLogs());
+    };
+    window.addEventListener("studytube_logs_updated", handleUpdate);
+    window.addEventListener("storage", handleUpdate);
+    return () => {
+      window.removeEventListener("studytube_logs_updated", handleUpdate);
+      window.removeEventListener("storage", handleUpdate);
+    };
+  }, []);
+
   const streakStats = useMemo(() => Storage.getStreakStats(), [logs]);
 
   // Calculations

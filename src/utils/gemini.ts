@@ -3,22 +3,30 @@ export const GEMINI_STORAGE_KEY = "learnstudy_api_key";
 export function getGeminiKey(): string | null {
   const val = localStorage.getItem(GEMINI_STORAGE_KEY);
   if (!val) return null;
-  const sanitized = val.trim().replace(/^["']|["']$/g, "");
+  const sanitized = val.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "");
   return sanitized.length >= 20 ? sanitized : null;
 }
 
 export function saveGeminiKey(key: string) {
-  const sanitized = key.trim().replace(/^["']|["']$/g, "");
+  const sanitized = key.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "");
   localStorage.setItem(GEMINI_STORAGE_KEY, sanitized);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("learnstudy_key_updated"));
+    window.dispatchEvent(new Event("storage"));
+  }
 }
 
 export function removeGeminiKey() {
   localStorage.removeItem(GEMINI_STORAGE_KEY);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("learnstudy_key_updated"));
+    window.dispatchEvent(new Event("storage"));
+  }
 }
 
 export function maskApiKey(key: string): string {
   if (!key) return "";
-  const trimmed = key.trim().replace(/^["']|["']$/g, "");
+  const trimmed = key.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "");
   if (trimmed.length <= 8) {
     return "*".repeat(trimmed.length);
   }
@@ -49,7 +57,7 @@ function getHeaders(): HeadersInit {
  * Validates a Gemini API Key format and makes a lightweight request to test live connectivity.
  */
 export async function validateGeminiKey(key: string): Promise<boolean> {
-  const trimmed = key.trim().replace(/^["']|["']$/g, "");
+  const trimmed = key.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "");
   if (!trimmed) {
     throw new Error("API Key cannot be empty");
   }

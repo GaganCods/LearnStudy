@@ -4,6 +4,7 @@ import {
 } from "../utils/pomodoroDb";
 import { playPomodoroSound } from "../utils/pomodoroSounds";
 import { useToast } from "./ToastContext";
+import { Storage } from "../utils/storage";
 
 interface PomodoroContextType {
   settings: PomodoroSettings;
@@ -339,6 +340,15 @@ export const PomodoroProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     await PomodoroDb.saveHistoryItem(historyItem);
     const updatedHistory = await PomodoroDb.getHistory();
     setHistory(updatedHistory);
+
+    // Sync to global study logs for real-time streak tracking
+    if (isFocus) {
+      Storage.addStudyTime(
+        "pomodoro",
+        historyItem.lectureTitle || "Focus Session",
+        durationMins * 60
+      );
+    }
 
     // 2. Update Stats
     const currentStats = await PomodoroDb.getStats();

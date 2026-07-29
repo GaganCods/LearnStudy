@@ -2825,27 +2825,32 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     return (
       <div className="space-y-6 animate-in fade-in duration-300">
         {/* Header Breadcrumb & Control Bar */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm relative">
-          <div className="flex-1">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 shadow-sm relative overflow-hidden">
+          <div className="flex-1 min-w-0">
             <button
               onClick={() => setSelectedSubject(null)}
-              className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 mb-2 cursor-pointer"
+              className="group text-[10px] font-black text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1.5 mb-3 cursor-pointer transition-colors uppercase tracking-widest"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
+              <ArrowLeft className="w-3 h-3 group-hover:-translate-x-0.5 transition-transform" />
               Back to All Subjects
             </button>
+            
             <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1">
+              <div className="space-y-1.5 flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold uppercase bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900">
+                  <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-[0.15em] bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
                     {selectedSubject.category}
                   </span>
+                  <span className="w-1 h-1 rounded-full bg-slate-300 dark:bg-zinc-700" />
+                  <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
+                    {selectedSubject.chapters.length} Folders
+                  </span>
                 </div>
-                <h1 className="text-2xl font-extrabold text-slate-900 dark:text-zinc-50 leading-tight">
+                <h1 className="text-2xl sm:text-3xl font-[900] text-slate-900 dark:text-zinc-50 tracking-tight leading-[1.1]">
                   {selectedSubject.subjectName}
                 </h1>
                 {selectedSubject.description && (
-                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-2xl">
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-2xl font-medium leading-relaxed">
                     {selectedSubject.description}
                   </p>
                 )}
@@ -2858,14 +2863,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                     e.stopPropagation();
                     setShowSubjectHeaderMenu(!showSubjectHeaderMenu);
                   }}
-                  className={`p-1.5 rounded-xl border transition cursor-pointer ${
+                  className={`p-2.5 rounded-2xl border transition-all duration-200 cursor-pointer shadow-sm active:scale-95 ${
                     showSubjectHeaderMenu
-                      ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
-                      : "bg-slate-50 dark:bg-zinc-800/50 hover:bg-slate-100 dark:hover:bg-zinc-800 border-slate-100 dark:border-zinc-700/50 text-slate-500 dark:text-zinc-400"
+                      ? "bg-slate-900 dark:bg-zinc-100 border-slate-900 dark:border-zinc-100 text-white dark:text-zinc-950"
+                      : "bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-750 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300"
                   }`}
                   title="More options"
                 >
-                  <MoreVertical className="w-4 h-4" />
+                  <MoreVertical className="w-4.5 h-4.5" />
                 </button>
 
                 {showSubjectHeaderMenu && (
@@ -2984,18 +2989,18 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                   className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4"
                 >
                   {/* Chapter Header Bar */}
-                  <div className="flex flex-col gap-4 border-b border-slate-100 dark:border-zinc-800/80 pb-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-extrabold text-sm flex items-center justify-center border border-blue-200/50 dark:border-blue-900/40 shrink-0">
-                          Ch.{ch.chapterNumber}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800/80 pb-5">
+                    <div className="flex-1 flex items-start justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-[1.25rem] bg-blue-600 text-white font-black text-sm flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0 border border-white/20">
+                          {ch.chapterNumber}
                         </div>
-                        <div>
-                          <h3 className="text-base font-extrabold text-slate-900 dark:text-zinc-50 leading-tight">
+                        <div className="min-w-0">
+                          <h3 className="text-lg font-[900] text-slate-900 dark:text-zinc-50 tracking-tight leading-tight truncate">
                             {ch.title}
                           </h3>
                           {ch.description && (
-                            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                            <p className="text-[11px] font-medium text-slate-500 dark:text-zinc-400 mt-1 line-clamp-1 max-w-md">
                               {ch.description}
                             </p>
                           )}
@@ -3009,14 +3014,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                             e.stopPropagation();
                             setOpenChapterMenuId(openChapterMenuId === ch.id ? null : ch.id);
                           }}
-                          className={`p-1.5 rounded-xl border transition cursor-pointer ${
+                          className={`p-2.5 rounded-2xl border transition-all duration-200 cursor-pointer shadow-sm active:scale-95 ${
                             openChapterMenuId === ch.id
-                              ? "bg-slate-200 dark:bg-zinc-700 border-slate-300 dark:border-zinc-600 text-slate-900 dark:text-zinc-100"
-                              : "bg-slate-50 dark:bg-zinc-800/50 hover:bg-slate-100 dark:hover:bg-zinc-800 border-slate-100 dark:border-zinc-700/50 text-slate-500 dark:text-zinc-400"
+                              ? "bg-slate-900 dark:bg-zinc-100 border-slate-900 dark:border-zinc-100 text-white dark:text-zinc-950"
+                              : "bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-750 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300"
                           }`}
                           title="More options"
                         >
-                          <MoreVertical className="w-4 h-4" />
+                          <MoreVertical className="w-4.5 h-4.5" />
                         </button>
 
                         {openChapterMenuId === ch.id && (
@@ -3944,9 +3949,9 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
         </div>
       </div>
 
-      {/* Dynamic Category Filters & Search */}
+      {/* Dynamic Category Filters */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto pb-1 scrollbar-none">
+        <div className="flex items-center gap-2 overflow-x-auto w-full pb-1 scrollbar-none">
           {categories.map((cat) => (
             <button
               key={cat}
@@ -3969,17 +3974,6 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
             <Palette className="w-3.5 h-3.5 text-blue-500 shrink-0" />
             <span>Manage Categories</span>
           </button>
-        </div>
-
-        <div className="relative w-full sm:w-64">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search subject or chapter..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-xs pl-9 pr-4 py-2 rounded-xl text-slate-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          />
         </div>
       </div>
 

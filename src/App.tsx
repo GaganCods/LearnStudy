@@ -6,10 +6,11 @@ import {
   Sparkles, TrendingUp, Plus, Edit2, X, Clock, Flame, 
   ShieldAlert, Share2, Moon, Sun, Laptop, ChevronDown, ChevronUp, CheckCircle,
   Eye, EyeOff, Star, Calendar, Download, Upload, Info, RefreshCw, ArrowUpDown, Filter,
-  ArrowUp,
+  ArrowUp, AlarmClock, Quote, MessageSquarePlus,
   Github, Linkedin, Twitter, Globe, Award, User, Folder, Brain, Users, Cloud, CloudOff,
   Layers, LogOut, Crown, CheckCircle2, Menu, Loader2, MoreVertical, Keyboard, AlertTriangle
 } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { Storage } from "./utils/storage";
 import { StudyStats } from "./components/StudyStats";
 import { InteractiveNotes } from "./components/InteractiveNotes";
@@ -39,6 +40,8 @@ import { FlashcardsManager } from "./components/FlashcardsManager";
 import { StudyPlanner } from "./components/StudyPlanner";
 import { PDFStudyReader } from "./components/PDFStudyReader";
 import { StudyCalendar } from "./components/StudyCalendar";
+import { FeedbackModal } from "./components/feedback/FeedbackModal";
+import { SettingsPanel } from "./components/SettingsPanel";
 
 declare global {
   interface Window {
@@ -443,7 +446,9 @@ export default function App() {
   const playerRef = useRef<any>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const mainScrollRef = useRef<HTMLElement>(null);
+  const searchResultsRef = useRef<HTMLDivElement>(null);
   const [showBackToTop, setShowBackToTop] = useState(false);
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
 
   useEffect(() => {
     const mainElement = mainScrollRef.current;
@@ -2417,25 +2422,40 @@ export default function App() {
   // Unified global search across playlists, videos, notes, bookmarks
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return null;
-    const query = searchQuery.toLowerCase();
+    const rawQuery = searchQuery.toLowerCase().trim();
+    
+    // Check if it's a category filter
+    const isPlaylistsFilter = rawQuery === "playlists";
+    const isVideosFilter = rawQuery === "videos";
+    const isNotesFilter = rawQuery === "notes";
+    const isHistoryFilter = rawQuery === "history";
+    
+    const query = (isPlaylistsFilter || isVideosFilter || isNotesFilter || isHistoryFilter) ? "" : rawQuery;
 
     // Matching Playlists & single videos
-    const matchedPlaylists = playlists.filter(p => p.title.toLowerCase().includes(query) || p.channelName.toLowerCase().includes(query));
-    const matchedSingles = singleVideos.filter(v => v.title.toLowerCase().includes(query) || v.channelName.toLowerCase().includes(query));
+    const matchedPlaylists = playlists.filter(p => 
+      (isPlaylistsFilter && !query) || 
+      p.title.toLowerCase().includes(query) || 
+      p.channelName.toLowerCase().includes(query)
+    );
+    
+    const matchedSingles = singleVideos.filter(v => 
+      (isVideosFilter && !query) || 
+      v.title.toLowerCase().includes(query) || 
+      v.channelName.toLowerCase().includes(query)
+    );
 
     // Matching Notes
     const notesDb = Storage.getNotes();
     const matchedNotes = Object.entries(notesDb)
       .map(([vId, text]) => {
-        // Find corresponding video title
         let vTitle = "Unknown Lecture";
         const matchedPl = playlists.find(p => p.videos.some(vid => vid.id === vId));
         const matchedVid = matchedPl?.videos.find(vid => vid.id === vId) || singleVideos.find(sv => sv.id === vId);
         if (matchedVid) vTitle = matchedVid.title;
-
         return { videoId: vId, text, title: vTitle };
       })
-      .filter(item => item.text.toLowerCase().includes(query));
+      .filter(item => (isNotesFilter && !query) || item.text.toLowerCase().includes(query) || item.title.toLowerCase().includes(query));
 
     // Matching Bookmarks
     const bookmarksDb = Storage.getBookmarks();
@@ -2447,19 +2467,27 @@ export default function App() {
       if (matchedVid) vTitle = matchedVid.title;
 
       list.forEach(b => {
-        if (b.label.toLowerCase().includes(query)) {
+        if ((isNotesFilter && !query) || b.label.toLowerCase().includes(query) || vTitle.toLowerCase().includes(query)) {
           matchedBookmarks.push({ ...b, videoTitle: vTitle });
         }
       });
     });
 
+    // Matching History
+    const matchedHistory = sortedHistoryItems.filter(item => 
+      (isHistoryFilter && !query) || 
+      item.title.toLowerCase().includes(query) || 
+      item.channelName.toLowerCase().includes(query)
+    );
+
     return {
-      playlists: matchedPlaylists,
-      videos: matchedSingles,
-      notes: matchedNotes,
-      bookmarks: matchedBookmarks
+      playlists: isVideosFilter || isNotesFilter || isHistoryFilter ? [] : matchedPlaylists,
+      videos: isPlaylistsFilter || isNotesFilter || isHistoryFilter ? [] : matchedSingles,
+      notes: isPlaylistsFilter || isVideosFilter || isHistoryFilter ? [] : matchedNotes,
+      bookmarks: isPlaylistsFilter || isVideosFilter || isHistoryFilter ? [] : matchedBookmarks,
+      history: isPlaylistsFilter || isVideosFilter || isNotesFilter ? [] : matchedHistory
     };
-  }, [searchQuery, playlists, singleVideos]);
+  }, [searchQuery, playlists, singleVideos, sortedHistoryItems]);
 
   // Clean formatted time
   const formatTimeText = (isoString: string) => {
@@ -2524,10 +2552,10 @@ export default function App() {
       {showBackToTop && (
         <button
           onClick={scrollToTop}
-          className="fixed bottom-24 right-6 md:bottom-12 md:right-12 z-[60] p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-xl border border-white/20 transition-all hover:scale-110 active:scale-95 animate-in fade-in slide-in-from-bottom-4 duration-300 group cursor-pointer"
+          className="fixed bottom-[84px] right-4 md:bottom-10 md:right-10 z-40 p-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl shadow-2xl border border-white/20 transition-all hover:scale-110 active:scale-95 animate-in fade-in slide-in-from-bottom-4 duration-300 group cursor-pointer"
           title="Back to Top"
         >
-          <ArrowUp className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" />
+          <ArrowUp className="w-6 h-6 md:w-5 md:h-5 group-hover:-translate-y-0.5 transition-transform" />
         </button>
       )}
 
@@ -2590,7 +2618,7 @@ export default function App() {
               }`}
               title="Pomodoro Timer"
             >
-              <Clock className={`w-4 h-4 sm:w-5 sm:h-5 ${!pomoState.isPaused && pomoState.mode === "focus" ? "animate-spin" : ""}`} style={{ animationDuration: "12s" }} />
+              <AlarmClock className={`w-4 h-4 sm:w-5 sm:h-5 ${!pomoState.isPaused && pomoState.mode === "focus" ? "animate-spin" : ""}`} style={{ animationDuration: "12s" }} />
               <span className="text-xs font-black hidden xs:inline tracking-wide font-mono">
                 {(() => {
                   const remainingSecs = Math.ceil(pomoState.remainingMs / 1000);
@@ -2601,17 +2629,17 @@ export default function App() {
               </span>
             </button>
 
-            {/* Mobile Statistics Button */}
+            {/* Mobile Search Button (Redirects to Search Tab) */}
             <button
-              onClick={() => { setActiveTab("stats"); setSearchQuery(""); }}
+              onClick={() => { setActiveTab("search"); setSearchQuery(""); }}
               className={`p-2 sm:p-2.5 rounded-xl border cursor-pointer transition-all duration-200 hover:scale-[1.04] active:scale-[0.96] shadow-sm hover:shadow-md flex md:hidden items-center justify-center ${
-                activeTab === "stats"
+                activeTab === "search"
                   ? "bg-blue-500/15 border-blue-500/40 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25 hover:border-blue-500/60"
                   : "bg-slate-100 hover:bg-slate-200/80 border-slate-200/50 hover:border-slate-300 text-slate-700 hover:text-slate-900 dark:bg-zinc-900 dark:hover:bg-zinc-800 border-zinc-800 dark:border-zinc-800/80 dark:hover:border-zinc-700 dark:text-zinc-300 dark:hover:text-white"
               }`}
-              title="Study Statistics"
+              title="Search Platform"
             >
-              <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5" />
+              <Search className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
 
             {/* Theme Single Switch Toggle */}
@@ -2645,40 +2673,78 @@ export default function App() {
           />
 
           {/* Drawer Panel */}
-          <div className="relative w-72 max-w-[82vw] bg-white dark:bg-zinc-950 h-full shadow-2xl flex flex-col z-10 overflow-hidden border-r border-slate-200 dark:border-zinc-850 animate-in slide-in-from-left duration-200">
+          <div className="relative w-72 max-w-[82vw] bg-[#0B0B10] h-full shadow-2xl flex flex-col z-10 overflow-hidden border-r border-white/5 animate-in slide-in-from-left duration-200">
             {/* Header */}
-            <div className="p-4 border-b border-slate-100 dark:border-zinc-850 flex items-center justify-between shrink-0">
+            <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5">
                 <img src="/favicon.svg" alt="LearnStudy" className="w-5 h-5 object-contain shrink-0" referrerPolicy="no-referrer" />
-                <span className="font-extrabold text-lg text-slate-900 dark:text-white">Learn<span className="bg-gradient-to-r from-blue-500 to-indigo-500 bg-clip-text text-transparent">Study</span></span>
+                <span className="font-extrabold text-lg text-white">Learn<span className="bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">Study</span></span>
               </div>
               <button
                 onClick={() => setMobileSidebarOpen(false)}
-                className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-zinc-900 text-slate-500 dark:text-zinc-400 cursor-pointer"
+                className="p-2 rounded-xl hover:bg-white/5 text-white/50 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Nav list */}
-            <div className="p-3 space-y-1 flex-1 overflow-y-auto">
-              <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-zinc-500 px-3 py-1">
-                Navigation
+            <div className="p-3 space-y-[5px] flex-1 overflow-y-auto bg-[#0B0B10]">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 pt-1 pb-2 opacity-60">
+                Core Hub
               </div>
               {[
-                { id: "home", label: "Home Dashboard", icon: <Home className="w-4.5 h-4.5" /> },
-                { id: "study", label: "Lecture Player", icon: <Tv className="w-4.5 h-4.5" /> },
-                { id: "library", label: "Course Library", icon: <Folder className="w-4.5 h-4.5 text-blue-500" /> },
-                { id: "flashcards", label: "Flashcards & Quiz", icon: <Brain className="w-4.5 h-4.5 text-emerald-500" /> },
-                { id: "planner", label: "Study Planner & Tasks", icon: <Calendar className="w-4.5 h-4.5 text-purple-500" /> },
-                { id: "calendar", label: "Study Calendar", icon: <Calendar className="w-4.5 h-4.5 text-amber-500" /> },
-                { id: "pdf", label: "PDF Study Reader", icon: <FileText className="w-4.5 h-4.5 text-rose-500" /> },
-                { id: "pomodoro", label: "Pomodoro Timer", icon: <Clock className="w-4.5 h-4.5 text-orange-500" /> },
-                { id: "history", label: "Watch History", icon: <History className="w-4.5 h-4.5" /> },
-                { id: "favorites", label: "Favorites", icon: <Heart className="w-4.5 h-4.5 text-red-500" /> },
-                { id: "stats", label: "Study Analytics", icon: <TrendingUp className="w-4.5 h-4.5 text-cyan-500" /> },
-                { id: "developer", label: "Developer Profile", icon: <User className="w-4.5 h-4.5 text-teal-500" /> },
-                { id: "settings", label: "Settings & Account", icon: <Settings className="w-4.5 h-4.5" /> },
+                { id: "home", label: "Home Dashboard", icon: <Home className="w-[18px] h-[18px]" /> },
+                { id: "study", label: "Lecture Player", icon: <Tv className="w-[18px] h-[18px]" /> },
+                { id: "library", label: "Course Library", icon: <Folder className="w-[18px] h-[18px]" /> },
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    if (item.id === "study" && !activeVideoId && !activeSession) return;
+                    setActiveTab(item.id as ActiveTab);
+                    setSearchQuery("");
+                    setMobileSidebarOpen(false);
+                  }}
+                  className={`w-full relative flex items-center justify-between px-4 h-[42px] rounded-[12px] text-xs transition-all duration-250 cursor-pointer group ${
+                    item.id === "study" && !activeVideoId && !activeSession ? "opacity-30 cursor-not-allowed" : ""
+                  } ${
+                    activeTab === item.id && !searchQuery
+                      ? "text-white font-semibold"
+                      : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                  }`}
+                >
+                  {activeTab === item.id && !searchQuery && (
+                    <motion.div
+                      layoutId="mobile-nav-active"
+                      className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <div className="flex items-center gap-3 relative z-10">
+                    <div className={activeTab === item.id && !searchQuery ? "text-white opacity-100" : "text-white opacity-55"}>
+                      {item.icon}
+                    </div>
+                    <span>{item.label}</span>
+                  </div>
+                  {activeTab === item.id && !searchQuery && (
+                    <motion.div 
+                      layoutId="mobile-active-indicator"
+                      className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                </button>
+              ))}
+
+              <div className="pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 opacity-60">
+                Smart Study Tools
+              </div>
+              {[
+                { id: "flashcards", label: "Flashcards & Quiz", icon: <Brain className="w-[18px] h-[18px]" /> },
+                { id: "planner", label: "Study Planner & Tasks", icon: <CheckCircle2 className="w-[18px] h-[18px]" /> },
+                { id: "calendar", label: "Study Calendar", icon: <Calendar className="w-[18px] h-[18px]" /> },
+                { id: "pdf", label: "PDF Study Reader", icon: <FileText className="w-[18px] h-[18px]" /> },
               ].map((item) => (
                 <button
                   key={item.id}
@@ -2687,30 +2753,116 @@ export default function App() {
                     setSearchQuery("");
                     setMobileSidebarOpen(false);
                   }}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                  className={`w-full relative flex items-center justify-between px-4 h-[42px] rounded-[12px] text-xs transition-all duration-250 cursor-pointer group ${
                     activeTab === item.id && !searchQuery
-                      ? "bg-blue-600 text-white shadow-md shadow-blue-500/20"
-                      : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
+                      ? "text-white font-semibold"
+                      : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
                   }`}
                 >
-                  {item.icon}
-                  <span>{item.label}</span>
+                  {activeTab === item.id && !searchQuery && (
+                    <motion.div
+                      layoutId="mobile-nav-active"
+                      className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <div className="flex items-center gap-3 relative z-10">
+                    <div className={activeTab === item.id && !searchQuery ? "text-white opacity-100" : "text-white opacity-55"}>
+                      {item.icon}
+                    </div>
+                    <span>{item.label}</span>
+                  </div>
+                  {activeTab === item.id && !searchQuery && (
+                    <motion.div 
+                      layoutId="mobile-active-indicator"
+                      className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
                 </button>
               ))}
+
+              <div className="pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 opacity-60">
+                Utilities
+              </div>
+              {[
+                { id: "pomodoro", label: "Pomodoro Timer", icon: <AlarmClock className="w-[18px] h-[18px]" /> },
+                { id: "history", label: "Watch History", icon: <History className="w-[18px] h-[18px]" /> },
+                { id: "favorites", label: "Favorites", icon: <Heart className="w-[18px] h-[18px]" /> },
+                { id: "stats", label: "Study Analytics", icon: <TrendingUp className="w-[18px] h-[18px]" /> },
+                { id: "developer", label: "Developer Profile", icon: <User className="w-[18px] h-[18px]" /> },
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    setActiveTab(item.id as ActiveTab);
+                    setSearchQuery("");
+                    setMobileSidebarOpen(false);
+                  }}
+                  className={`w-full relative flex items-center justify-between px-4 h-[42px] rounded-[12px] text-xs transition-all duration-250 cursor-pointer group ${
+                    activeTab === item.id && !searchQuery
+                      ? "text-white font-semibold"
+                      : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                  }`}
+                >
+                  {activeTab === item.id && !searchQuery && (
+                    <motion.div
+                      layoutId="mobile-nav-active"
+                      className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <div className="flex items-center gap-3 relative z-10">
+                    <div className={activeTab === item.id && !searchQuery ? "text-white opacity-100" : "text-white opacity-55"}>
+                      {item.icon}
+                    </div>
+                    <span>{item.label}</span>
+                  </div>
+                  {activeTab === item.id && !searchQuery && (
+                    <motion.div 
+                      layoutId="mobile-active-indicator"
+                      className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                </button>
+              ))}
+
+              <div className="pt-2" />
+              
+              <button
+                onClick={() => {
+                  setFeedbackModalOpen(true);
+                  setMobileSidebarOpen(false);
+                }}
+                className={`w-full relative flex items-center justify-between px-4 h-[42px] rounded-[12px] text-xs font-black transition-all duration-250 bg-gradient-to-br from-violet-600 via-blue-600 to-indigo-600 hover:from-violet-700 hover:via-blue-700 hover:to-indigo-700 text-white shadow-lg shadow-violet-500/30 border border-white/10 cursor-pointer active:scale-95 group overflow-hidden`}
+              >
+                {/* Subtle shine effect */}
+                <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 pointer-events-none" />
+                
+                <div className="flex items-center gap-3 relative z-10">
+                  <MessageSquarePlus className="w-[18px] h-[18px] shrink-0 text-violet-100 group-hover:rotate-12 transition-transform" />
+                  <span className="tracking-tight uppercase">Give Feedback</span>
+                </div>
+                <span className="relative flex h-2 w-2 z-10">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-200 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                </span>
+              </button>
             </div>
 
             {/* Bottom Account Drawer Section */}
-            <div className="p-3.5 border-t border-slate-100 dark:border-zinc-850 bg-slate-50/80 dark:bg-zinc-900/80 shrink-0">
+            <div className="p-3.5 border-t border-white/5 bg-white/2 shrink-0">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-black flex items-center justify-center text-xs shrink-0">
                     {(settings.userName || "Scholar")[0].toUpperCase()}
                   </div>
                   <div className="truncate">
-                    <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
+                    <div className="text-xs font-bold text-white truncate">
                       {settings.userName || "Scholar"} Workspace
                     </div>
-                    <div className="text-[10px] text-slate-500 dark:text-zinc-400 font-semibold">
+                    <div className="text-[10px] text-white/50 font-semibold">
                       Local Offline Mode
                     </div>
                   </div>
@@ -2720,50 +2872,39 @@ export default function App() {
                     setMobileSidebarOpen(false);
                     setActiveTab("settings");
                   }}
-                  className="p-2 text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200 bg-white dark:bg-zinc-800 rounded-xl border border-slate-200 dark:border-zinc-700 cursor-pointer text-xs font-bold"
+                  className={`relative p-2 h-[38px] min-w-[80px] flex items-center justify-center rounded-xl border border-white/10 cursor-pointer text-xs font-bold transition-all duration-250 ${
+                    activeTab === "settings" && !searchQuery
+                      ? "text-white"
+                      : "text-white/60 hover:text-white hover:bg-white/5"
+                  }`}
                 >
-                  Settings
+                  {activeTab === "settings" && !searchQuery && (
+                    <motion.div
+                      layoutId="mobile-nav-active"
+                      className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-xl"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <span className="relative z-10">Settings</span>
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
-
-      {/* Mobile Search input */}
-      {!focusMode && (
-        <div className="p-3 bg-white dark:bg-zinc-950 border-b border-slate-200 dark:border-zinc-900 block md:hidden">
-          <div className="relative">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400 dark:text-zinc-500" />
-            <input
-              type="text"
-              placeholder="Search notes, playlists..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-100 dark:bg-zinc-900 border border-transparent focus:border-slate-200 dark:focus:border-zinc-800 text-xs pl-9 pr-8 py-2 rounded-xl text-slate-800 dark:text-zinc-200 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none transition"
-            />
-            {searchQuery && (
-              <button onClick={() => setSearchQuery("")} className="absolute right-3 top-2.5 text-slate-400 dark:text-zinc-500">
-                <X className="w-4.5 h-4.5" />
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="flex-1 flex flex-col md:flex-row relative md:overflow-hidden">
         
-        {/* 2. Desktop Sidebar */}
-        <aside className={`border-r border-slate-200 dark:border-zinc-900 bg-white dark:bg-zinc-950 p-4 shrink-0 transition-all duration-300 ${focusMode ? "hidden" : "hidden md:flex flex-col justify-between"} ${sidebarCollapsed ? "w-[72px]" : "w-[260px]"}`}>
+      <div className="flex-1 flex flex-col md:flex-row relative md:overflow-hidden">
+        {/* Desktop Sidebar */}
+        <aside className={`border-r border-white/5 bg-[#0B0B10] p-4 shrink-0 transition-all duration-300 ${focusMode ? "hidden" : "hidden md:flex flex-col justify-between"} ${sidebarCollapsed ? "w-[72px]" : "w-[260px]"}`}>
           <div className="space-y-6">
             {!sidebarCollapsed ? (
               <div className="flex items-center justify-between px-3">
-                <div className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
+                <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest opacity-60">
                   Core Hub
                 </div>
                 <button
                   onClick={() => setSidebarCollapsed(true)}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-750 hover:bg-slate-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-900 transition-colors hidden md:block cursor-pointer"
+                  className="p-1 rounded-lg text-zinc-500 hover:text-white hover:bg-white/5 transition-colors hidden md:block cursor-pointer"
                   title="Collapse Sidebar"
                 >
                   <ChevronLeft className="w-4 h-4" />
@@ -2773,7 +2914,7 @@ export default function App() {
               <div className="flex flex-col items-center justify-center py-2">
                 <button
                   onClick={() => setSidebarCollapsed(false)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-750 hover:bg-slate-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-900 transition-colors hidden md:block cursor-pointer"
+                  className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-white/5 transition-colors hidden md:block cursor-pointer"
                   title="Expand Sidebar"
                 >
                   <ChevronRight className="w-4.5 h-4.5" />
@@ -2781,332 +2922,759 @@ export default function App() {
               </div>
             )}
             
-            <nav className="space-y-1">
+            <nav className="space-y-[5px]">
               {/* Core Learning Section */}
               <button
                 onClick={() => { setActiveTab("home"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "home" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Dashboard" : undefined}
               >
-                <Home className="w-4 h-4 shrink-0" />
-                {!sidebarCollapsed && <span>Dashboard</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "home" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <Home className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "home" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Dashboard</span>}
+                {activeTab === "home" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("study"); setSearchQuery(""); }}
                 disabled={!activeVideoId && !activeSession}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
-                  !activeVideoId && !activeSession ? "opacity-50 cursor-not-allowed" : ""
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
+                  !activeVideoId && !activeSession ? "opacity-30 cursor-not-allowed" : ""
                 } ${
                   activeTab === "study" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Lecture Player" : undefined}
               >
-                <Tv className="w-4 h-4 shrink-0" />
-                {!sidebarCollapsed && <span>Lecture Player</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "study" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <Tv className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "study" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Lecture Player</span>}
+                {activeTab === "study" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("library"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "library" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Course Library" : undefined}
               >
-                <Folder className="w-4 h-4 shrink-0" />
-                {!sidebarCollapsed && <span>Course Library</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "library" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <Folder className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "library" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Course Library</span>}
+                {activeTab === "library" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               {/* Study Tools Section */}
               {!sidebarCollapsed && (
-                <div className="pt-2 pb-1 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3">
+                <div className="pt-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 opacity-60">
                   Smart Study Tools
                 </div>
               )}
 
               <button
                 onClick={() => { setActiveTab("flashcards"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "flashcards" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Flashcards" : undefined}
               >
-                <Brain className="w-4 h-4 shrink-0 text-purple-500" />
-                {!sidebarCollapsed && <span>Flashcards & Quiz</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "flashcards" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <Brain className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "flashcards" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Flashcards & Quiz</span>}
+                {activeTab === "flashcards" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("planner"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "planner" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Study Planner" : undefined}
               >
-                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
-                {!sidebarCollapsed && <span>Planner & Tasks</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "planner" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <CheckCircle2 className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "planner" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Planner & Tasks</span>}
+                {activeTab === "planner" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("calendar"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "calendar" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Calendar & Streak" : undefined}
               >
-                <Calendar className="w-4 h-4 shrink-0 text-amber-500" />
-                {!sidebarCollapsed && <span>Calendar & Streaks</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "calendar" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <Calendar className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "calendar" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Calendar & Streaks</span>}
+                {activeTab === "calendar" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("pdf"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "pdf" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "PDF Reader" : undefined}
               >
-                <FileText className="w-4 h-4 shrink-0 text-indigo-500" />
-                {!sidebarCollapsed && <span>PDF Reader</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "pdf" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <FileText className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "pdf" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">PDF Reader</span>}
+                {activeTab === "pdf" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               {/* General Utilities */}
               {!sidebarCollapsed && (
-                <div className="pt-2 pb-1 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3">
+                <div className="pt-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 opacity-60">
                   Utilities
                 </div>
               )}
 
               <button
                 onClick={() => { setActiveTab("pomodoro"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "pomodoro" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Pomodoro Timer" : undefined}
               >
-                <Clock className="w-4 h-4 shrink-0 text-orange-500" />
-                {!sidebarCollapsed && <span>Pomodoro Timer</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "pomodoro" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <AlarmClock className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "pomodoro" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Pomodoro Timer</span>}
+                {activeTab === "pomodoro" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("history"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "history" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Watch History" : undefined}
               >
-                <History className="w-4 h-4 shrink-0" />
-                {!sidebarCollapsed && <span>Watch History</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "history" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <History className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "history" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Watch History</span>}
+                {activeTab === "history" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("favorites"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "favorites" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Favorites" : undefined}
               >
-                <Heart className="w-4 h-4 shrink-0 text-red-500" />
-                {!sidebarCollapsed && <span>Favorites</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "favorites" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <Heart className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "favorites" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Favorites</span>}
+                {activeTab === "favorites" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("stats"); setSearchQuery(""); }}
-                className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-10 w-10 mx-auto" : "gap-2.5 px-3 py-2"} rounded-xl text-xs font-bold transition ${
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "stats" && !searchQuery
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
-                    : "text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-                }`}
+                    ? "text-white font-semibold" 
+                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                } cursor-pointer group`}
                 title={sidebarCollapsed ? "Statistics" : undefined}
               >
-                <TrendingUp className="w-4 h-4 shrink-0 text-blue-500" />
-                {!sidebarCollapsed && <span>Statistics</span>}
+                {/* Animated Background Highlight */}
+                {activeTab === "stats" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <TrendingUp className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "stats" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Statistics</span>}
+                {activeTab === "stats" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+              </button>
+
+              <button
+                onClick={() => setFeedbackModalOpen(true)}
+                className={`w-full relative flex items-center ${
+                  sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "justify-between px-4 h-[42px]"
+                } rounded-[12px] text-xs font-black transition-all duration-250 bg-gradient-to-br from-violet-600 via-blue-600 to-indigo-600 hover:from-violet-700 hover:via-blue-700 hover:to-indigo-700 text-white shadow-lg shadow-violet-500/30 border border-white/10 cursor-pointer active:scale-95 group overflow-hidden`}
+                title={sidebarCollapsed ? "Give Feedback" : undefined}
+              >
+                {/* Subtle shine effect */}
+                <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 pointer-events-none" />
+                
+                <div className="flex items-center gap-3 relative z-10">
+                  <MessageSquarePlus className="w-[18px] h-[18px] shrink-0 text-violet-100 group-hover:rotate-12 transition-transform" />
+                  {!sidebarCollapsed && <span className="tracking-tight uppercase">Give Feedback</span>}
+                </div>
+                {!sidebarCollapsed && (
+                  <span className="relative flex h-2 w-2 z-10">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-200 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                  </span>
+                )}
               </button>
             </nav>
           </div>
 
           {/* Settings Section at the absolute bottom */}
-          <div className="pt-4 border-t border-slate-100 dark:border-zinc-900/60 shrink-0 space-y-2">
+          <div className="pt-4 border-t border-white/5 shrink-0 space-y-[5px]">
             <button
               onClick={() => { setActiveTab("settings"); setSearchQuery(""); }}
-              className={`w-full flex items-center ${sidebarCollapsed ? "justify-center px-0 h-11 w-11 mx-auto" : "gap-3 px-3.5 py-2.5"} rounded-xl text-sm font-semibold transition ${
+              className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                 activeTab === "settings" && !searchQuery
-                  ? "bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400" 
-                  : "text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-900 hover:text-slate-900 dark:hover:text-zinc-200"
-              }`}
+                  ? "text-white font-semibold" 
+                  : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+              } cursor-pointer group`}
               title={sidebarCollapsed ? "Settings" : undefined}
             >
-              <Settings className="w-4.5 h-4.5 shrink-0" />
-              {!sidebarCollapsed && <span>Settings</span>}
+              {/* Animated Background Highlight */}
+              {activeTab === "settings" && !searchQuery && (
+                <motion.div
+                  layoutId="sidebar-nav-active"
+                  className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
+
+              <Settings className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "settings" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+              {!sidebarCollapsed && <span className="relative z-10">Settings & Account</span>}
+              {activeTab === "settings" && !searchQuery && (
+                <motion.div 
+                  layoutId="sidebar-active-indicator"
+                  className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
             </button>
           </div>
         </aside>
 
-        {/* 3. Main Workspace Container */}
-        <main ref={mainScrollRef} className="flex-1 overflow-y-auto px-4 py-6 md:p-8">
-          
-          {/* SEARCH RESULTS TAB OVERRIDE */}
-          {searchQuery ? (
-            <div className="space-y-8 max-w-5xl mx-auto">
-              <div>
-                <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-zinc-50 flex items-center gap-2">
-                  <Search className="w-6 h-6 text-blue-500" />
-                  Search Results for "{searchQuery}"
-                </h1>
-                <p className="text-sm text-slate-500 dark:text-zinc-400 mt-1">
-                  Searching inside local playlists, single video lectures, markdown notes, and custom bookmarks.
-                </p>
-              </div>
+          {/* 3. Main Workspace Container */}
+          <main ref={mainScrollRef} className="flex-1 overflow-y-auto px-4 py-6 md:p-8 scroll-smooth">
+            
+            {/* SEARCH TAB OR SEARCH RESULTS OVERRIDE */}
+            {(searchQuery || activeTab === "search") ? (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-8 max-w-6xl mx-auto pb-24"
+              >
+                {/* Apple-style Search Header & Command Bar */}
+                <div className="bg-white/70 dark:bg-zinc-900/70 backdrop-blur-xl border border-slate-200 dark:border-zinc-800 rounded-[2rem] p-8 md:p-14 shadow-sm relative overflow-hidden">
+                  {/* Subtle ambient light effect */}
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 blur-[80px] rounded-full -translate-y-1/2 translate-x-1/2" />
+                  
+                  <div className="relative z-10 flex flex-col items-center text-center max-w-2xl mx-auto">
+                    <h1 className="text-4xl md:text-5xl font-[900] tracking-tight text-slate-900 dark:text-zinc-50 leading-tight mb-4">
+                      Search <span className="text-blue-600 dark:text-blue-400">Workspace</span>
+                    </h1>
+                    <p className="text-base text-slate-500 dark:text-zinc-400 font-medium max-w-md leading-relaxed opacity-80">
+                      Access your playlists, lectures, and smart notes instantly.
+                    </p>
 
-              {searchResults && (
-                <div className="space-y-6">
-                  {/* Playlists matched */}
-                  {searchResults.playlists.length > 0 && (
-                    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6">
-                      <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-                        <Youtube className="w-5 h-5 text-blue-500" />
-                        Playlists ({searchResults.playlists.length})
-                      </h2>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {searchResults.playlists.map(p => (
-                          <div 
-                            key={p.id} 
-                            onClick={() => {
-                              resumeLearningSession(p.id, "playlist");
-                              setSearchQuery("");
-                            }}
-                            className="bg-slate-50 dark:bg-zinc-950 border border-slate-200/60 dark:border-zinc-850 p-3.5 rounded-2xl cursor-pointer hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] hover:border-blue-500/30 dark:hover:border-blue-500/20 transition-all duration-250"
+                    {/* Sophisticated Search Input Container */}
+                    <div className="w-full mt-10 relative">
+                      <div className="relative flex items-center">
+                        <Search className="absolute left-6 h-5 w-5 text-slate-400 dark:text-zinc-500" />
+                        <input
+                          autoFocus
+                          type="text"
+                          placeholder="What are you looking for?"
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="w-full bg-white dark:bg-zinc-950/50 border border-slate-200 dark:border-zinc-800 focus:border-blue-500/50 text-lg pl-14 pr-14 py-5 rounded-2xl text-slate-900 dark:text-zinc-50 placeholder-slate-400 dark:placeholder-zinc-600 focus:outline-none transition-all shadow-sm focus:shadow-md font-medium"
+                        />
+                        
+                        {searchQuery && (
+                          <button 
+                            onClick={() => setSearchQuery("")} 
+                            className="absolute right-5 p-2 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl text-slate-400 transition-all active:scale-95"
                           >
-                            <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full aspect-video object-cover rounded-xl mb-3" alt={p.title} />
-                            <div className="font-bold text-sm text-slate-900 dark:text-zinc-100 line-clamp-1">{p.title}</div>
-                            <div className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{p.channelName} • {p.totalVideos} videos</div>
-                          </div>
-                        ))}
+                            <X className="w-5 h-5" />
+                          </button>
+                        )}
                       </div>
                     </div>
-                  )}
 
-                  {/* Videos matched */}
-                  {searchResults.videos.length > 0 && (
-                    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6">
-                      <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-                        <Tv className="w-5 h-5 text-emerald-500" />
-                        Single Videos ({searchResults.videos.length})
-                      </h2>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {searchResults.videos.map(v => (
-                          <div 
-                            key={v.id} 
-                            onClick={() => {
-                              playVideoDirectly(v.id, v.title, v.channelName);
-                            }}
-                            className="bg-slate-50 dark:bg-zinc-950 border border-slate-200/60 dark:border-zinc-850 p-3.5 rounded-2xl cursor-pointer hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] hover:border-emerald-500/30 dark:hover:border-emerald-500/20 transition-all duration-250"
-                          >
-                            <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full aspect-video object-cover rounded-xl mb-3" alt={v.title} />
-                            <div className="font-bold text-sm text-slate-900 dark:text-zinc-100 line-clamp-1">{v.title}</div>
-                            <div className="text-xs text-slate-400 dark:text-zinc-500 mt-1 flex items-center gap-1.5 flex-wrap">
-                              <span>{v.channelName}</span>
-                              <span>•</span>
-                              <span>{v.duration !== "LIVE" ? v.duration : ""}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                    {/* Refined Category Pills */}
+                    <div className="flex items-center justify-center flex-wrap gap-2.5 mt-8">
+                      {["Everything", "Playlists", "Videos", "Notes", "History"].map((cat) => (
+                        <button
+                          key={cat}
+                          onClick={() => {
+                            if (cat === "Everything") setSearchQuery("");
+                            else setSearchQuery(cat.toLowerCase());
+                            
+                            // Smooth scroll to results
+                            setTimeout(() => {
+                              searchResultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }, 100);
+                          }}
+                          className={`px-5 py-2 rounded-xl text-[11px] font-black uppercase tracking-[0.15em] border transition-all duration-300 cursor-pointer shadow-sm ${
+                            (cat === "Everything" && !searchQuery) || (searchQuery.toLowerCase() === cat.toLowerCase())
+                              ? "bg-slate-900 dark:bg-white text-white dark:text-slate-900 border-slate-900 dark:border-white scale-105"
+                              : "bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-400 hover:border-slate-400 dark:hover:border-zinc-600 hover:text-slate-900 dark:hover:text-zinc-100"
+                          }`}
+                        >
+                          {cat}
+                        </button>
+                      ))}
                     </div>
-                  )}
+                  </div>
+                </div>
 
-                  {/* Notes matched */}
-                  {searchResults.notes.length > 0 && (
-                    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6">
-                      <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-                        <FileText className="w-5 h-5 text-amber-500" />
-                        Lecture Notes ({searchResults.notes.length})
-                      </h2>
-                      <div className="space-y-3">
-                        {searchResults.notes.map(n => (
-                          <div 
-                            key={n.videoId} 
-                            onClick={() => {
-                              playVideoDirectly(n.videoId, n.title, "");
-                            }}
-                            className="p-4 bg-slate-50 dark:bg-zinc-950 border border-slate-200/60 dark:border-zinc-850 rounded-2xl cursor-pointer hover:bg-amber-500/5 hover:shadow-md hover:scale-[1.005] active:scale-[0.995] hover:border-amber-500/30 dark:hover:border-amber-500/20 transition-all duration-250"
-                          >
-                            <div className="font-bold text-sm text-slate-900 dark:text-zinc-100">{n.title}</div>
-                            <div className="text-xs text-slate-500 dark:text-zinc-400 mt-2 line-clamp-2 font-mono">
-                              {n.text}
-                            </div>
-                          </div>
-                        ))}
+                {/* Refined Empty State - NO QUERY */}
+                {!searchQuery && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="grid grid-cols-1 md:grid-cols-3 gap-6"
+                  >
+                    <div className="bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800/60 p-8 md:p-10 rounded-[2rem] text-center space-y-5 shadow-sm group hover:bg-white dark:hover:bg-zinc-900 transition-all duration-300">
+                      <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center mx-auto text-blue-500 group-hover:scale-110 transition-transform">
+                        <Youtube className="w-6 h-6" />
                       </div>
-                    </div>
-                  )}
-
-                  {/* Bookmarks matched */}
-                  {searchResults.bookmarks.length > 0 && (
-                    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6">
-                      <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-                        <Bookmark className="w-5 h-5 text-purple-500" />
-                        Bookmarks ({searchResults.bookmarks.length})
-                      </h2>
-                      <div className="space-y-3">
-                        {searchResults.bookmarks.map((b: any) => (
-                          <div 
-                            key={b.id} 
-                            onClick={() => {
-                              playVideoDirectly(b.videoId, b.videoTitle, "", b.timestamp);
-                            }}
-                            className="p-3.5 bg-slate-50 dark:bg-zinc-950 border border-slate-200/60 dark:border-zinc-850 rounded-2xl cursor-pointer hover:bg-purple-500/5 hover:shadow-md hover:scale-[1.005] active:scale-[0.995] hover:border-purple-500/30 dark:hover:border-purple-500/20 transition-all duration-250 flex justify-between items-center"
-                          >
-                            <div>
-                              <div className="font-bold text-sm text-slate-900 dark:text-zinc-100">{b.label}</div>
-                              <div className="text-xs text-slate-400 dark:text-zinc-500 mt-1">Lecture: {b.videoTitle}</div>
-                            </div>
-                            <span className="text-xs bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 font-extrabold px-2.5 py-1 rounded-lg">
-                              {b.timeText}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Absolute empty result */}
-                  {searchResults.playlists.length === 0 && 
-                   searchResults.videos.length === 0 && 
-                   searchResults.notes.length === 0 && 
-                   searchResults.bookmarks.length === 0 && (
-                    <div className="text-center py-12 bg-white dark:bg-zinc-900 rounded-3xl border border-slate-200 dark:border-zinc-850">
-                      <Search className="w-12 h-12 text-slate-300 mx-auto" />
-                      <h3 className="text-base font-bold text-slate-700 dark:text-zinc-300 mt-3">No matching results</h3>
-                      <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-sm mx-auto mt-1">
-                        Try typing different keywords or search terms for video titles, markdown note contents, or custom bookmarks.
+                      <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Video Library</h3>
+                      <p className="text-sm text-slate-500 dark:text-zinc-400 leading-relaxed font-medium">
+                        Search across all your imported educational playlists and lectures.
                       </p>
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
+
+                    <div className="bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800/60 p-8 md:p-10 rounded-[2rem] text-center space-y-5 shadow-sm group hover:bg-white dark:hover:bg-zinc-900 transition-all duration-300">
+                      <div className="w-12 h-12 bg-purple-500/10 rounded-2xl flex items-center justify-center mx-auto text-purple-500 group-hover:scale-110 transition-transform">
+                        <FileText className="w-6 h-6" />
+                      </div>
+                      <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Smart Notes</h3>
+                      <p className="text-sm text-slate-500 dark:text-zinc-400 leading-relaxed font-medium">
+                        Find specific insights and keywords across your markdown summaries.
+                      </p>
+                    </div>
+
+                    <div className="bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800/60 p-8 md:p-10 rounded-[2rem] text-center space-y-5 shadow-sm group hover:bg-white dark:hover:bg-zinc-900 transition-all duration-300">
+                      <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto text-emerald-500 group-hover:scale-110 transition-transform">
+                        <Clock className="w-6 h-6" />
+                      </div>
+                      <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Study History</h3>
+                      <p className="text-sm text-slate-500 dark:text-zinc-400 leading-relaxed font-medium">
+                        Review your focus sessions and previously studied materials.
+                      </p>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Refined Results Summary */}
+                {searchQuery && searchResults && (
+                  <div ref={searchResultsRef} className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    <div className="flex items-center justify-between pb-5 border-b border-slate-100 dark:border-zinc-800">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                        <span className="text-sm font-semibold text-slate-900 dark:text-zinc-50 tracking-tight">
+                          {searchResults.playlists.length + searchResults.videos.length + searchResults.notes.length + searchResults.bookmarks.length + (searchResults.history?.length || 0)} results found for "{searchQuery}"
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* History Section */}
+                    {searchResults.history && searchResults.history.length > 0 && (
+                      <section>
+                        <div className="flex items-center justify-between mb-8">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-slate-50 dark:bg-zinc-800 flex items-center justify-center text-slate-600 dark:text-zinc-400">
+                              <Clock className="w-4.5 h-4.5" />
+                            </div>
+                            <h2 className="text-xl font-[900] text-slate-900 dark:text-zinc-50 tracking-tight">Recent Activity</h2>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                          {searchResults.history.map((item: any, idx: number) => (
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: idx * 0.03 }}
+                              key={`hist-${item.id}`} 
+                              onClick={() => {
+                                resumeLearningSession(item.id, item.type || (item.videos ? "playlist" : "video"));
+                                setSearchQuery("");
+                              }}
+                              className="group bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-2xl cursor-pointer hover:border-slate-400 dark:hover:border-zinc-600 transition-all duration-300"
+                            >
+                              <div className="relative overflow-hidden rounded-xl mb-5 aspect-video bg-slate-100 dark:bg-zinc-800">
+                                <img 
+                                  src={item.thumbnail || (item.id && !item.thumbnail ? `https://i.ytimg.com/vi/${item.id}/hqdefault.jpg` : "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60")} 
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
+                                  alt={item.title} 
+                                />
+                                <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-md text-white text-[8px] font-black rounded border border-white/10 uppercase tracking-widest">
+                                  HISTORY
+                                </div>
+                              </div>
+                              <h3 className="font-bold text-base text-slate-900 dark:text-zinc-50 line-clamp-2 leading-tight group-hover:text-blue-600 transition-colors">
+                                {item.title}
+                              </h3>
+                              <div className="flex items-center gap-2 mt-4 text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
+                                <span className="truncate">{item.channelName}</span>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Playlists Section */}
+                    {searchResults.playlists.length > 0 && (
+                      <section>
+                        <div className="flex items-center justify-between mb-8">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
+                              <Youtube className="w-4.5 h-4.5" />
+                            </div>
+                            <h2 className="text-xl font-[900] text-slate-900 dark:text-zinc-50 tracking-tight">Playlists</h2>
+                          </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                          {searchResults.playlists.map((p, idx) => (
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: idx * 0.03 }}
+                              key={p.id} 
+                              onClick={() => {
+                                resumeLearningSession(p.id, "playlist");
+                                setSearchQuery("");
+                              }}
+                              className="group bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-2xl cursor-pointer hover:border-blue-500/50 hover:shadow-xl hover:shadow-blue-500/5 transition-all duration-300"
+                            >
+                              <div className="relative overflow-hidden rounded-xl mb-5 aspect-video bg-slate-100 dark:bg-zinc-800">
+                                <img 
+                                  src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} 
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
+                                  alt={p.title} 
+                                />
+                                <div className="absolute bottom-3 right-3 px-2.5 py-1.5 bg-black/70 backdrop-blur-md text-white text-[9px] font-black rounded-lg flex items-center gap-1.5 border border-white/10">
+                                  <Layers className="w-3 h-3" />
+                                  {p.totalVideos} LECTURES
+                                </div>
+                              </div>
+                              <h3 className="font-bold text-base text-slate-900 dark:text-zinc-50 line-clamp-2 leading-tight group-hover:text-blue-600 transition-colors">
+                                {p.title}
+                              </h3>
+                              <div className="flex items-center gap-2 mt-4 text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
+                                <span className="truncate">{p.channelName}</span>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Videos Section */}
+                    {searchResults.videos.length > 0 && (
+                      <section>
+                        <div className="flex items-center justify-between mb-8">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+                              <Tv className="w-4.5 h-4.5" />
+                            </div>
+                            <h2 className="text-xl font-[900] text-slate-900 dark:text-zinc-50 tracking-tight">Lectures</h2>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                          {searchResults.videos.map((v, idx) => (
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: idx * 0.03 }}
+                              key={v.id} 
+                              onClick={() => {
+                                playVideoDirectly(v.id, v.title, v.channelName);
+                              }}
+                              className="group bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-2xl cursor-pointer hover:border-emerald-500/50 hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300"
+                            >
+                              <div className="relative overflow-hidden rounded-xl mb-5 aspect-video bg-slate-100 dark:bg-zinc-800">
+                                <img 
+                                  src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} 
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
+                                  alt={v.title} 
+                                />
+                                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-500 scale-90 group-hover:scale-100 border border-white/30">
+                                  <Play className="w-5 h-5 text-white fill-white" />
+                                </div>
+                              </div>
+                              <h3 className="font-bold text-base text-slate-900 dark:text-zinc-50 line-clamp-2 leading-tight group-hover:text-emerald-600 transition-colors">
+                                {v.title}
+                              </h3>
+                              <div className="flex items-center gap-2 mt-4 text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
+                                <span className="truncate">{v.channelName}</span>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Notes Section */}
+                    {searchResults.notes.length > 0 && (
+                      <section>
+                        <div className="flex items-center justify-between mb-8">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-amber-50 dark:bg-amber-900/30 flex items-center justify-center text-amber-600 dark:text-amber-400">
+                              <FileText className="w-4.5 h-4.5" />
+                            </div>
+                            <h2 className="text-xl font-[900] text-slate-900 dark:text-zinc-50 tracking-tight">Lecture Notes</h2>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          {searchResults.notes.map((n, idx) => (
+                            <motion.div 
+                              initial={{ opacity: 0, x: -10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: idx * 0.02 }}
+                              key={n.videoId} 
+                              onClick={() => playVideoDirectly(n.videoId, n.title, "")}
+                              className="p-7 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl cursor-pointer hover:border-amber-500/50 hover:shadow-xl hover:shadow-amber-500/5 transition-all duration-300 group"
+                            >
+                              <div className="space-y-4">
+                                <h3 className="font-bold text-base text-slate-900 dark:text-zinc-50 line-clamp-1 group-hover:text-amber-600 transition-colors leading-tight">{n.title}</h3>
+                                <p className="text-sm text-slate-500 dark:text-zinc-400 line-clamp-3 leading-relaxed font-medium opacity-80">
+                                  {n.text}
+                                </p>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Bookmarks Section */}
+                    {searchResults.bookmarks.length > 0 && (
+                      <section>
+                        <div className="flex items-center justify-between mb-8">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-purple-50 dark:bg-purple-900/30 flex items-center justify-center text-purple-600 dark:text-purple-400">
+                              <Bookmark className="w-4.5 h-4.5" />
+                            </div>
+                            <h2 className="text-xl font-[900] text-slate-900 dark:text-zinc-50 tracking-tight">Saved Moments</h2>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4">
+                          {searchResults.bookmarks.map((b: any, idx: number) => (
+                            <motion.div 
+                              initial={{ opacity: 0, y: 5 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: idx * 0.01 }}
+                              key={b.id} 
+                              onClick={() => playVideoDirectly(b.videoId, b.videoTitle, "", b.timestamp)}
+                              className="p-5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl cursor-pointer hover:border-purple-500/50 flex items-center justify-between group transition-all duration-300 hover:shadow-lg hover:shadow-purple-500/5"
+                            >
+                              <div className="flex items-center gap-5">
+                                <div className="w-10 h-10 bg-purple-500/5 rounded-xl flex items-center justify-center text-purple-500 group-hover:bg-purple-500 group-hover:text-white transition-all duration-500">
+                                  <Bookmark className="w-4.5 h-4.5" />
+                                </div>
+                                <div>
+                                  <h3 className="font-bold text-base text-slate-900 dark:text-zinc-50 tracking-tight group-hover:text-purple-600 transition-colors">{b.label}</h3>
+                                  <p className="text-[11px] font-semibold text-slate-400 dark:text-zinc-500 uppercase tracking-widest mt-0.5 truncate max-w-xs md:max-w-md">{b.videoTitle}</p>
+                                </div>
+                              </div>
+                              <div className="px-3 py-1.5 bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 rounded-lg text-xs font-black group-hover:bg-purple-600 group-hover:text-white transition-all duration-300">
+                                {b.timeText}
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+
+                    {/* No Results at all */}
+                    {searchResults.playlists.length === 0 && 
+                     searchResults.videos.length === 0 && 
+                     searchResults.notes.length === 0 && 
+                     searchResults.bookmarks.length === 0 && 
+                     (!searchResults.history || searchResults.history.length === 0) && (
+                      <div className="flex flex-col items-center justify-center py-24 text-center">
+                        <Search className="w-12 h-12 text-slate-200 dark:text-zinc-800 mb-4" />
+                        <h3 className="text-xl font-bold text-slate-900 dark:text-zinc-50">No matches found</h3>
+                        <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-xs leading-relaxed">
+                          We couldn't find anything matching "{searchQuery}".
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </motion.div>
+            ) : (
             <>
               {/* HOME TAB */}
               {activeTab === "home" && (
@@ -5092,456 +5660,26 @@ export default function App() {
 
               {/* SETTINGS TAB */}
               {activeTab === "settings" && (
-                <div className="space-y-6 max-w-3xl mx-auto">
-                  <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-zinc-50">Applet Settings & Profile</h1>
-                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">Manage your Google account, cloud sync status, AI engine connections, and playback preferences.</p>
-                  </div>
-                  
-
-
-                  {/* Storage Status Card */}
-                  <div className="bg-gradient-to-r from-blue-600/10 via-indigo-600/10 to-purple-600/10 border border-blue-500/20 dark:border-blue-500/30 rounded-3xl p-6 shadow-sm space-y-4">
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <div className="flex items-center gap-2">
-                        <div className="p-2 bg-blue-600 text-white rounded-2xl shadow-md">
-                          <Cloud className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h2 className="text-base font-extrabold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
-                            Workspace Storage
-                          </h2>
-                          <p className="text-xs text-slate-500 dark:text-zinc-400">
-                            Fast browser IndexedDB & LocalStorage persistent cache
-                          </p>
-                        </div>
-                      </div>
-
-                      <span className="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider flex items-center gap-1.5 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                        Local Storage Active
-                      </span>
-                    </div>
-
-                    <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-4 rounded-2xl border border-slate-200/80 dark:border-zinc-800">
-                      <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed">
-                        All your course chapters, custom flashcards, study schedules, AI notes, and playback settings are saved automatically in your browser storage.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm space-y-6">
-                    {/* User Profile Name */}
-                    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
-                      <div className="flex-1">
-                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Display Name</div>
-                        <div className="text-xs text-slate-500 dark:text-zinc-400">This name will be displayed on your dashboard and workspace</div>
-                        <input
-                          type="text"
-                          placeholder="Enter your name..."
-                          value={settings.userName || ""}
-                          onChange={(e) => handleSettingChange("userName", e.target.value)}
-                          className="mt-2 w-full max-w-xs bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-xs font-bold px-3 py-2 rounded-xl text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Playback default speed */}
-                    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
-                      <div>
-                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Default Playback Speed</div>
-                        <div className="text-xs text-slate-500 dark:text-zinc-400">Set standard lecture playback multiplier</div>
-                      </div>
-                      <select
-                        value={settings.playbackSpeed}
-                        onChange={(e) => handleSettingChange("playbackSpeed", parseFloat(e.target.value))}
-                        className="bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 outline-none text-xs font-bold px-3 py-2 rounded-xl text-slate-800 dark:text-zinc-100 cursor-pointer transition-colors"
-                      >
-                        {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(s => (
-                          <option key={s} value={s} className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100">{s}x</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Theme Mode */}
-                    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
-                      <div>
-                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Theme Mode</div>
-                        <div className="text-xs text-slate-500 dark:text-zinc-400">Choose between Light, Dark, or System Sync modes</div>
-                      </div>
-                      <select
-                        value={settings.theme}
-                        onChange={(e) => handleSettingChange("theme", e.target.value as "light" | "dark" | "system")}
-                        className="bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 outline-none text-xs font-bold px-3 py-2 rounded-xl text-slate-800 dark:text-zinc-100 cursor-pointer transition-colors"
-                      >
-                        <option value="light" className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100">Light Mode</option>
-                        <option value="dark" className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100">Dark Mode</option>
-                        <option value="system" className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100">System Mode</option>
-                      </select>
-                    </div>
-
-                    {/* Autoplay next */}
-                    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
-                      <div>
-                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Autoplay Next Video</div>
-                        <div className="text-xs text-slate-500 dark:text-zinc-400">Automatically start the next lecture upon completion</div>
-                      </div>
-                      <button
-                        onClick={() => handleSettingChange("autoPlay", !settings.autoPlay)}
-                        className={`w-11 h-6 rounded-full transition relative flex items-center px-1 ${settings.autoPlay ? "bg-blue-600" : "bg-slate-200 dark:bg-zinc-800"}`}
-                      >
-                        <div className={`w-4 h-4 bg-white rounded-full shadow transition-all transform ${settings.autoPlay ? "translate-x-5" : ""}`} />
-                      </button>
-                    </div>
-
-                    {/* Skip completed */}
-                    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
-                      <div>
-                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Skip Completed in Playlist</div>
-                        <div className="text-xs text-slate-500 dark:text-zinc-400">Bypass lectures marked done while playing queue</div>
-                      </div>
-                      <button
-                        onClick={() => handleSettingChange("skipCompleted", !settings.skipCompleted)}
-                        className={`w-11 h-6 rounded-full transition relative flex items-center px-1 ${settings.skipCompleted ? "bg-blue-600" : "bg-slate-200 dark:bg-zinc-800"}`}
-                      >
-                        <div className={`w-4 h-4 bg-white rounded-full shadow transition-all transform ${settings.skipCompleted ? "translate-x-5" : ""}`} />
-                      </button>
-                    </div>
-
-                    {/* Enable shortcuts */}
-                    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
-                      <div>
-                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Keyboard Shortcuts</div>
-                        <div className="text-xs text-slate-500 dark:text-zinc-400">Enable premium YouTube-like keyboard shortcuts for faster navigation</div>
-                      </div>
-                      <button
-                        onClick={() => handleSettingChange("enableShortcuts", !settings.enableShortcuts)}
-                        className={`w-11 h-6 rounded-full transition relative flex items-center px-1 ${settings.enableShortcuts ? "bg-blue-600" : "bg-slate-200 dark:bg-zinc-800"}`}
-                      >
-                        <div className={`w-4 h-4 bg-white rounded-full shadow transition-all transform ${settings.enableShortcuts ? "translate-x-5" : ""}`} />
-                      </button>
-                    </div>
-
-                    {/* Notification Sound toggle */}
-                    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-850">
-                      <div>
-                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Notification Sound Effects</div>
-                        <div className="text-xs text-slate-500 dark:text-zinc-400">Play a very subtle dual-tone chime when notifications appear</div>
-                      </div>
-                      <button
-                        onClick={() => setSoundEnabled(!soundEnabled)}
-                        className={`w-11 h-6 rounded-full transition relative flex items-center px-1 ${soundEnabled ? "bg-blue-600" : "bg-slate-200 dark:bg-zinc-800"}`}
-                      >
-                        <div className={`w-4 h-4 bg-white rounded-full shadow transition-all transform ${soundEnabled ? "translate-x-5" : ""}`} />
-                      </button>
-                    </div>
-
-                    {/* Shortcut Cheat Sheet */}
-                    {settings.enableShortcuts && (
-                      <div className="pt-2">
-                        <div className="text-xs font-bold text-slate-800 dark:text-zinc-200 mb-3 flex items-center gap-1.5 uppercase tracking-wider">
-                          <BookOpen className="w-4 h-4 text-blue-500" />
-                          Keyboard Shortcuts Guide
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs bg-slate-50 dark:bg-zinc-950 p-4 rounded-2xl border border-slate-200/50 dark:border-zinc-850">
-                          <div>
-                            <div className="font-bold text-slate-900 dark:text-zinc-50 mb-1.5 border-b border-slate-200 dark:border-zinc-800/80 pb-1 flex items-center gap-1">
-                              <span>📺</span> Playback & Player
-                            </div>
-                            <ul className="space-y-1.5 text-slate-600 dark:text-zinc-400 font-mono">
-                              <li className="flex justify-between"><span>Space / K</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Play / Pause</span></li>
-                              <li className="flex justify-between"><span>J / L</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Rewind / Forward 10s</span></li>
-                              <li className="flex justify-between"><span>← / →</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Back / Forward 5s</span></li>
-                              <li className="flex justify-between"><span>0–9</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Jump to 0% – 90%</span></li>
-                              <li className="flex justify-between"><span>, / .</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Frame Back / Next</span></li>
-                              <li className="flex justify-between"><span>Shift + &lt; / &gt;</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Speed - / +</span></li>
-                              <li className="flex justify-between"><span>M</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Mute / Unmute</span></li>
-                              <li className="flex justify-between"><span>↑ / ↓</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Volume - / + 5%</span></li>
-                              <li className="flex justify-between"><span>F / T</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Fullscreen / Theatre</span></li>
-                              <li className="flex justify-between"><span>Shift + N / P</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Next / Prev Lecture</span></li>
-                            </ul>
-                          </div>
-                          <div>
-                            <div className="font-bold text-slate-900 dark:text-zinc-50 mb-1.5 border-b border-slate-200 dark:border-zinc-800/80 pb-1 flex items-center gap-1">
-                              <span>✍️</span> Productivity & Study
-                            </div>
-                            <ul className="space-y-1.5 text-slate-600 dark:text-zinc-400 font-mono">
-                              <li className="flex justify-between"><span>B / Ctrl + B</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Add Bookmark</span></li>
-                              <li className="flex justify-between"><span>Ctrl + N</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Focus Notes</span></li>
-                              <li className="flex justify-between"><span>Ctrl + S</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Save Notes</span></li>
-                              <li className="flex justify-between"><span>Ctrl + /</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Focus Search</span></li>
-                              <li className="flex justify-between"><span>Ctrl + H</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">History Tab</span></li>
-                              <li className="flex justify-between"><span>Ctrl + P</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Pomodoro Tab</span></li>
-                              <li className="flex justify-between"><span>Ctrl + Shift + F</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Focus Mode Toggle</span></li>
-                              <li className="flex justify-between"><span>Ctrl + Shift + L</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Lecture List Toggle</span></li>
-                              <li className="flex justify-between"><span>Ctrl + Shift + T</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Theme Toggle</span></li>
-                              <li className="flex justify-between"><span>Alt + S / P / R</span> <span className="text-slate-800 dark:text-zinc-200 font-bold">Pomo Start/Pause/Reset</span></li>
-                            </ul>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Database Import/Export */}
-                    <div className="space-y-3 pt-3">
-                      <div className="text-sm font-bold text-slate-950 dark:text-zinc-50">Data Recovery & Backup</div>
-                      <p className="text-xs text-slate-400 dark:text-zinc-500">Since everything is stored offline in the browser, export backup JSON files to prevent data loss or import files to restore progress on other devices.</p>
-                      
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <button
-                          onClick={handleExportAll}
-                          className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition text-slate-800 dark:text-zinc-200"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          Export Backup JSON
-                        </button>
-                        
-                        <label className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition text-slate-800 dark:text-zinc-200 cursor-pointer">
-                          <Upload className="w-3.5 h-3.5" />
-                          Import Backup JSON
-                          <input type="file" accept=".json" onChange={handleImportAll} className="hidden" />
-                        </label>
-                      </div>
-                    </div>
-
-                    {/* Reset Database */}
-                    <div className="space-y-3 pt-5 border-t border-slate-150 dark:border-zinc-850">
-                      <div className="text-sm font-bold text-red-500">Destructive Actions</div>
-                      <p className="text-xs text-slate-400 dark:text-zinc-500">Delete all playlists, notes, bookmarks, and studies from local cache. This action is not reversible.</p>
-                      <button
-                        onClick={handleResetData}
-                        className="bg-red-50 hover:bg-red-100 dark:bg-red-950/20 text-red-600 border border-red-200 dark:border-red-900/30 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        Reset All Cached Data
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Gemini AI Settings Card */}
-                  <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm space-y-6">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50 flex items-center gap-1.5 uppercase tracking-wide">
-                          <Sparkles className="w-4 h-4 text-blue-500 animate-pulse" />
-                          Gemini AI Settings
-                        </div>
-                        <div className="text-xs text-slate-500 dark:text-zinc-400 mt-1">Manage your custom API key which powers the study companion, summaries, tutor chat, and mastery quizzes.</div>
-                      </div>
-                      
-                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${hasGeminiKeyInState ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-450" : "bg-red-500/10 text-red-600 dark:text-red-400"}`}>
-                        {hasGeminiKeyInState ? "Connected" : "Disconnected"}
-                      </span>
-                    </div>
-
-                    {hasGeminiKeyInState ? (
-                      <div className="space-y-4">
-                        {/* Connected layout */}
-                        <div className="space-y-2">
-                          <label className="text-[10px] font-black uppercase text-slate-500 dark:text-zinc-400 tracking-wider">Connected API Key</label>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              readOnly
-                              value={showFullKeyInSettings ? (getGeminiKey() || "") : maskApiKey(getGeminiKey() || "")}
-                              className="flex-1 bg-slate-100 dark:bg-zinc-950 text-slate-800 dark:text-zinc-200 border border-slate-200 dark:border-zinc-800 text-xs px-3.5 py-2.5 rounded-xl font-mono focus:outline-none select-all"
-                            />
-                            
-                            <button
-                              onClick={() => {
-                                const fullKey = getGeminiKey();
-                                if (fullKey) {
-                                  navigator.clipboard.writeText(fullKey);
-                                  toast.success("API Key Copied", "Full API key copied to clipboard!");
-                                }
-                              }}
-                              className="p-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-850 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-slate-700 dark:text-zinc-300 transition text-xs font-bold"
-                              title="Copy API Key"
-                            >
-                              Copy
-                            </button>
-
-                            <button
-                              onClick={() => setShowFullKeyInSettings(!showFullKeyInSettings)}
-                              className="p-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-850 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-slate-700 dark:text-zinc-300 transition text-xs font-bold"
-                              title={showFullKeyInSettings ? "Hide Key" : "Show Key"}
-                            >
-                              {showFullKeyInSettings ? "Hide" : "Show"}
-                            </button>
-                          </div>
-                        </div>
-
-                        {settingsKeyTestResult && (
-                          <div className={`text-xs p-3.5 rounded-xl border font-semibold ${settingsKeyTestResult.type === "success" ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-600 dark:text-emerald-450" : "bg-red-500/10 border-red-500/25 text-red-600 dark:text-red-450"}`}>
-                            {settingsKeyTestResult.text}
-                          </div>
-                        )}
-
-                        <div className="flex flex-wrap items-center gap-3 pt-2">
-                          <button
-                            onClick={async () => {
-                              setSettingsKeyTestLoading(true);
-                              setSettingsKeyTestResult(null);
-                              try {
-                                const currentKey = getGeminiKey();
-                                if (!currentKey) throw new Error("No connected key found");
-                                const { validateGeminiKey } = await import("./utils/gemini");
-                                const isValid = await validateGeminiKey(currentKey);
-                                if (isValid) {
-                                  setSettingsKeyTestResult({ type: "success", text: "✅ API key validated and working perfectly. Direct connection to Google GenAI is active." });
-                                }
-                              } catch (err: any) {
-                                setSettingsKeyTestResult({ type: "error", text: `❌ Validation Failed: ${err.message || "Invalid Key configuration or bad connection."}` });
-                              } finally {
-                                setSettingsKeyTestLoading(false);
-                              }
-                            }}
-                            disabled={settingsKeyTestLoading}
-                            className="bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs px-4 py-2.5 rounded-xl transition flex items-center gap-2 cursor-pointer shadow-md shadow-blue-500/10"
-                          >
-                            {settingsKeyTestLoading ? "Testing..." : "Test Connection"}
-                          </button>
-
-                          <button
-                            onClick={() => setOnboardingOpen(true)}
-                            className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-850 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-200 border border-slate-200 dark:border-zinc-800 font-bold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer"
-                          >
-                            Replace API Key
-                          </button>
-
-                          <button
-                            onClick={() => {
-                              toast.warning(
-                                "Remove API Key?",
-                                "This will disable all AI-powered features like Summarizer, Doubt Solver, and Quizzes.",
-                                {
-                                  duration: 10000,
-                                  action: {
-                                    label: "Remove",
-                                    primary: true,
-                                    onClick: () => {
-                                      removeGeminiKey();
-                                      setHasGeminiKeyInState(false);
-                                      setSettingsKeyTestResult(null);
-                                      toast.success("API Key Removed", "Gemini API key has been removed successfully.");
-                                    }
-                                  }
-                                }
-                              );
-                            }}
-                            className="bg-red-50 hover:bg-red-100 dark:bg-red-950/20 text-red-600 border border-red-200 dark:border-red-900/30 font-bold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer"
-                          >
-                            Remove Key
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {/* Disconnected layout */}
-                        <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
-                          Your Gemini API key is currently disconnected. Connecting your own key is free, takes less than 30 seconds, and unlocks all the AI lecture analysis engines.
-                        </p>
-
-                        <div className="flex flex-wrap items-center gap-3">
-                          <button
-                            onClick={() => setOnboardingOpen(true)}
-                            className="bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs px-5 py-2.5 rounded-xl transition shadow cursor-pointer"
-                          >
-                            Connect API Key
-                          </button>
-
-                          <a
-                            href="https://aistudio.google.com/api-keys"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-bold text-xs px-5 py-2.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
-                          >
-                            Generate Free API Key
-                          </a>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* About Developer Settings Card (Highly visible on Mobile, elegant on Desktop) */}
-                  <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 shadow-sm space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-3">
-                      <div>
-                        <div className="text-sm font-bold text-slate-950 dark:text-zinc-50 uppercase tracking-wide">
-                          About the Developer
-                        </div>
-                        <div className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">Meet the creator behind LearnStudy.</div>
-                      </div>
-                      <span className="text-[10px] font-mono text-slate-400 dark:text-zinc-500">
-                        DEVELOPER INFO
-                      </span>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row items-center gap-4 py-2">
-                      {/* Avatar */}
-                      <DeveloperAvatar size="xl" showStatusIndicator={true} />
-
-                      {/* Info & Description */}
-                      <div className="text-center sm:text-left flex-1 space-y-1">
-                        <h4 className="text-base font-extrabold text-slate-900 dark:text-zinc-50">Gagan Pratap</h4>
-                        <p className="text-xs font-semibold text-blue-600 dark:text-blue-400">Creator of LearnStudy</p>
-                        <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed max-w-lg">
-                          Building tools that help students learn smarter and study distraction-free.
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Social & Action Row */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-slate-100 dark:border-zinc-800">
-                      <div className="flex items-center justify-center sm:justify-start gap-2.5">
-                        <a
-                          href="https://github.com"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-850 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 dark:hover:text-white transition-all text-slate-600 dark:text-zinc-400 hover:scale-105"
-                          title="GitHub"
-                        >
-                          <Github className="w-4 h-4" />
-                        </a>
-                        <a
-                          href="https://linkedin.com"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-850 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 dark:hover:text-white transition-all text-slate-600 dark:text-zinc-400 hover:scale-105"
-                          title="LinkedIn"
-                        >
-                          <Linkedin className="w-4 h-4" />
-                        </a>
-                        <a
-                          href="https://twitter.com"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-850 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 dark:hover:text-white transition-all text-slate-600 dark:text-zinc-400 hover:scale-105"
-                          title="X / Twitter"
-                        >
-                          <Twitter className="w-4 h-4" />
-                        </a>
-                        <a
-                          href="https://gaganpratap.dev"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-850 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 dark:hover:text-white transition-all text-slate-600 dark:text-zinc-400 hover:scale-105"
-                          title="Portfolio Website"
-                        >
-                          <Globe className="w-4 h-4" />
-                        </a>
-                      </div>
-
-                      <button
-                        onClick={() => { setActiveTab("developer"); setSearchQuery(""); }}
-                        className="w-full sm:w-auto py-2.5 px-4 bg-blue-600 hover:bg-blue-500 text-white text-xs font-extrabold rounded-xl transition-all duration-200 text-center flex items-center justify-center gap-2 shadow-md shadow-blue-500/10 cursor-pointer"
-                      >
-                        <Award className="w-4 h-4" />
-                        View Full Developer Profile
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                <SettingsPanel
+                  settings={settings}
+                  onSettingChange={handleSettingChange}
+                  onSaveSettings={(newSettings) => {
+                    setSettings(newSettings);
+                    Storage.saveSettings(newSettings);
+                  }}
+                  soundEnabled={soundEnabled}
+                  setSoundEnabled={setSoundEnabled}
+                  handleExportAll={handleExportAll}
+                  handleImportAll={handleImportAll}
+                  handleResetData={handleResetData}
+                  getGeminiKey={getGeminiKey}
+                  removeGeminiKey={removeGeminiKey}
+                  setOnboardingOpen={setOnboardingOpen}
+                  setHasGeminiKeyInState={setHasGeminiKeyInState}
+                  hasGeminiKeyInState={hasGeminiKeyInState}
+                  toast={toast}
+                  onNavigateTab={(tab) => setActiveTab(tab)}
+                />
               )}
 
               {/* COURSE LIBRARY TAB */}
@@ -6036,6 +6174,12 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Feedback Modal */}
+      <FeedbackModal 
+        isOpen={feedbackModalOpen}
+        onClose={() => setFeedbackModalOpen(false)}
+      />
 
     </div>
   );

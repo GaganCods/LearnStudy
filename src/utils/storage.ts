@@ -291,10 +291,16 @@ export const Storage = {
       });
     }
     localStorage.setItem("studytube_study_logs", JSON.stringify(logs));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("studytube_logs_updated"));
+    }
   },
 
   saveStudyLogs(logs: any[]) {
     localStorage.setItem("studytube_study_logs", JSON.stringify(logs));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("studytube_logs_updated"));
+    }
   },
 
   toggleDateStudied(dateStr: string, studyMinutes: number = 60) {
@@ -333,6 +339,9 @@ export const Storage = {
 
   saveSettings(settings: StudySettings) {
     localStorage.setItem("studytube_settings", JSON.stringify(settings));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("studytube_settings_updated"));
+    }
   },
 
   // Custom Subjects with Chapter-wise Lectures
@@ -436,14 +445,14 @@ export const Storage = {
     const logs = this.getStudyLogs();
     if (logs.length === 0) return { current: 0, longest: 0, datesStudied: [] };
 
-    // Group logs by date and filter dates with total seconds >= 3600 (60 mins)
+    // Group logs by date and filter dates with total seconds >= 60 (at least 1 min studied)
     const dateSums: { [date: string]: number } = {};
     logs.forEach((l) => {
       dateSums[l.date] = (dateSums[l.date] || 0) + l.secondsStudied;
     });
 
     const studyDates = Object.keys(dateSums)
-      .filter((date) => dateSums[date] >= 3600)
+      .filter((date) => dateSums[date] >= 60)
       .sort() as string[];
 
     if (studyDates.length === 0) return { current: 0, longest: 0, datesStudied: [] };

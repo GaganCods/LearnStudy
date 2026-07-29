@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { usePomodoro } from "./PomodoroContext";
 import { 
-  Bell, Volume2, Repeat, Clock, Music, MonitorPlay, Save, CheckCircle2, Play
+  Bell, Volume2, Repeat, AlarmClock, Music, MonitorPlay, Save, CheckCircle2, Play
 } from "lucide-react";
 
 export function PomodoroSettingsPanel() {

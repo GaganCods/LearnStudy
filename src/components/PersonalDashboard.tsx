@@ -1,22 +1,52 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { 
-  Sparkles, Flame, Clock, BookOpen,
+  Sparkles, Flame, AlarmClock, BookOpen,
   TrendingUp, Plus, FileText, Timer, ArrowUpRight
 } from "lucide-react";
 import { Storage } from "../utils/storage";
-import { ActiveTab } from "../types";
+import { ActiveTab, StudySettings } from "../types";
+import { UserAvatar } from "./UserAvatar";
 
 interface PersonalDashboardProps {
   setActiveTab?: (tab: ActiveTab) => void;
   userName?: string;
+  settings?: StudySettings;
 }
 
 export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({ 
   setActiveTab,
-  userName
+  userName,
+  settings
 }) => {
-  const stats = Storage.getStreakStats();
-  const studyLogs = Storage.getStudyLogs();
+  const [stats, setStats] = useState(() => Storage.getStreakStats());
+  const [studyLogs, setStudyLogs] = useState(() => Storage.getStudyLogs());
+  const [plans, setPlans] = useState(() => Storage.getStudyPlans());
+  const [currentSettings, setCurrentSettings] = useState<StudySettings>(() => settings || Storage.getSettings());
+
+  useEffect(() => {
+    if (settings) {
+      setCurrentSettings(settings);
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      setStats(Storage.getStreakStats());
+      setStudyLogs(Storage.getStudyLogs());
+      setPlans(Storage.getStudyPlans());
+      setCurrentSettings(Storage.getSettings());
+    };
+
+    window.addEventListener("studytube_logs_updated", handleUpdate);
+    window.addEventListener("studytube_settings_updated", handleUpdate);
+    window.addEventListener("storage", handleUpdate);
+
+    return () => {
+      window.removeEventListener("studytube_logs_updated", handleUpdate);
+      window.removeEventListener("studytube_settings_updated", handleUpdate);
+      window.removeEventListener("storage", handleUpdate);
+    };
+  }, []);
   
   const totalSeconds = studyLogs.reduce((acc, l) => acc + (l.secondsStudied || 0), 0);
   const totalHours = (totalSeconds / 3600).toFixed(1);
@@ -24,7 +54,6 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
   const level = Math.floor(totalMins / 120) + 1;
 
   const plannerTargetHours = Number(localStorage.getItem("studytube_target_hours")) || 3;
-  const plans = Storage.getStudyPlans();
   const completedPlans = plans.filter(p => p.completed && !p.skipped).length;
   const totalPlans = plans.filter(p => !p.skipped).length;
 
@@ -41,7 +70,7 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
     return d >= oneWeekAgo && d <= now;
   }).length;
 
-  const displayName = userName || "Scholar";
+  const displayName = userName || currentSettings?.userName || "Scholar";
 
   return (
     <div className="relative overflow-hidden bg-white dark:bg-[#09090B] border border-slate-200 dark:border-[rgba(255,255,255,0.06)] rounded-3xl p-6 md:p-8 text-slate-900 dark:text-[#F8F8F8] shadow-sm dark:shadow-[0_8px_30px_rgb(0,0,0,0.6)] animate-in fade-in slide-in-from-bottom-4 duration-500 text-left">
@@ -55,17 +84,31 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
       {/* Lighting accent border */}
       <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(255,106,0,0.2)] to-transparent" />
 
-      <div className="relative z-10 flex flex-col lg:grid lg:grid-cols-12 gap-8 items-start lg:items-center">
-        {/* Left Section (Heading & Badges) - Col Span 8 */}
-        <div className="space-y-4 lg:col-span-8 text-left w-full">
-          {/* Workspace badge */}
-          <div className="inline-flex items-center gap-1.5 bg-slate-100 dark:bg-[#111113] border border-slate-200 dark:border-[rgba(255,255,255,0.06)] px-3 py-1 rounded-full text-[11px] font-semibold text-slate-600 dark:text-zinc-400 uppercase tracking-widest">
-            <Sparkles className="w-3.5 h-3.5 text-[#FF6A00] fill-[#FF6A00]" />
-            <span>LearnStudy Workspace</span>
-          </div>
+      <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+        {/* Left Section (Avatar + Heading & Badges) */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5 flex-1 w-full">
+          <UserAvatar
+            userName={displayName}
+            customAvatarUrl={currentSettings?.userAvatarUrl}
+            customSeed={currentSettings?.userAvatarSeed}
+            customStyle={currentSettings?.userAvatarStyle}
+            size="xl"
+            showStatusIndicator={true}
+            showLevelBadge={true}
+            level={level}
+            onClick={() => setActiveTab?.("settings")}
+            editable={true}
+            className="hover:scale-105 transition-transform duration-300 shadow-md shrink-0 cursor-pointer"
+          />
 
-          <div className="space-y-2">
-            <h1 className="text-2xl md:text-3xl lg:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-[#F8F8F8] leading-tight">
+          <div className="space-y-2 text-left flex-1 min-w-0">
+            {/* Workspace badge */}
+            <div className="inline-flex items-center gap-1.5 bg-slate-100 dark:bg-[#111113] border border-slate-200 dark:border-[rgba(255,255,255,0.06)] px-3 py-1 rounded-full text-[11px] font-semibold text-slate-600 dark:text-zinc-400 uppercase tracking-widest">
+              <Sparkles className="w-3.5 h-3.5 text-[#FF6A00] fill-[#FF6A00]" />
+              <span>LearnStudy Workspace</span>
+            </div>
+
+            <h1 className="text-2xl md:text-3xl lg:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-[#F8F8F8] leading-tight truncate">
               Welcome back, <span className="text-[#FF6A00] font-black">{displayName}</span> 👋
             </h1>
             <div className="text-sm md:text-base text-slate-600 dark:text-zinc-400 font-medium leading-relaxed max-w-xl">
@@ -76,8 +119,6 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
             </div>
           </div>
         </div>
-
-        {/* Right Section Removed per user request */}
       </div>
 
       {/* 2 compact statistics glass cards with micro-visualizations */}
@@ -118,7 +159,7 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Focus Hours</span>
             <div className="p-1.5 bg-sky-500/10 rounded-lg text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
-              <Clock className="w-4 h-4" />
+              <AlarmClock className="w-4 h-4" />
             </div>
           </div>
           <div className="flex items-end justify-between w-full">

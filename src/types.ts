@@ -61,6 +61,15 @@ export interface StudySettings {
   enableShortcuts?: boolean;
   youtubeApiKey?: string;
   userName?: string;
+  compactMode?: boolean;
+  notificationsEnabled?: boolean;
+  soundEnabled?: boolean;
+  autoBackup?: boolean;
+  dailyGoalMinutes?: number;
+  accentColor?: string;
+  userAvatarUrl?: string;
+  userAvatarSeed?: string;
+  userAvatarStyle?: string;
 }
 
 export interface Flashcard {
@@ -255,5 +264,6 @@ export type ActiveTab =
   | "completed" 
   | "stats" 
   | "pomodoro" 
+  | "search" 
   | "developer";
 

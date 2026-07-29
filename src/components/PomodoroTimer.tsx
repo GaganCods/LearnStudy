@@ -3,7 +3,7 @@ import { usePomodoro } from "./PomodoroContext";
 
 import { playPomodoroSound } from "../utils/pomodoroSounds";
 import { PomodoroSettingsPanel } from "./PomodoroSettingsPanel";
-import { Clock, 
+import { AlarmClock, 
   Play, Pause, RotateCcw, ChevronRight, SkipForward, Plus, Minus,
   Maximize2, Minimize2, Settings, BarChart2, History, Award, 
   Flame, Volume2, Bell, AlertTriangle, Search, Trash2, Download, 
@@ -191,7 +191,7 @@ export function PomodoroTimer() {
           {/* Sub Navigation */}
           <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
             {[
-              { id: "timer", label: "Timer", icon: Clock },
+              { id: "timer", label: "Timer", icon: AlarmClock },
               { id: "stats", label: "Statistics", icon: BarChart2 },
               { id: "history", label: "History Log", icon: History },
               { id: "settings", label: "Settings", icon: Settings }
@@ -263,7 +263,7 @@ export function PomodoroTimer() {
               {/* Controls */}
               {selectedPresetLabel && (
                 <div className="mt-1 text-xs font-bold text-slate-500 dark:text-zinc-400 flex items-center justify-center gap-1.5 opacity-60">
-                  <Clock className="w-3.5 h-3.5" /> {selectedPresetLabel}
+                  <AlarmClock className="w-3.5 h-3.5" /> {selectedPresetLabel}
                 </div>
               )}
               <div className="flex items-center gap-4 mt-2">

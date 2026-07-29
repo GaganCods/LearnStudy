@@ -625,7 +625,7 @@ function getGeminiClient(req: express.Request): GoogleGenAI {
     || req.query?.key as string;
 
   if (userKey) {
-    userKey = userKey.trim().replace(/^["']|["']$/g, "");
+    userKey = userKey.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "");
   }
 
   // System key safety check
@@ -641,11 +641,6 @@ function getGeminiClient(req: express.Request): GoogleGenAI {
 
   return new GoogleGenAI({
     apiKey: apiKey.trim(),
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build",
-      }
-    }
   });
 }
 
@@ -760,36 +755,41 @@ async function enrichVideoMetadata(videos: Array<{ id: string; title: string; du
 
 // Resilient Gemini generator wrapper with exponential backoff and fallback model
 async function generateContentWithFallback(ai: GoogleGenAI, params: any) {
-  const primaryModel = "gemini-3.6-flash";
-  const fallbackModel = "gemini-flash-latest";
+  const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
 
   let lastError: any = null;
-  let delay = 1000;
-
-  // Try primary model and fallback model
-  const modelsToTry = [primaryModel, fallbackModel];
 
   for (let i = 0; i < modelsToTry.length; i++) {
     const model = modelsToTry[i];
-    try {
-      const response = await ai.models.generateContent({
-        ...params,
-        model,
-      });
-      return response;
-    } catch (err: any) {
-      lastError = err;
-      const errMsg = String(err.message || err);
-      const is503Or429 = err?.status === 503 || err?.code === 503 || 
-                         err?.status === 429 || err?.code === 429 ||
-                         errMsg.includes("503") || errMsg.includes("high demand") || 
-                         errMsg.includes("UNAVAILABLE") || errMsg.includes("RESOURCE_EXHAUSTED");
+    let attempts = 0;
+    const maxAttemptsPerModel = 2;
+    let delay = 1200;
 
-      console.warn(`[Gemini API Attempt ${i + 1}/${modelsToTry.length}] Model ${model} failed (${is503Or429 ? "503/High Demand" : errMsg}).`);
+    while (attempts < maxAttemptsPerModel) {
+      try {
+        const response = await ai.models.generateContent({
+          ...params,
+          model,
+        });
+        return response;
+      } catch (err: any) {
+        lastError = err;
+        attempts++;
+        const errMsg = String(err.message || err);
+        const isTransient = err?.status === 503 || err?.code === 503 || 
+                            err?.status === 429 || err?.code === 429 ||
+                            errMsg.includes("503") || errMsg.includes("high demand") || 
+                            errMsg.includes("UNAVAILABLE") || errMsg.includes("RESOURCE_EXHAUSTED") ||
+                            errMsg.includes("Quota exceeded");
 
-      if (i < modelsToTry.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        delay *= 1.5;
+        console.warn(`[Gemini API Attempt model=${model} attempt=${attempts}/${maxAttemptsPerModel}] Failed (${isTransient ? "Rate limit/High Demand" : errMsg}).`);
+
+        if (isTransient && attempts < maxAttemptsPerModel) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          delay *= 1.5;
+        } else {
+          break; // move to next model
+        }
       }
     }
   }
@@ -803,13 +803,21 @@ function formatGeminiError(err: any): string {
   if (rawMsg.includes("503") || rawMsg.includes("UNAVAILABLE") || rawMsg.includes("high demand")) {
     return "The AI study model is currently experiencing high demand. Please try again in a few moments.";
   }
-  if (rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED")) {
-    return "Rate limit reached. Please wait a moment before sending another AI request.";
+  if (rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED") || rawMsg.includes("Quota exceeded")) {
+    return "Rate limit reached on free tier. Please wait a few seconds before trying again, or connect your custom Gemini API key in Settings for higher limits.";
   }
-  if (rawMsg.includes("API_KEY_INVALID") || rawMsg.includes("API key not valid") || rawMsg.includes("401") || rawMsg.includes("UNAUTHENTICATED")) {
-    return "Invalid or inactive API key. Please check your Google Gemini API key from Google AI Studio (aistudio.google.com).";
+  if (rawMsg.includes("API_KEY_INVALID") || rawMsg.toLowerCase().includes("api key not valid") || rawMsg.includes("401") || rawMsg.includes("UNAUTHENTICATED")) {
+    return "Invalid or inactive Gemini API key. Please verify your key from Google AI Studio (aistudio.google.com/api-keys).";
   }
   return rawMsg;
+}
+
+function handleAiError(res: express.Response, err: any, contextName: string) {
+  console.warn(`[${contextName} Failed]:`, err?.message || err);
+  const rawMsg = err?.message || String(err);
+  const isRateLimit = err?.status === 429 || err?.code === 429 || rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED") || rawMsg.includes("Quota exceeded");
+  const statusCode = isRateLimit ? 429 : (err?.status === 503 ? 503 : 500);
+  return res.status(statusCode).json({ error: formatGeminiError(err) });
 }
 
 // 1. API key validation
@@ -938,8 +946,7 @@ Provide a clear, highly structured markdown explanation:
       return res.json({ result: response.text });
     }
   } catch (err: any) {
-    console.error("[Gemini Study Materials Generation Failed]:", err);
-    return res.status(500).json({ error: formatGeminiError(err) });
+    return handleAiError(res, err, "Gemini Study Materials Generation");
   }
 });
 
@@ -979,8 +986,7 @@ app.post("/api/ai/generate-quiz", async (req, res) => {
     const jsonText = response.text?.trim() || "[]";
     return res.json(JSON.parse(jsonText));
   } catch (err: any) {
-    console.error("[Gemini Quiz Generation Failed]:", err);
-    return res.status(500).json({ error: formatGeminiError(err) });
+    return handleAiError(res, err, "Gemini Quiz Generation");
   }
 });
 
@@ -1016,8 +1022,7 @@ Break down complex formulas step-by-step. Use Markdown formatting like headers, 
 
     return res.json({ result: response.text });
   } catch (err: any) {
-    console.error("[Gemini Doubt Solver Failed]:", err);
-    return res.status(500).json({ error: formatGeminiError(err) });
+    return handleAiError(res, err, "Gemini Doubt Solver");
   }
 });
 
@@ -1057,8 +1062,35 @@ Ensure the duration is in MM:SS format or H:MM:SS format (e.g. "12:34" or "1:05:
     const jsonText = response.text?.trim() || "{}";
     return res.json(JSON.parse(jsonText));
   } catch (err: any) {
-    console.error("[Gemini Video Metadata Predictor Failed]:", err);
-    return res.status(500).json({ error: formatGeminiError(err) });
+    console.warn("[Gemini Video Metadata Predictor Failed]:", err?.message || err);
+    
+    // Fallback: Try YouTube oEmbed or return fallback metadata structure so video metadata indexing never fails
+    try {
+      const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
+      if (oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        return res.json({
+          title: oembedData.title || `Lecture Video (${id})`,
+          channelName: oembedData.author_name || "Academic Channel",
+          duration: "10:00",
+          publishDate: "Recent Lecture",
+          description: `Educational lecture video and study notes chapter for "${oembedData.title || id}".`,
+          tags: ["Education", "Lecture", "Study", "Academic"]
+        });
+      }
+    } catch (oembedErr) {
+      console.warn("[Video Metadata oEmbed Fallback Failed]:", oembedErr);
+    }
+
+    // Default structured response so app flow remains seamless
+    return res.json({
+      title: `Lecture (${id})`,
+      channelName: "Educational Creator",
+      duration: "10:00",
+      publishDate: "Recent Lecture",
+      description: "Educational video lecture and study notes resource.",
+      tags: ["Study", "Lecture", "Course", "Learn"]
+    });
   }
 });
 
