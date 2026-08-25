@@ -148,19 +148,23 @@ export function SettingsPanel({
     setSavedSettings({ ...settings });
   }, [settings]);
 
-  const updateLocalSetting = (key: keyof StudySettings, value: any) => {
+  const updateLocalSetting = (key: keyof StudySettings, value: any, immediateGlobal = false) => {
     const updated = { ...localSettings, [key]: value };
     setLocalSettings(updated);
-    // Apply immediate global effects for live preview
-    onSettingChange(key, value);
+    // Apply immediate global effects for live preview where needed
+    if (immediateGlobal || key === "theme" || key === "compactMode" || key === "playbackSpeed") {
+      onSettingChange(key, value);
+    }
   };
 
-  const updateLocalSettingsBatch = (batch: Partial<StudySettings>) => {
+  const updateLocalSettingsBatch = (batch: Partial<StudySettings>, immediateGlobal = false) => {
     const updated = { ...localSettings, ...batch };
     setLocalSettings(updated);
-    Object.entries(batch).forEach(([k, v]) => {
-      onSettingChange(k as keyof StudySettings, v);
-    });
+    if (immediateGlobal) {
+      Object.entries(batch).forEach(([k, v]) => {
+        onSettingChange(k as keyof StudySettings, v);
+      });
+    }
   };
 
   const handleSave = () => {
@@ -210,41 +214,59 @@ export function SettingsPanel({
     }
   };
 
-  // Calculate local storage stats dynamically
-  const storageStats = useMemo(() => {
-    const playlists = Storage.getPlaylists();
-    const singleVideos = Storage.getSingleVideos();
-    const bookmarks = Storage.getBookmarks();
-    const notes = Storage.getNotes();
-    const flashcards = Storage.getFlashcards();
+  // Calculate local storage stats dynamically only when in storage tab or needed
+  const [storageStats, setStorageStats] = useState({
+    playlistsCount: 0,
+    videosCount: 0,
+    bookmarksCount: 0,
+    notesCount: 0,
+    flashcardsCount: 0,
+    totalMB: "0.1",
+    playlistsPercent: 35,
+    bookmarksPercent: 15,
+    notesPercent: 25,
+    flashcardsPercent: 15,
+    aiPercent: 10,
+  });
 
-    const playlistsCount = playlists.length;
-    const videosCount = singleVideos.length + playlists.reduce((acc, p) => acc + p.videos.length, 0);
-    const bookmarksCount = Object.values(bookmarks).reduce((acc, list) => acc + list.length, 0);
-    const notesCount = Object.keys(notes).length;
-    const flashcardsCount = flashcards.length;
+  useEffect(() => {
+    // Only calculate storage stats lazily
+    try {
+      const playlists = Storage.getPlaylists();
+      const singleVideos = Storage.getSingleVideos();
+      const bookmarks = Storage.getBookmarks();
+      const notes = Storage.getNotes();
+      const flashcards = Storage.getFlashcards();
 
-    // Approximate size calculation
-    const rawData = localStorage.getItem("studytube_playlists") || "";
-    const notesData = localStorage.getItem("studytube_notes") || "";
-    const flashcardData = localStorage.getItem("studytube_flashcards") || "";
-    const totalBytes = (rawData.length + notesData.length + flashcardData.length) * 2;
-    const totalMB = Math.max(0.1, (totalBytes / (1024 * 1024))).toFixed(2);
+      const playlistsCount = playlists.length;
+      const videosCount = singleVideos.length + playlists.reduce((acc, p) => acc + p.videos.length, 0);
+      const bookmarksCount = Object.values(bookmarks).reduce((acc, list) => acc + list.length, 0);
+      const notesCount = Object.keys(notes).length;
+      const flashcardsCount = flashcards.length;
 
-    return {
-      playlistsCount,
-      videosCount,
-      bookmarksCount,
-      notesCount,
-      flashcardsCount,
-      totalMB,
-      playlistsPercent: 35,
-      bookmarksPercent: 15,
-      notesPercent: 25,
-      flashcardsPercent: 15,
-      aiPercent: 10,
-    };
-  }, []);
+      const rawData = localStorage.getItem("studytube_playlists") || "";
+      const notesData = localStorage.getItem("studytube_notes") || "";
+      const flashcardData = localStorage.getItem("studytube_flashcards") || "";
+      const totalBytes = (rawData.length + notesData.length + flashcardData.length) * 2;
+      const totalMB = Math.max(0.1, (totalBytes / (1024 * 1024))).toFixed(2);
+
+      setStorageStats({
+        playlistsCount,
+        videosCount,
+        bookmarksCount,
+        notesCount,
+        flashcardsCount,
+        totalMB,
+        playlistsPercent: 35,
+        bookmarksPercent: 15,
+        notesPercent: 25,
+        flashcardsPercent: 15,
+        aiPercent: 10,
+      });
+    } catch (e) {
+      // safe fallback
+    }
+  }, [activeCategory, mobileCategory]);
 
   // Categories list definition
   const categories: {
@@ -440,8 +462,7 @@ export function SettingsPanel({
                     customStyle={localSettings.userAvatarStyle}
                     size="xl"
                     showStatusIndicator={true}
-                    showLevelBadge={true}
-                    level={3}
+                    showLevelBadge={false}
                   />
 
                   <div>
@@ -1611,74 +1632,101 @@ export function SettingsPanel({
               ))}
             </div>
           ) : (
-            renderCategoryContent(activeCategory)
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={activeCategory}
+                initial={{ opacity: 0, y: 8, scale: 0.995 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -6, scale: 0.995 }}
+                transition={{ duration: 0.15, ease: [0.23, 1, 0.32, 1] }}
+                className="transform-gpu will-change-transform"
+              >
+                {renderCategoryContent(activeCategory)}
+              </motion.div>
+            </AnimatePresence>
           )}
         </div>
       </div>
 
       {/* MOBILE DRILL-DOWN UI (md:hidden) */}
       <div className="md:hidden space-y-4">
-        {mobileCategory === null ? (
-          /* Mobile Root Category List */
-          <div className="space-y-4">
-            {/* Profile Card Header */}
-            <div className="bg-gradient-to-br from-blue-600/10 via-indigo-600/10 to-purple-600/10 border border-blue-500/20 dark:border-blue-500/30 rounded-3xl p-5 shadow-xs space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-blue-600 text-white rounded-2xl flex items-center justify-center font-black text-lg shadow-md shadow-blue-500/20">
-                  {(localSettings.userName || "G").charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-extrabold text-slate-900 dark:text-zinc-50 truncate">
-                    {localSettings.userName || "Gagan Pratap"}
+        <AnimatePresence mode="wait" initial={false}>
+          {mobileCategory === null ? (
+            /* Mobile Root Category List */
+            <motion.div
+              key="mobile-root"
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
+              transition={{ duration: 0.15, ease: [0.23, 1, 0.32, 1] }}
+              className="space-y-4 transform-gpu"
+            >
+              {/* Profile Card Header */}
+              <div className="bg-gradient-to-br from-blue-600/10 via-indigo-600/10 to-purple-600/10 border border-blue-500/20 dark:border-blue-500/30 rounded-3xl p-5 shadow-xs space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-blue-600 text-white rounded-2xl flex items-center justify-center font-black text-lg shadow-md shadow-blue-500/20">
+                    {(localSettings.userName || "G").charAt(0).toUpperCase()}
                   </div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-600 text-white tracking-wide">
-                      Creator Plan
-                    </span>
-                    <span className="text-[10px] font-extrabold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" /> Synced
-                    </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-extrabold text-slate-900 dark:text-zinc-50 truncate">
+                      {localSettings.userName || "Gagan Pratap"}
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-600 text-white tracking-wide">
+                        Creator Plan
+                      </span>
+                      <span className="text-[10px] font-extrabold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Synced
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* Mobile Category List Buttons */}
-            <div className="bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 rounded-3xl p-3 shadow-xs space-y-1">
-              {filteredCategories.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setMobileCategory(cat.id)}
-                  className="w-full flex items-center justify-between p-3.5 rounded-2xl text-xs font-bold text-slate-800 dark:text-zinc-100 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-xl ${cat.color}`}>{cat.icon}</div>
-                    <div>
-                      <div className="text-xs font-bold">{cat.label}</div>
-                      <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-normal">
-                        {cat.description}
+              {/* Mobile Category List Buttons */}
+              <div className="bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 rounded-3xl p-3 shadow-xs space-y-1">
+                {filteredCategories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    onClick={() => setMobileCategory(cat.id)}
+                    className="w-full flex items-center justify-between p-3.5 rounded-2xl text-xs font-bold text-slate-800 dark:text-zinc-100 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left active:scale-[0.99]"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 rounded-xl ${cat.color}`}>{cat.icon}</div>
+                      <div>
+                        <div className="text-xs font-bold">{cat.label}</div>
+                        <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-normal">
+                          {cat.description}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-slate-400" />
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          /* Mobile Sub-Category Screen with Back Button */
-          <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-200">
-            <button
-              onClick={() => setMobileCategory(null)}
-              className="flex items-center gap-2 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-500/10 px-4 py-2.5 rounded-2xl transition cursor-pointer"
+                    <ChevronRight className="w-4 h-4 text-slate-400" />
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          ) : (
+            /* Mobile Sub-Category Screen with Back Button */
+            <motion.div
+              key={`mobile-category-${mobileCategory}`}
+              initial={{ opacity: 0, x: 14 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 14 }}
+              transition={{ duration: 0.15, ease: [0.23, 1, 0.32, 1] }}
+              className="space-y-4 transform-gpu"
             >
-              <ArrowLeft className="w-4 h-4" />
-              Back to Settings
-            </button>
+              <button
+                onClick={() => setMobileCategory(null)}
+                className="flex items-center gap-2 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 px-4 py-2.5 rounded-2xl transition cursor-pointer active:scale-95"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back to Settings
+              </button>
 
-            {renderCategoryContent(mobileCategory)}
-          </div>
-        )}
+              {renderCategoryContent(mobileCategory)}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* STICKY SAVE BAR */}

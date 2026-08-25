@@ -178,8 +178,19 @@ export function PomodoroTimer() {
           >
             <Maximize2 className="w-4 h-4" />
           </button>
-          
 
+          <button
+            onClick={() => setActiveSubTab(activeSubTab === "settings" ? "timer" : "settings")}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 ${
+              activeSubTab === "settings"
+                ? "bg-indigo-600 border-transparent text-white shadow-sm"
+                : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-700"
+            }`}
+            title="Pomodoro Timer Settings"
+          >
+            <Settings className="w-4 h-4" />
+            <span className="hidden sm:inline">Settings</span>
+          </button>
         </div>
       </div>
 
@@ -193,8 +204,7 @@ export function PomodoroTimer() {
             {[
               { id: "timer", label: "Timer", icon: AlarmClock },
               { id: "stats", label: "Statistics", icon: BarChart2 },
-              { id: "history", label: "History Log", icon: History },
-              { id: "settings", label: "Settings", icon: Settings }
+              { id: "history", label: "History Log", icon: History }
             ].map(tab => (
               <button
                 key={tab.id}

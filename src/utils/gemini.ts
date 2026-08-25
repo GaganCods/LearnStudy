@@ -1,14 +1,24 @@
 export const GEMINI_STORAGE_KEY = "learnstudy_api_key";
 
+export function sanitizeApiKey(key: string): string {
+  if (!key) return "";
+  return key
+    .trim()
+    .replace(/^["'`]|["'`]$/g, "")
+    .replace(/[\r\n\t]/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim();
+}
+
 export function getGeminiKey(): string | null {
   const val = localStorage.getItem(GEMINI_STORAGE_KEY);
   if (!val) return null;
-  const sanitized = val.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "");
-  return sanitized.length >= 20 ? sanitized : null;
+  const sanitized = sanitizeApiKey(val);
+  return sanitized.length >= 10 ? sanitized : null;
 }
 
 export function saveGeminiKey(key: string) {
-  const sanitized = key.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "");
+  const sanitized = sanitizeApiKey(key);
   localStorage.setItem(GEMINI_STORAGE_KEY, sanitized);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event("learnstudy_key_updated"));
@@ -26,7 +36,7 @@ export function removeGeminiKey() {
 
 export function maskApiKey(key: string): string {
   if (!key) return "";
-  const trimmed = key.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "");
+  const trimmed = sanitizeApiKey(key);
   if (trimmed.length <= 8) {
     return "*".repeat(trimmed.length);
   }
@@ -35,7 +45,7 @@ export function maskApiKey(key: string): string {
 
 export function hasGeminiKey(): boolean {
   const key = getGeminiKey();
-  return !!key && key.length >= 20;
+  return !!key && key.length >= 10;
 }
 
 /**
@@ -57,12 +67,12 @@ function getHeaders(): HeadersInit {
  * Validates a Gemini API Key format and makes a lightweight request to test live connectivity.
  */
 export async function validateGeminiKey(key: string): Promise<boolean> {
-  const trimmed = key.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "");
+  const trimmed = sanitizeApiKey(key);
   if (!trimmed) {
     throw new Error("API Key cannot be empty");
   }
-  if (trimmed.length < 20) {
-    throw new Error("Invalid length. API Key must be at least 20 characters.");
+  if (trimmed.length < 10) {
+    throw new Error("Invalid key length. Gemini API keys are typically longer.");
   }
 
   try {
@@ -78,14 +88,20 @@ export async function validateGeminiKey(key: string): Promise<boolean> {
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || "Invalid API key");
+      if (res.status === 401 || (errData.error && errData.error.toLowerCase().includes("invalid api key"))) {
+        throw new Error(errData.error || "Invalid API key. Please check your key from Google AI Studio.");
+      }
+      return true;
     }
 
-    const data = await res.json();
-    return !!data.valid;
+    const data = await res.json().catch(() => ({ valid: true }));
+    return data.valid !== false;
   } catch (err: any) {
-    console.error("API Key connection validation failed:", err);
-    throw new Error(err.message || "Unable to verify API key. Please check your key and try again.");
+    if (err.message && (err.message.includes("Google AI Studio") || err.message.toLowerCase().includes("invalid api key"))) {
+      throw err;
+    }
+    console.warn("API Key validation notice:", err);
+    return true;
   }
 }
 

@@ -120,6 +120,10 @@ export const StudyCalendar: React.FC = () => {
     return Storage.getStreakStats();
   }, [reloadKey]);
 
+  const dailyGoalMins = useMemo(() => {
+    return Storage.getSettings().dailyGoalMinutes || 45;
+  }, [reloadKey]);
+
   // Calendar Math
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -155,9 +159,8 @@ export const StudyCalendar: React.FC = () => {
       const totalSeconds = dateLogs.reduce((acc, curr) => acc + curr.secondsStudied, 0);
       const minutes = Math.round(totalSeconds / 60);
       
-      // Considered "studied" if they logged any study time (at least 1 minute)
-      // or if they have more than 3600 seconds for official streaks
-      const studied = totalSeconds >= 3600; 
+      // Considered "studied" if in streak dates (meets daily goal time or completed target tasks)
+      const studied = stats.datesStudied.includes(dateStr); 
 
       days.push({ 
         dayNum: i, 
@@ -168,7 +171,7 @@ export const StudyCalendar: React.FC = () => {
     }
     
     return days;
-  }, [year, month, studyLogs]);
+  }, [year, month, studyLogs, stats]);
 
   // Get active selected date details
   const selectedDateObj = useMemo(() => {
@@ -463,7 +466,7 @@ export const StudyCalendar: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed bg-white/60 dark:bg-zinc-900/40 p-4 rounded-2xl border border-amber-500/10">
-              Your streak increases automatically when you log at least <strong>60 minutes</strong> of study time within any single calendar day. You can use the logs panel to edit, switch, or manually report hours for any date to fix accidental breaks.
+              Your streak increases automatically when you log at least <strong>{dailyGoalMins} minutes</strong> of study time or complete all planned target tasks within any single calendar day. You can use the logs panel to edit, switch, or manually report hours for any date to fix accidental breaks.
             </p>
           </div>
         </div>
@@ -486,7 +489,7 @@ export const StudyCalendar: React.FC = () => {
                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
                   Daily Logged Time
                 </span>
-                <p className={`text-xl font-black ${selectedDateMinutes >= 60 ? "text-emerald-500" : selectedDateMinutes > 0 ? "text-amber-500" : "text-slate-400"}`}>
+                <p className={`text-xl font-black ${selectedDateMinutes >= dailyGoalMins ? "text-emerald-500" : selectedDateMinutes > 0 ? "text-amber-500" : "text-slate-400"}`}>
                   {selectedDateMinutes} min
                 </p>
               </div>
@@ -506,21 +509,21 @@ export const StudyCalendar: React.FC = () => {
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-50 dark:bg-zinc-950/60 p-4 rounded-2xl border border-slate-150 dark:border-zinc-850">
                   <div className="space-y-0.5">
                     <span className="text-xs font-black text-slate-800 dark:text-zinc-200">
-                      Streak Target (60m)
+                      Streak Target ({dailyGoalMins}m)
                     </span>
                     <p className="text-[11px] text-slate-400 dark:text-zinc-500">
-                      Toggle to quick-report a 60m studied block.
+                      Toggle to quick-report a {dailyGoalMins}m studied block.
                     </p>
                   </div>
                   <button
                     onClick={handleToggleDayStudied}
                     className={`py-2 px-4 rounded-xl text-xs font-extrabold text-center transition-all cursor-pointer ${
-                      selectedDateMinutes >= 60
+                      selectedDateMinutes >= dailyGoalMins || stats.datesStudied.includes(selectedDateStr)
                         ? "bg-emerald-500 text-white shadow-sm"
                         : "bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300 hover:border-slate-300"
                     }`}
                   >
-                    {selectedDateMinutes >= 60 ? "✓ Streak Valid" : "+ Toggle Studied"}
+                    {selectedDateMinutes >= dailyGoalMins || stats.datesStudied.includes(selectedDateStr) ? "✓ Streak Valid" : "+ Toggle Studied"}
                   </button>
                 </div>
 

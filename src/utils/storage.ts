@@ -8,10 +8,10 @@ import {
   StudyPlanItem,
   CourseFolder,
   CustomSubjectFolder,
-  PDFDocument,
+  CourseChapter,
+  ChapterLecture,
   UserProfile
 } from "../types";
-import { PdfDb } from "./pdfDb";
 
 // Default settings
 const DEFAULT_SETTINGS: StudySettings = {
@@ -100,48 +100,6 @@ export const Storage = {
 
   saveCourseFolders(folders: CourseFolder[]) {
     localStorage.setItem("studytube_course_folders", JSON.stringify(folders));
-  },
-
-  // PDF Documents
-  getPDFDocuments(): PDFDocument[] {
-    try {
-      const data = localStorage.getItem("studytube_pdf_docs");
-      return data ? JSON.parse(data) : [];
-    } catch {
-      return [];
-    }
-  },
-
-  savePDFDocument(pdf: PDFDocument) {
-    const docs = this.getPDFDocuments();
-    
-    // Save heavy file contents to IndexedDB
-    const heavyData = pdf.fileDataUrl || pdf.fileData;
-    if (heavyData) {
-      PdfDb.savePdfFile(pdf.id, heavyData).catch(err => {
-        console.error("Failed to background-save PDF content to IndexedDB", err);
-      });
-    }
-
-    // Strip out heavy content for localStorage
-    const { fileData, fileDataUrl, ...metadataOnly } = pdf;
-
-    const index = docs.findIndex(d => d.id === pdf.id);
-    if (index > -1) {
-      docs[index] = metadataOnly;
-    } else {
-      docs.unshift(metadataOnly);
-    }
-    localStorage.setItem("studytube_pdf_docs", JSON.stringify(docs));
-  },
-
-  deletePDFDocument(id: string) {
-    const docs = this.getPDFDocuments().filter(d => d.id !== id);
-    localStorage.setItem("studytube_pdf_docs", JSON.stringify(docs));
-    // Also delete from IndexedDB
-    PdfDb.deletePdfFile(id).catch(err => {
-      console.error("Failed to delete PDF from IndexedDB", err);
-    });
   },
 
   // Playlists (contains lists of playlists fetched and saved)
@@ -303,22 +261,25 @@ export const Storage = {
     }
   },
 
-  toggleDateStudied(dateStr: string, studyMinutes: number = 60) {
+  toggleDateStudied(dateStr: string, studyMinutes?: number) {
+    const settings = this.getSettings();
+    const targetMins = studyMinutes || settings.dailyGoalMinutes || 45;
+    const targetSecs = targetMins * 60;
     const logs = this.getStudyLogs();
     const dateLogs = logs.filter(l => l.date === dateStr);
     const totalSeconds = dateLogs.reduce((acc, curr) => acc + curr.secondsStudied, 0);
     
-    if (totalSeconds >= 3600) {
+    if (totalSeconds >= targetSecs) {
       // It is studied, let's remove logs for this date to mark it as unstudied/rest day
       const updatedLogs = logs.filter(l => l.date !== dateStr);
       this.saveStudyLogs(updatedLogs);
       return false;
     } else {
-      // It is not studied, let's add a manual log for 60 mins (3600 secs)
-      const neededSeconds = (studyMinutes * 60) - totalSeconds;
+      // It is not studied, let's add a manual log to reach daily goal
+      const neededSeconds = targetSecs - totalSeconds;
       logs.push({
         date: dateStr,
-        secondsStudied: neededSeconds > 0 ? neededSeconds : 3600,
+        secondsStudied: neededSeconds > 0 ? neededSeconds : targetSecs,
         videoId: "manual",
         videoTitle: "Manual/Quick Study Session"
       });
@@ -339,6 +300,10 @@ export const Storage = {
 
   saveSettings(settings: StudySettings) {
     localStorage.setItem("studytube_settings", JSON.stringify(settings));
+    if (settings.dailyGoalMinutes) {
+      const hours = Math.max(1, Math.round(settings.dailyGoalMinutes / 60));
+      localStorage.setItem("studytube_target_hours", String(hours));
+    }
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("studytube_settings_updated"));
     }
@@ -356,6 +321,9 @@ export const Storage = {
 
   saveCustomSubjects(subjects: CustomSubjectFolder[]) {
     localStorage.setItem("studytube_custom_subjects", JSON.stringify(subjects));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("studytube_custom_subjects_updated"));
+    }
   },
 
   saveCustomSubject(subject: CustomSubjectFolder) {
@@ -372,6 +340,292 @@ export const Storage = {
   deleteCustomSubject(id: string) {
     const subjects = this.getCustomSubjects().filter((s) => s.id !== id);
     this.saveCustomSubjects(subjects);
+  },
+
+  // Bidirectional Synchronization between Study Player and Course Library Custom Subjects
+  syncVideoProgressToSubjects(
+    videoId: string,
+    progress: number,
+    completed: boolean,
+    lastWatchedPosition?: number,
+    duration?: string
+  ) {
+    if (!videoId) return;
+    const subjects = this.getCustomSubjects();
+    let modified = false;
+
+    subjects.forEach((subj) => {
+      subj.chapters?.forEach((ch) => {
+        ch.lectures?.forEach((lec) => {
+          if (
+            lec.youtubeVideoId === videoId ||
+            (lec.videoUrl && lec.videoUrl.includes(videoId)) ||
+            lec.id.includes(videoId)
+          ) {
+            modified = true;
+            if (completed) {
+              lec.completed = true;
+              lec.progress = 100;
+            } else {
+              lec.progress = Math.max(lec.progress || 0, progress);
+              if (progress >= 95) {
+                lec.completed = true;
+              }
+            }
+            if (lastWatchedPosition !== undefined) {
+              lec.lastWatchedPosition = lastWatchedPosition;
+            }
+            if (duration && duration !== "10:00" && duration !== "0:00" && duration !== "LIVE") {
+              lec.duration = duration;
+            }
+          }
+        });
+      });
+    });
+
+    if (modified) {
+      this.saveCustomSubjects(subjects);
+    }
+  },
+
+  setLectureCompletionEverywhere(videoId: string, completed: boolean) {
+    if (!videoId) return;
+
+    // 1. Sync all custom subjects
+    const subjects = this.getCustomSubjects();
+    let subjectsModified = false;
+    subjects.forEach((subj) => {
+      subj.chapters?.forEach((ch) => {
+        ch.lectures?.forEach((lec) => {
+          if (
+            lec.youtubeVideoId === videoId ||
+            (lec.videoUrl && lec.videoUrl.includes(videoId)) ||
+            lec.id.includes(videoId)
+          ) {
+            subjectsModified = true;
+            lec.completed = completed;
+            lec.progress = completed ? 100 : 0;
+          }
+        });
+      });
+    });
+    if (subjectsModified) {
+      this.saveCustomSubjects(subjects);
+    }
+
+    // 2. Sync all playlists
+    const playlists = this.getPlaylists();
+    let playlistsModified = false;
+    playlists.forEach((pl) => {
+      let plVideoFound = false;
+      pl.videos?.forEach((v) => {
+        if (v.id === videoId) {
+          playlistsModified = true;
+          plVideoFound = true;
+          v.completed = completed;
+          v.progress = completed ? 100 : 0;
+        }
+      });
+      if (plVideoFound && pl.videos && pl.videos.length > 0) {
+        const completedCount = pl.videos.filter((v) => v.completed).length;
+        pl.completedVideos = completedCount;
+        pl.progress = Math.round((completedCount / (pl.totalVideos || pl.videos.length)) * 100);
+      }
+    });
+    if (playlistsModified) {
+      this.savePlaylists(playlists);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("studytube_playlists_updated"));
+      }
+    }
+
+    // 3. Sync single videos
+    const singles = this.getSingleVideos();
+    let singlesModified = false;
+    singles.forEach((v) => {
+      if (v.id === videoId) {
+        singlesModified = true;
+        v.completed = completed;
+        v.progress = completed ? 100 : 0;
+      }
+    });
+    if (singlesModified) {
+      this.saveSingleVideos(singles);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("studytube_single_videos_updated"));
+      }
+    }
+  },
+
+  // Import Folder in Course Library (Auto-adds all Home-page imported playlists and videos)
+  getOrCreateImportSubject(): CustomSubjectFolder {
+    const subjects = this.getCustomSubjects();
+    let importSubj = subjects.find(
+      (s) => s.id === "subject-imported-folder" || s.subjectName.toLowerCase() === "imported lectures" || s.subjectName.toLowerCase() === "imports"
+    );
+
+    if (!importSubj) {
+      importSubj = {
+        id: "subject-imported-folder",
+        subjectName: "Imported Lectures",
+        category: "Imports",
+        color: "blue",
+        description: "Lectures and playlists imported directly from the Home page.",
+        createdAt: new Date().toISOString(),
+        chapters: []
+      };
+      this.saveCustomSubject(importSubj);
+    }
+
+    // Ensure "Imports" category is saved in custom categories
+    try {
+      const storedCats = localStorage.getItem("studyai_custom_categories");
+      let cats: string[] = storedCats ? JSON.parse(storedCats) : [];
+      if (!cats.includes("Imports")) {
+        cats.unshift("Imports");
+        localStorage.setItem("studyai_custom_categories", JSON.stringify(cats));
+      }
+    } catch {}
+
+    return importSubj;
+  },
+
+  addPlaylistToImportFolder(playlist: PlaylistInfo): CustomSubjectFolder {
+    if (!playlist) return this.getOrCreateImportSubject();
+
+    const importSubj = this.getOrCreateImportSubject();
+    const playlistTitle = playlist.title || "Imported Playlist";
+    const playlistId = playlist.id;
+
+    // Check if chapter for this playlist already exists
+    const existingChapterIndex = importSubj.chapters.findIndex(
+      (ch) => ch.id === `ch-import-pl-${playlistId}` || (ch.description && ch.description.includes(playlistId))
+    );
+
+    const convertedLectures: ChapterLecture[] = (playlist.videos || []).map((v: any, idx: number) => ({
+      id: `lec-pl-${playlistId}-${v.id || idx}`,
+      title: v.title || `Lecture ${idx + 1}`,
+      videoUrl: `https://www.youtube.com/watch?v=${v.id}`,
+      youtubeVideoId: v.id,
+      duration: v.duration || "15:00",
+      completed: !!v.completed,
+      progress: v.progress || 0,
+      lastWatchedPosition: v.lastWatchedPosition || 0,
+      lectureNumber: idx + 1
+    }));
+
+    if (existingChapterIndex > -1) {
+      const existingCh = importSubj.chapters[existingChapterIndex];
+      const existingLecMap = new Map<string, ChapterLecture>();
+      existingCh.lectures.forEach((l) => {
+        if (l.youtubeVideoId) existingLecMap.set(l.youtubeVideoId, l);
+      });
+      const mergedLectures = convertedLectures.map((lec) => {
+        const prev = lec.youtubeVideoId ? existingLecMap.get(lec.youtubeVideoId) : undefined;
+        if (prev) {
+          return {
+            ...lec,
+            completed: prev.completed || lec.completed,
+            progress: Math.max(prev.progress || 0, lec.progress || 0),
+            lastWatchedPosition: prev.lastWatchedPosition || lec.lastWatchedPosition || 0,
+            notes: prev.notes || lec.notes
+          };
+        }
+        return lec;
+      });
+
+      existingCh.title = `Chapter ${existingCh.chapterNumber}: ${playlistTitle}`;
+      existingCh.description = `Imported playlist (${playlistId}) from ${playlist.channelName || "YouTube"} • ${mergedLectures.length} lectures`;
+      existingCh.lectures = mergedLectures;
+    } else {
+      const nextChNum = importSubj.chapters.length + 1;
+      const newChapter: CourseChapter = {
+        id: `ch-import-pl-${playlistId}`,
+        chapterNumber: nextChNum,
+        title: `Chapter ${nextChNum}: ${playlistTitle}`,
+        description: `Imported playlist (${playlistId}) from ${playlist.channelName || "YouTube"} • ${convertedLectures.length} lectures`,
+        lectures: convertedLectures
+      };
+      importSubj.chapters.push(newChapter);
+    }
+
+    // Ensure all chapter numbers are sequential
+    importSubj.chapters.forEach((ch, idx) => {
+      ch.chapterNumber = idx + 1;
+      if (/^Chapter \d+:/i.test(ch.title)) {
+        ch.title = ch.title.replace(/^Chapter \d+:/i, `Chapter ${idx + 1}:`);
+      }
+    });
+
+    this.saveCustomSubject(importSubj);
+    return importSubj;
+  },
+
+  addVideoToImportFolder(video: { id: string; title?: string; channelName?: string; duration?: string }): CustomSubjectFolder {
+    if (!video || !video.id) return this.getOrCreateImportSubject();
+
+    const importSubj = this.getOrCreateImportSubject();
+    
+    // Find or create the Single / Individual Lectures chapter
+    let singleCh = importSubj.chapters.find(
+      (ch) => ch.id === "ch-import-single-videos" || ch.title.toLowerCase().includes("individual lectures")
+    );
+
+    if (!singleCh) {
+      singleCh = {
+        id: "ch-import-single-videos",
+        chapterNumber: 1,
+        title: "Chapter 1: Individual Lectures",
+        description: "Standalone video lectures imported from the Home page",
+        lectures: []
+      };
+      importSubj.chapters.unshift(singleCh);
+    }
+
+    // Check if this video is already in single lectures
+    const existingIndex = singleCh.lectures.findIndex(
+      (l) => l.youtubeVideoId === video.id || l.id === `lec-single-${video.id}`
+    );
+
+    const cleanTitle = (video.title && video.title !== "Loading lecture details..." && video.title !== "YouTube Video" && video.title !== "Connecting...")
+      ? video.title
+      : "";
+
+    if (existingIndex > -1) {
+      const existingLec = singleCh.lectures[existingIndex];
+      if (cleanTitle) {
+        existingLec.title = cleanTitle;
+      }
+      if (video.duration && video.duration !== "0:00" && video.duration !== "10:00") {
+        existingLec.duration = video.duration;
+      }
+    } else {
+      const newLec: ChapterLecture = {
+        id: `lec-single-${video.id}`,
+        title: cleanTitle || `Lecture: ${video.id}`,
+        videoUrl: `https://www.youtube.com/watch?v=${video.id}`,
+        youtubeVideoId: video.id,
+        duration: (video.duration && video.duration !== "0:00") ? video.duration : "10:00",
+        completed: false,
+        progress: 0,
+        lectureNumber: singleCh.lectures.length + 1
+      };
+      singleCh.lectures.push(newLec);
+    }
+
+    // Update chapter description with count
+    singleCh.description = `Standalone video lectures imported from the Home page • ${singleCh.lectures.length} lecture${singleCh.lectures.length === 1 ? "" : "s"}`;
+
+    // Ensure all chapter numbers are sequential
+    importSubj.chapters.forEach((ch, idx) => {
+      ch.chapterNumber = idx + 1;
+      if (/^Chapter \d+:/i.test(ch.title)) {
+        ch.title = ch.title.replace(/^Chapter \d+:/i, `Chapter ${idx + 1}:`);
+      }
+    });
+
+    this.saveCustomSubject(importSubj);
+    return importSubj;
   },
 
   // Favorites (list of favorites, can be playlist ID or video ID)
@@ -441,19 +695,42 @@ export const Storage = {
   },
 
   // Streaks calculation
-  getStreakStats() {
-    const logs = this.getStudyLogs();
-    if (logs.length === 0) return { current: 0, longest: 0, datesStudied: [] };
+  getStreakStats(customGoalMinutes?: number) {
+    const settings = this.getSettings();
+    const targetMins = customGoalMinutes || settings.dailyGoalMinutes || 45;
+    const targetSeconds = targetMins * 60;
 
-    // Group logs by date and filter dates with total seconds >= 60 (at least 1 min studied)
+    const logs = this.getStudyLogs();
+    const plans = this.getStudyPlans();
+
+    // Group logs by date
     const dateSums: { [date: string]: number } = {};
     logs.forEach((l) => {
-      dateSums[l.date] = (dateSums[l.date] || 0) + l.secondsStudied;
+      dateSums[l.date] = (dateSums[l.date] || 0) + (l.secondsStudied || 0);
     });
 
-    const studyDates = Object.keys(dateSums)
-      .filter((date) => dateSums[date] >= 60)
-      .sort() as string[];
+    // Dates with study logs or planner tasks
+    const candidateDates = Array.from(new Set([
+      ...Object.keys(dateSums),
+      ...plans.map(p => p.dueDate)
+    ]));
+
+    const studyDates = candidateDates.filter((date) => {
+      const secondsLogged = dateSums[date] || 0;
+      // 1. Reached time goal threshold (at least 60s minimum if goal set low)
+      if (secondsLogged >= Math.min(60, targetSeconds) && secondsLogged >= targetSeconds) return true;
+
+      // 2. OR completed all target tasks scheduled for that day in Planner
+      const tasksForDate = plans.filter(p => p.dueDate === date && !p.skipped);
+      if (tasksForDate.length > 0 && tasksForDate.every(p => p.completed)) {
+        return true;
+      }
+
+      // 3. Fallback: if at least 1 min studied and no specific tasks broke it
+      if (secondsLogged >= 60 && targetMins <= 1) return true;
+
+      return false;
+    }).sort() as string[];
 
     if (studyDates.length === 0) return { current: 0, longest: 0, datesStudied: [] };
 
@@ -559,12 +836,10 @@ export const Storage = {
     localStorage.removeItem("studytube_study_logs");
     localStorage.removeItem("studytube_favorites");
     localStorage.removeItem("studytube_settings");
-    localStorage.removeItem("studytube_pdf_docs");
     localStorage.removeItem("studytube_study_plans");
     localStorage.removeItem("studytube_flashcards");
     localStorage.removeItem("studytube_custom_subjects");
     localStorage.removeItem("studytube_course_folders");
     localStorage.removeItem("studytube_target_hours");
-    PdfDb.clearAllPdfFiles().catch(err => console.error("Failed to clear PDF DB", err));
   }
 };

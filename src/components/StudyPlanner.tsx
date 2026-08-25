@@ -92,7 +92,20 @@ export function StudyPlanner() {
   const [plans, setPlans] = useState<StudyPlanItem[]>(() => Storage.getStudyPlans());
   const [examName, setExamName] = useState(() => localStorage.getItem("studytube_exam_name") || "Fall Semester Midterms");
   const [examDate, setExamDate] = useState(() => localStorage.getItem("studytube_exam_date") || "In 18 Days");
-  const [targetHours, setTargetHours] = useState(() => Number(localStorage.getItem("studytube_target_hours")) || 3);
+  const [targetHours, setTargetHours] = useState(() => {
+    const savedMins = Storage.getSettings().dailyGoalMinutes;
+    if (savedMins) return Math.max(1, Math.round(savedMins / 60));
+    return Number(localStorage.getItem("studytube_target_hours")) || 3;
+  });
+
+  const updatePlannerTargetHours = (hours: number) => {
+    const val = Math.max(1, Math.min(24, hours));
+    setTargetHours(val);
+    localStorage.setItem("studytube_target_hours", String(val));
+    const settings = Storage.getSettings();
+    settings.dailyGoalMinutes = val * 60;
+    Storage.saveSettings(settings);
+  };
 
   // Manual Task Creation State (Hidden by default)
   const [showCustomForm, setShowCustomForm] = useState(false);
@@ -149,13 +162,6 @@ export function StudyPlanner() {
       console.error(e);
     }
 
-    let pdfs = 0;
-    try {
-      pdfs = Storage.getPDFDocuments().length;
-    } catch (e) {
-      console.error(e);
-    }
-
     let assignments = 0;
     try {
       assignments = Storage.getStudyPlans().filter(p => p.type === "assignment" && !p.completed).length;
@@ -172,7 +178,6 @@ export function StudyPlanner() {
 
     return {
       pendingLectures,
-      pdfs,
       assignments,
       practiceSets
     };
@@ -207,8 +212,7 @@ export function StudyPlanner() {
         setPlans(updatedPlans);
 
         // Update target hours and exam milestone if set
-        localStorage.setItem("studytube_target_hours", String(studyTime));
-        setTargetHours(studyTime);
+        updatePlannerTargetHours(studyTime);
 
         if (hasExam && wizardExamName.trim()) {
           localStorage.setItem("studytube_exam_name", wizardExamName.trim());
@@ -249,7 +253,6 @@ export function StudyPlanner() {
 
     // Detect real resources if included
     let pendingLecturesList: { title: string; channel: string }[] = [];
-    let pendingPdfsList: string[] = [];
     
     if (includeResources) {
       try {
@@ -267,8 +270,6 @@ export function StudyPlanner() {
             pendingLecturesList.push({ title: v.title, channel: v.channelName });
           }
         });
-        
-        pendingPdfsList = Storage.getPDFDocuments().map(d => d.title);
       } catch (e) {
         console.error("Failed to parse integrated LearnStudy resources", e);
       }
@@ -315,10 +316,6 @@ export function StudyPlanner() {
         const lecture = pendingLecturesList.shift()!;
         taskTitle = `Lecture: ${lecture.title}`;
         taskType = "video";
-      } else if (focus === "Revision" && pendingPdfsList.length > 0) {
-        const pdfTitle = pendingPdfsList.shift()!;
-        taskTitle = `Read PDF Notes: ${pdfTitle}`;
-        taskType = "revision";
       } else {
         // General focus generation
         const sub = currentSubject;
@@ -719,12 +716,8 @@ export function StudyPlanner() {
                   <div className="flex items-center gap-2 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl p-1 shrink-0">
                     <button 
                       type="button"
-                      onClick={() => {
-                        const val = Math.max(1, targetHours - 1);
-                        setTargetHours(val);
-                        localStorage.setItem("studytube_target_hours", String(val));
-                      }}
-                      className="w-8 h-8 rounded-lg text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800 transition font-black text-sm flex items-center justify-center"
+                      onClick={() => updatePlannerTargetHours(targetHours - 1)}
+                      className="w-8 h-8 rounded-lg text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800 transition font-black text-sm flex items-center justify-center cursor-pointer"
                     >
                       -
                     </button>
@@ -733,12 +726,8 @@ export function StudyPlanner() {
                     </span>
                     <button 
                       type="button"
-                      onClick={() => {
-                        const val = Math.min(24, targetHours + 1);
-                        setTargetHours(val);
-                        localStorage.setItem("studytube_target_hours", String(val));
-                      }}
-                      className="w-8 h-8 rounded-lg text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800 transition font-black text-sm flex items-center justify-center"
+                      onClick={() => updatePlannerTargetHours(targetHours + 1)}
+                      className="w-8 h-8 rounded-lg text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800 transition font-black text-sm flex items-center justify-center cursor-pointer"
                     >
                       +
                     </button>
@@ -1405,14 +1394,10 @@ export function StudyPlanner() {
                     LearnStudy co-pilot scanned the library to detect current pending assets.
                   </p>
 
-                  <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-850 rounded-2xl p-5 max-w-xs mx-auto space-y-3.5">
+                  <div className="bg-slate-50 dark:bg-zinc-950 border border-slate-150 dark:border-zinc-855 rounded-2xl p-5 max-w-xs mx-auto space-y-3.5">
                     <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-zinc-300">
                       <span className="flex items-center gap-1.5"><Youtube className="w-4 h-4 text-rose-500" /> Pending Lectures</span>
                       <span>{resourceCounts.pendingLectures} pending</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-zinc-300">
-                      <span className="flex items-center gap-1.5"><FileText className="w-4 h-4 text-blue-500" /> Study PDFs</span>
-                      <span>{resourceCounts.pdfs} assets</span>
                     </div>
                     <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-zinc-300">
                       <span className="flex items-center gap-1.5"><Target className="w-4 h-4 text-purple-500" /> Saved Assignments</span>

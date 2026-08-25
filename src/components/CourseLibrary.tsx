@@ -39,6 +39,19 @@ export interface PlaylistInfoPackage {
   videos: PlaylistVideoItem[];
 }
 
+// Helper to extract clean chapter title without redundant or stale "Chapter X:" prefix
+export const getCleanChapterTitle = (rawTitle: string): string => {
+  if (!rawTitle) return "";
+  const cleaned = rawTitle.replace(/^(Chapter|Ch\.?)\s*\d+\s*[:\-]?\s*/i, "").trim();
+  return cleaned || rawTitle;
+};
+
+// Helper to format chapter title with its exact current chapter number and position
+export const formatChapterTitle = (rawTitle: string, chapterNumber: number): string => {
+  const clean = getCleanChapterTitle(rawTitle);
+  return `Chapter ${chapterNumber}: ${clean}`;
+};
+
 interface CourseLibraryProps {
   onSelectLecture?: (
     videoId: string, 
@@ -250,8 +263,15 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
       return;
     }
 
-    // Update chapter numbers if needed (optional, but keep it consistent with the UI if it relies on it)
-    const updatedChapters = chapters.map((c, i) => ({ ...c, chapterNumber: i + 1 }));
+    // Update chapter numbers and titles according to their position inside the subject
+    const updatedChapters = chapters.map((c, i) => {
+      const newNum = i + 1;
+      return {
+        ...c,
+        chapterNumber: newNum,
+        title: formatChapterTitle(c.title, newNum)
+      };
+    });
 
     const updatedSubject = { ...subject, chapters: updatedChapters };
     Storage.saveCustomSubject(updatedSubject);
@@ -376,10 +396,107 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
   // Expanded chapters in accordion
   const [expandedChapterIds, setExpandedChapterIds] = useState<Record<string, boolean>>({});
 
-  // Load subjects on mount
+  // Load subjects on mount and listen to storage updates
   useEffect(() => {
     loadSubjects();
+
+    const handleSubjectsUpdated = () => {
+      loadSubjects();
+    };
+
+    window.addEventListener("studytube_custom_subjects_updated", handleSubjectsUpdated);
+    window.addEventListener("storage", handleSubjectsUpdated);
+
+    return () => {
+      window.removeEventListener("studytube_custom_subjects_updated", handleSubjectsUpdated);
+      window.removeEventListener("storage", handleSubjectsUpdated);
+    };
   }, []);
+
+  // Background enrichment for any lectures with missing or placeholder durations ("10:00", "15:00")
+  useEffect(() => {
+    if (!subjects || subjects.length === 0) return;
+
+    let isMounted = true;
+    let hasPlaceholders = false;
+
+    for (const sub of subjects) {
+      for (const ch of sub.chapters || []) {
+        for (const lec of ch.lectures || []) {
+          if (!lec.duration || lec.duration === "10:00" || lec.duration === "15:00" || lec.duration === "0:00") {
+            hasPlaceholders = true;
+            break;
+          }
+        }
+        if (hasPlaceholders) break;
+      }
+      if (hasPlaceholders) break;
+    }
+
+    if (!hasPlaceholders) return;
+
+    const autoFixDurations = async () => {
+      let changed = false;
+      const updatedSubjs = await Promise.all(
+        subjects.map(async (subj) => {
+          let subjChanged = false;
+          const updatedChapters = await Promise.all(
+            (subj.chapters || []).map(async (ch) => {
+              let chChanged = false;
+              const updatedLectures = await Promise.all(
+                (ch.lectures || []).map(async (lec) => {
+                  const ytId = lec.youtubeVideoId || extractYoutubeId(lec.videoUrl || "");
+                  if (
+                    ytId &&
+                    ytId.length === 11 &&
+                    (!lec.duration || lec.duration === "10:00" || lec.duration === "15:00" || lec.duration === "0:00")
+                  ) {
+                    try {
+                      const res = await fetch(`/api/video-metadata?id=${ytId}`);
+                      if (res.ok) {
+                        const data = await res.json();
+                        if (data && data.duration && data.duration !== "10:00" && data.duration !== "15:00") {
+                          subjChanged = true;
+                          chChanged = true;
+                          changed = true;
+                          return {
+                            ...lec,
+                            duration: data.duration,
+                            title: lec.title.startsWith("Lecture") && data.title ? data.title : lec.title
+                          };
+                        }
+                      }
+                    } catch (e) {}
+                  }
+                  return lec;
+                })
+              );
+              return chChanged ? { ...ch, lectures: updatedLectures } : ch;
+            })
+          );
+          return subjChanged ? { ...subj, chapters: updatedChapters } : subj;
+        })
+      );
+
+      if (isMounted && changed) {
+        Storage.saveCustomSubjects(updatedSubjs);
+        setSubjects(updatedSubjs);
+        if (selectedSubject) {
+          const current = updatedSubjs.find(s => s.id === selectedSubject.id);
+          if (current) setSelectedSubject(current);
+        }
+      }
+    };
+
+    const timer = setTimeout(() => {
+      autoFixDurations();
+    }, 500);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [subjects]);
 
   const loadSubjects = () => {
     const stored = Storage.getCustomSubjects() || [];
@@ -390,8 +507,10 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     }
     
     setSubjects(filtered);
+    setSelectedSubject((prev) => (prev ? filtered.find((s) => s.id === prev.id) || null : null));
+    setPlaylistPlayerSubject((prev) => (prev ? filtered.find((s) => s.id === prev.id) || null : null));
     if (filtered[0]?.chapters?.[0]?.id) {
-      setExpandedChapterIds({ [filtered[0].chapters[0].id]: true });
+      setExpandedChapterIds((prev) => ({ ...prev, [filtered[0].chapters[0].id]: true }));
     }
 
     // Load custom categories based on actual remaining subjects
@@ -431,13 +550,22 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     if (ytId && ytId.length === 11) {
       setIsFetchingMetadata(true);
       try {
-        // Use the more robust universal fetcher which has oembed fallback and handles API keys
-        const data = await fetchPlaylistWithFallback(ytId);
-        if (data && data.videos && data.videos.length > 0) {
-          const video = data.videos[0];
-          setNewLectureTitle(video.title);
-          if (video.duration) setNewLectureDuration(video.duration);
-          setAutoFetchedStatus(`✨ Auto-fetched: "${video.title}" (${video.duration || "Video"})`);
+        const res = await fetch(`/api/video-metadata?id=${ytId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.title) {
+            setNewLectureTitle(data.title);
+            if (data.duration) setNewLectureDuration(data.duration);
+            setAutoFetchedStatus(`✨ Auto-fetched: "${data.title}" (${data.duration || "Video"})`);
+          }
+        } else {
+          const data = await fetchPlaylistWithFallback(ytId);
+          if (data && data.videos && data.videos.length > 0) {
+            const video = data.videos[0];
+            setNewLectureTitle(video.title);
+            if (video.duration) setNewLectureDuration(video.duration);
+            setAutoFetchedStatus(`✨ Auto-fetched: "${video.title}" (${video.duration || "Video"})`);
+          }
         }
       } catch (err) {
         console.warn("Could not auto-fetch video details:", err);
@@ -962,7 +1090,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     // SCENARIO 2: Import playlist as a NEW Chapter inside targetSubj
     const nextChapterNum = targetSubj.chapters.length + 1;
     const rawTitle = importChapterTitle.trim() || preview.title || `Chapter ${nextChapterNum}`;
-    const finalChapterTitle = rawTitle.startsWith("Chapter") ? rawTitle : `Chapter ${nextChapterNum}: ${rawTitle}`;
+    const finalChapterTitle = formatChapterTitle(rawTitle, nextChapterNum);
     const finalChapterDesc = importChapterDesc.trim() || `Imported playlist from ${preview.channelName} (${preview.videosCount} lectures)`;
 
     const convertedLectures: ChapterLecture[] = preview.videos.map((vid: any, idx: number) => ({
@@ -1136,7 +1264,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     const newCh: CourseChapter = {
       id: `ch-${Date.now()}`,
       chapterNumber: nextChapterNum,
-      title: finalTitle.startsWith("Chapter") ? finalTitle : `Chapter ${nextChapterNum}: ${finalTitle}`,
+      title: formatChapterTitle(finalTitle, nextChapterNum),
       description: finalDesc,
       lectures: newLectures
     };
@@ -1169,7 +1297,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
   const handleOpenEditChapter = (ch: CourseChapter, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingChapter(ch);
-    setEditChapterTitle(ch.title);
+    setEditChapterTitle(getCleanChapterTitle(ch.title));
     setEditChapterDesc(ch.description || "");
     setEditChapterNumber(ch.chapterNumber);
     setShowEditChapterModal(true);
@@ -1182,11 +1310,12 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
 
     const updatedChapters = selectedSubject.chapters.map(ch => {
       if (ch.id === editingChapter.id) {
+        const newNum = Number(editChapterNumber) || ch.chapterNumber;
         return {
           ...ch,
-          title: editChapterTitle.trim(),
+          title: formatChapterTitle(editChapterTitle.trim(), newNum),
           description: editChapterDesc.trim(),
-          chapterNumber: Number(editChapterNumber) || ch.chapterNumber
+          chapterNumber: newNum
         };
       }
       return ch;
@@ -1293,16 +1422,27 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     let finalTitle = newLectureTitle.trim();
     let finalDuration = newLectureDuration.trim();
 
-    if (ytId && ytId.length === 11 && (!finalTitle || !finalDuration || finalTitle.startsWith("Lecture") || finalDuration === "15:00")) {
+    if (ytId && ytId.length === 11 && (!finalTitle || !finalDuration || finalTitle.startsWith("Lecture") || finalDuration === "15:00" || finalDuration === "10:00")) {
       try {
-        const data = await fetchPlaylistWithFallback(ytId);
-        if (data && data.videos && data.videos.length > 0) {
-          const video = data.videos[0];
-          if (!finalTitle || finalTitle.startsWith("Lecture")) {
-            finalTitle = video.title;
+        const metaRes = await fetch(`/api/video-metadata?id=${ytId}`);
+        if (metaRes.ok) {
+          const metaData = await metaRes.json();
+          if (metaData && metaData.title && (!finalTitle || finalTitle.startsWith("Lecture"))) {
+            finalTitle = metaData.title;
           }
-          if (!finalDuration || finalDuration === "15:00") {
-            finalDuration = video.duration;
+          if (metaData && metaData.duration) {
+            finalDuration = metaData.duration;
+          }
+        } else {
+          const data = await fetchPlaylistWithFallback(ytId);
+          if (data && data.videos && data.videos.length > 0) {
+            const video = data.videos[0];
+            if (!finalTitle || finalTitle.startsWith("Lecture")) {
+              finalTitle = video.title;
+            }
+            if (!finalDuration || finalDuration === "15:00" || finalDuration === "10:00") {
+              finalDuration = video.duration;
+            }
           }
         }
       } catch (e) {}
@@ -1355,13 +1495,18 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     const targetSubj = subjects.find(s => s.id === subjectId);
     if (!targetSubj) return;
 
+    let targetVideoId: string | undefined;
+    let newCompletedState = false;
+
     const updatedChapters = targetSubj.chapters.map(ch => {
       if (ch.id === chapterId) {
         return {
           ...ch,
           lectures: ch.lectures.map(l => {
             if (l.id === lectureId) {
-              return { ...l, completed: !l.completed, progress: !l.completed ? 100 : 0 };
+              newCompletedState = !l.completed;
+              targetVideoId = l.youtubeVideoId || l.id;
+              return { ...l, completed: newCompletedState, progress: newCompletedState ? 100 : 0 };
             }
             return l;
           })
@@ -1372,6 +1517,11 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
 
     const updatedSubj: CustomSubjectFolder = { ...targetSubj, chapters: updatedChapters };
     Storage.saveCustomSubject(updatedSubj);
+
+    if (targetVideoId) {
+      Storage.setLectureCompletionEverywhere(targetVideoId, newCompletedState);
+    }
+
     setSubjects(subjects.map(s => s.id === updatedSubj.id ? updatedSubj : s));
     if (selectedSubject?.id === updatedSubj.id) setSelectedSubject(updatedSubj);
     if (playlistPlayerSubject?.id === updatedSubj.id) setPlaylistPlayerSubject(updatedSubj);
@@ -1963,10 +2113,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
       tempChapters[sourceIndex] = updatedSourceChapter;
       tempChapters.splice(sourceIndex + 1, 0, newChapter);
 
-      updatedChapters = tempChapters.map((ch, idx) => ({
-        ...ch,
-        chapterNumber: idx + 1
-      }));
+      updatedChapters = tempChapters.map((ch, idx) => {
+        const newNum = idx + 1;
+        return {
+          ...ch,
+          chapterNumber: newNum,
+          title: formatChapterTitle(ch.title, newNum)
+        };
+      });
 
       toast.success("Chapter Split Successfully", `Created "${newChapter.title}" with ${lecturesToMove.length} lectures.`);
     } else {
@@ -2695,7 +2849,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                         {isExpanded ? <ChevronDown className="w-4 h-4 text-blue-500 shrink-0" /> : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />}
                         <div className="min-w-0">
                           <div className="text-xs font-extrabold text-slate-900 dark:text-zinc-100 truncate">
-                            {ch.title}
+                            {formatChapterTitle(ch.title, ch.chapterNumber)}
                           </div>
                           <div className="text-[10px] text-slate-500 dark:text-zinc-400 font-semibold">
                             {chCompleted}/{chTotal} lectures completed
@@ -2825,7 +2979,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     return (
       <div className="space-y-6 animate-in fade-in duration-300">
         {/* Header Breadcrumb & Control Bar */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 shadow-sm relative overflow-hidden">
+        <div className={`flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 shadow-sm relative min-w-0 max-w-full ${showSubjectHeaderMenu ? "z-40" : "z-10"}`}>
           <div className="flex-1 min-w-0">
             <button
               onClick={() => setSelectedSubject(null)}
@@ -2835,78 +2989,28 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               Back to All Subjects
             </button>
             
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1.5 flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-[0.15em] bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-                    {selectedSubject.category}
-                  </span>
-                  <span className="w-1 h-1 rounded-full bg-slate-300 dark:bg-zinc-700" />
-                  <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
-                    {selectedSubject.chapters.length} Folders
-                  </span>
-                </div>
-                <h1 className="text-2xl sm:text-3xl font-[900] text-slate-900 dark:text-zinc-50 tracking-tight leading-[1.1]">
-                  {selectedSubject.subjectName}
-                </h1>
-                {selectedSubject.description && (
-                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-2xl font-medium leading-relaxed">
-                    {selectedSubject.description}
-                  </p>
-                )}
+            <div className="space-y-1.5 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-[0.15em] bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                  {selectedSubject.category}
+                </span>
+                <span className="w-1 h-1 rounded-full bg-slate-300 dark:bg-zinc-700" />
+                <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
+                  {selectedSubject.chapters.length} Folders
+                </span>
               </div>
-
-              {/* Subject Header Three Dots Options Menu */}
-              <div className="relative shrink-0">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowSubjectHeaderMenu(!showSubjectHeaderMenu);
-                  }}
-                  className={`p-2.5 rounded-2xl border transition-all duration-200 cursor-pointer shadow-sm active:scale-95 ${
-                    showSubjectHeaderMenu
-                      ? "bg-slate-900 dark:bg-zinc-100 border-slate-900 dark:border-zinc-100 text-white dark:text-zinc-950"
-                      : "bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-750 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300"
-                  }`}
-                  title="More options"
-                >
-                  <MoreVertical className="w-4.5 h-4.5" />
-                </button>
-
-                {showSubjectHeaderMenu && (
-                    <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setShowSubjectHeaderMenu(false);
-                          handleOpenEditSubject(selectedSubject, e);
-                        }}
-                        className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
-                      >
-                        <Edit2 className="w-4 h-4 text-blue-500" />
-                        <span>Edit Subject</span>
-                      </button>
-
-                      <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
-
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setShowSubjectHeaderMenu(false);
-                          onRequestDeleteSubject(selectedSubject, e);
-                        }}
-                        className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        <span>Delete Subject</span>
-                      </button>
-                    </div>
-                )}
-              </div>
+              <h1 className="text-2xl sm:text-3xl font-[900] text-slate-900 dark:text-zinc-50 tracking-tight leading-[1.15] break-words">
+                {selectedSubject.subjectName}
+              </h1>
+              {selectedSubject.description && (
+                <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-2xl font-medium leading-relaxed break-words">
+                  {selectedSubject.description}
+                </p>
+              )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap shrink-0 self-start lg:self-center">
             {total > 0 && (
               <button
                 onClick={() => handlePlaySubjectPlaylist(selectedSubject, true)}
@@ -2929,6 +3033,63 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               <Plus className="w-3.5 h-3.5" />
               <span>Add Chapter</span>
             </button>
+
+            {/* Subject Header Three Dots Options Menu */}
+            <div className="relative shrink-0">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowSubjectHeaderMenu(!showSubjectHeaderMenu);
+                }}
+                className={`p-2.5 rounded-xl border transition-all duration-200 cursor-pointer shadow-xs active:scale-95 ${
+                  showSubjectHeaderMenu
+                    ? "bg-slate-900 dark:bg-zinc-100 border-slate-900 dark:border-zinc-100 text-white dark:text-zinc-950"
+                    : "bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-750 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300"
+                }`}
+                title="More options"
+              >
+                <MoreVertical className="w-4.5 h-4.5" />
+              </button>
+
+              {showSubjectHeaderMenu && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowSubjectHeaderMenu(false);
+                    }}
+                  />
+                  <div className="absolute right-0 top-full mt-1.5 z-50 w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowSubjectHeaderMenu(false);
+                        handleOpenEditSubject(selectedSubject, e);
+                      }}
+                      className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                    >
+                      <Edit2 className="w-4 h-4 text-blue-500" />
+                      <span>Edit Subject</span>
+                    </button>
+
+                    <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowSubjectHeaderMenu(false);
+                        onRequestDeleteSubject(selectedSubject, e);
+                      }}
+                      className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>Delete Subject</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
@@ -2974,9 +3135,9 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               </p>
               <button
                 onClick={() => setShowChapterModal(true)}
-                className="bg-blue-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow"
+                className="bg-blue-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow cursor-pointer"
               >
-                Create Chapter 1
+                Create Chapter {selectedSubject.chapters.length + 1}
               </button>
             </div>
           ) : (
@@ -2986,26 +3147,56 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               return (
                 <div 
                   key={ch.id} 
-                  className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4"
+                  className={`bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm space-y-4 relative min-w-0 max-w-full ${
+                    openChapterMenuId === ch.id ? "z-30" : "z-1"
+                  }`}
                 >
                   {/* Chapter Header Bar */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800/80 pb-5">
-                    <div className="flex-1 flex items-start justify-between gap-4">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-[1.25rem] bg-blue-600 text-white font-black text-sm flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0 border border-white/20">
-                          {ch.chapterNumber}
-                        </div>
-                        <div className="min-w-0">
-                          <h3 className="text-lg font-[900] text-slate-900 dark:text-zinc-50 tracking-tight leading-tight truncate">
-                            {ch.title}
-                          </h3>
-                          {ch.description && (
-                            <p className="text-[11px] font-medium text-slate-500 dark:text-zinc-400 mt-1 line-clamp-1 max-w-md">
-                              {ch.description}
-                            </p>
-                          )}
-                        </div>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800/80 pb-5 min-w-0">
+                    <div className="flex items-start gap-3 sm:gap-4 min-w-0 flex-1">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-[1.25rem] bg-blue-600 text-white font-black text-xs sm:text-sm flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0 border border-white/20">
+                        {ch.chapterNumber}
                       </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-base sm:text-lg font-[900] text-slate-900 dark:text-zinc-50 tracking-tight leading-tight break-words">
+                          {formatChapterTitle(ch.title, ch.chapterNumber)}
+                        </h3>
+                        {ch.description && (
+                          <p className="text-[11px] font-medium text-slate-500 dark:text-zinc-400 mt-1 line-clamp-2 break-words max-w-md">
+                            {ch.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Chapter Action Controls & Three Dots - Fixed inside container */}
+                    <div className="flex items-center gap-2 flex-wrap shrink-0 self-start md:self-center justify-start md:justify-end">
+                      <span className="text-xs font-bold text-slate-500 dark:text-zinc-400 mr-1">
+                        {chDone}/{chTotal} ({chPct}%)
+                      </span>
+
+                      {ch.lectures.length > 0 && (
+                        <button
+                          onClick={(e) => handlePlayChapterPlaylist(selectedSubject, ch, e)}
+                          className="bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400 font-bold text-xs px-3 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800/60 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                          title="Play this chapter"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Play Chapter</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          setTargetChapterId(ch.id);
+                          setShowLectureModal(true);
+                        }}
+                        className="bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-400 font-bold text-xs px-3 py-1.5 rounded-xl border border-blue-200/60 dark:border-blue-900/40 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        title="Add a new lecture to this chapter"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add Lecture</span>
+                      </button>
 
                       {/* Chapter Three Dots Options Menu */}
                       <div className="relative shrink-0">
@@ -3014,18 +3205,26 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                             e.stopPropagation();
                             setOpenChapterMenuId(openChapterMenuId === ch.id ? null : ch.id);
                           }}
-                          className={`p-2.5 rounded-2xl border transition-all duration-200 cursor-pointer shadow-sm active:scale-95 ${
+                          className={`p-2 rounded-xl border transition-all duration-200 cursor-pointer shadow-xs active:scale-95 ${
                             openChapterMenuId === ch.id
                               ? "bg-slate-900 dark:bg-zinc-100 border-slate-900 dark:border-zinc-100 text-white dark:text-zinc-950"
                               : "bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-750 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300"
                           }`}
-                          title="More options"
+                          title="More chapter options"
                         >
-                          <MoreVertical className="w-4.5 h-4.5" />
+                          <MoreVertical className="w-4 h-4" />
                         </button>
 
                         {openChapterMenuId === ch.id && (
-                          <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                          <>
+                            <div
+                              className="fixed inset-0 z-40"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenChapterMenuId(null);
+                              }}
+                            />
+                            <div className="absolute right-0 top-full mt-1.5 z-50 w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -3099,42 +3298,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                                   onRequestDeleteChapter(selectedSubject.id, ch.id, ch.title, e);
                                 }}
                                 className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
-                                >
+                              >
                                 <Trash2 className="w-4 h-4" />
                                 <span>Delete Chapter</span>
                               </button>
                             </div>
+                          </>
                         )}
                       </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-bold text-slate-500 dark:text-zinc-400 mr-1">
-                        {chDone}/{chTotal} ({chPct}%)
-                      </span>
-
-                      {ch.lectures.length > 0 && (
-                        <button
-                          onClick={(e) => handlePlayChapterPlaylist(selectedSubject, ch, e)}
-                          className="bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400 font-bold text-xs px-3 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800/60 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
-                          title="Play this chapter"
-                        >
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Play Chapter</span>
-                        </button>
-                      )}
-
-                      <button
-                        onClick={() => {
-                          setTargetChapterId(ch.id);
-                          setShowLectureModal(true);
-                        }}
-                        className="bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-400 font-bold text-xs px-3 py-1.5 rounded-xl border border-blue-200/60 dark:border-blue-900/40 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
-                        title="Add a new lecture to this chapter"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>Add Lecture</span>
-                      </button>
                     </div>
                   </div>
 
@@ -3650,7 +3821,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                   <input
                     type="text"
                     required={chapterModalTab === "manual"}
-                    placeholder="e.g. Chapter 2: Electrostatics & Potential"
+                    placeholder={`e.g. Chapter ${(selectedSubject?.chapters.length || 0) + 1}: Electrostatics & Potential`}
                     value={newChapterTitle}
                     onChange={(e) => setNewChapterTitle(e.target.value)}
                     className="w-full bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 text-xs px-3.5 py-2.5 rounded-xl text-slate-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -3949,31 +4120,79 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
         </div>
       </div>
 
-      {/* Dynamic Category Filters */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-2 overflow-x-auto w-full pb-1 scrollbar-none">
-          {categories.map((cat) => (
+      {/* Search Bar & Category Filters Card */}
+      <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4">
+        {/* Search Bar Row & Count Info */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search subjects, categories, chapters, or lectures..."
+              className="w-full pl-10 pr-9 py-2.5 rounded-2xl bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 text-xs font-semibold text-slate-900 dark:text-zinc-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition-all"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 p-1 rounded-full cursor-pointer"
+                title="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+            <span className="text-xs font-bold text-slate-500 dark:text-zinc-400">
+              Showing <span className="text-slate-900 dark:text-zinc-100 font-extrabold">{filteredSubjects.length}</span> of {subjects.length} Subjects
+            </span>
+
             <button
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer ${
-                activeCategory === cat
-                  ? "bg-blue-600 text-white shadow-sm"
-                  : "bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800"
-              }`}
+              onClick={() => setShowManageCategoriesModal(true)}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold transition bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700 flex items-center gap-1.5 cursor-pointer shrink-0 border border-slate-200 dark:border-zinc-700 shadow-xs"
+              title="Manage Categories (Add, Edit, Delete)"
             >
-              {cat}
+              <Palette className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+              <span>Manage Categories</span>
             </button>
-          ))}
-          
-          <button
-            onClick={() => setShowManageCategoriesModal(true)}
-            className="px-3 py-2 rounded-xl text-xs font-bold transition bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-750 flex items-center gap-1.5 cursor-pointer shrink-0 border border-slate-200 dark:border-zinc-700"
-            title="Manage Categories (Add, Edit, Delete)"
-          >
-            <Palette className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-            <span>Manage Categories</span>
-          </button>
+          </div>
+        </div>
+
+        {/* Responsive Category Filter Bar */}
+        <div className="pt-3 border-t border-slate-100 dark:border-zinc-800/80">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
+            {categories.map((cat) => {
+              const count = cat === "All Subjects"
+                ? subjects.length
+                : subjects.filter((s) => s.category === cat).length;
+              const isActive = activeCategory === cat;
+
+              return (
+                <button
+                  key={cat}
+                  onClick={() => setActiveCategory(cat)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 ${
+                    isActive
+                      ? "bg-blue-600 text-white shadow-md shadow-blue-500/20"
+                      : "bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-750 text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700"
+                  }`}
+                >
+                  <span>{cat}</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${
+                      isActive
+                        ? "bg-white/20 text-white"
+                        : "bg-slate-200/80 dark:bg-zinc-700 text-slate-600 dark:text-zinc-300"
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -3987,29 +4206,44 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
               <div 
                 key={subj.id}
                 onClick={() => setSelectedSubject(subj)}
-                className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm hover:shadow-md transition cursor-pointer flex flex-col justify-between group relative"
+                className={`bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm hover:shadow-md transition cursor-pointer flex flex-col justify-between group relative ${
+                  openSubjectCardMenuId === subj.id ? "z-30" : "z-1"
+                }`}
               >
                 <div>
                 <div className="flex items-start justify-between gap-3 mb-3">
-                  <span className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 text-[10px] font-extrabold uppercase border border-blue-100 dark:border-blue-900/40">
-                    {subj.category}
+                  <span className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase border truncate max-w-[180px] flex items-center gap-1 ${
+                    subj.category === "Imports" || subj.id === "subject-imported-folder"
+                      ? "bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 border-purple-100 dark:border-purple-900/40"
+                      : "bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border-blue-100 dark:border-blue-900/40"
+                  }`}>
+                    {(subj.category === "Imports" || subj.id === "subject-imported-folder") && <Sparkles className="w-3 h-3 text-purple-500" />}
+                    <span>{subj.category}</span>
                   </span>
 
-                  {/* Three dots menu for Subject card */}
-                  <div className="relative z-10">
+                  {/* Three dots menu for Subject card - Fixed positioning & touch target */}
+                  <div className="relative z-20 shrink-0">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setOpenSubjectCardMenuId(openSubjectCardMenuId === subj.id ? null : subj.id);
                       }}
-                      className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 transition cursor-pointer"
+                      className="w-8 h-8 flex items-center justify-center rounded-xl bg-slate-100/80 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200 transition cursor-pointer"
                       title="Subject options"
                     >
                       <MoreVertical className="w-4 h-4" />
                     </button>
 
                     {openSubjectCardMenuId === subj.id && (
-                      <div className="absolute right-0 top-full mt-1.5 z-30 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                      <>
+                        <div
+                          className="fixed inset-0 z-40"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenSubjectCardMenuId(null);
+                          }}
+                        />
+                        <div className="absolute right-0 top-full mt-1.5 z-50 w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -4048,6 +4282,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                             <span>Delete Subject</span>
                           </button>
                         </div>
+                      </>
                     )}
                   </div>
                 </div>

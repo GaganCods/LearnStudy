@@ -4,15 +4,19 @@ import { Calendar, Flame, Clock, Play, Award, BarChart2 } from "lucide-react";
 
 export function StudyStats() {
   const [logs, setLogs] = useState(() => Storage.getStudyLogs());
+  const [dailyGoalMins, setDailyGoalMins] = useState(() => Storage.getSettings().dailyGoalMinutes || 45);
 
   useEffect(() => {
     const handleUpdate = () => {
       setLogs(Storage.getStudyLogs());
+      setDailyGoalMins(Storage.getSettings().dailyGoalMinutes || 45);
     };
     window.addEventListener("studytube_logs_updated", handleUpdate);
+    window.addEventListener("studytube_settings_updated", handleUpdate);
     window.addEventListener("storage", handleUpdate);
     return () => {
       window.removeEventListener("studytube_logs_updated", handleUpdate);
+      window.removeEventListener("studytube_settings_updated", handleUpdate);
       window.removeEventListener("storage", handleUpdate);
     };
   }, []);
@@ -171,7 +175,7 @@ export function StudyStats() {
             )}
           </div>
           <div className="text-xs text-slate-500 dark:text-zinc-400 mt-2">
-            Target: 60 mins daily
+            Target: {dailyGoalMins} mins daily
           </div>
         </div>
 
@@ -284,7 +288,7 @@ export function StudyStats() {
                 {monthName}
               </span>
             </div>
-            <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">Days marked green when daily target of 60 minutes is achieved.</p>
+            <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">Days marked green when daily target of {dailyGoalMins} minutes (or target tasks) is achieved.</p>
           </div>
 
           <div className="mt-6 grid grid-cols-7 gap-1 text-center text-xs">

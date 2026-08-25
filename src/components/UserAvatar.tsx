@@ -95,14 +95,6 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
           title="Online"
         />
       )}
-
-      {/* Level Badge Overlay */}
-      {showLevelBadge && (
-        <div className="absolute -bottom-1 -right-1 z-20 px-1.5 py-0.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[9px] font-black rounded-full shadow-md border border-white dark:border-zinc-950 flex items-center gap-0.5 uppercase tracking-tighter">
-          <Sparkles className="w-2.5 h-2.5 fill-white" />
-          <span>Lvl {level}</span>
-        </div>
-      )}
     </div>
   );
 };

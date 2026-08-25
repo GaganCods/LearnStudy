@@ -157,78 +157,6 @@ export interface CourseFolder {
   chapters?: CourseChapter[];
 }
 
-export interface PDFHighlight {
-  id?: string;
-  page: number;
-  text: string;
-  color: string;
-  createdAt?: string;
-  type?: "highlight" | "underline" | "strikethrough";
-}
-
-export interface PDFBookmark {
-  id: string;
-  page: number;
-  title: string;
-  color?: string;
-  folder?: string;
-  pinned?: boolean;
-  createdAt?: string;
-}
-
-export interface PDFStickyNote {
-  id: string;
-  page: number;
-  text: string;
-  color?: string;
-  xPercent?: number; // 0 to 100 on page canvas
-  yPercent?: number; // 0 to 100 on page canvas
-  author?: string;
-  createdAt: string;
-  expanded?: boolean;
-}
-
-export interface PDFDrawingStroke {
-  id: string;
-  page: number;
-  tool: "pen" | "highlighter" | "pencil" | "marker" | "arrow" | "circle" | "rectangle" | "line";
-  color: string;
-  thickness: number;
-  opacity?: number;
-  points: Array<{ x: number; y: number }>;
-}
-
-export interface PDFQuestionFlag {
-  questionNumber: number;
-  page: number;
-  solved: boolean;
-  difficult: boolean;
-  note?: string;
-}
-
-export interface PDFDocument {
-  id: string;
-  title: string;
-  courseName?: string;
-  fileSize?: string;
-  pageCount?: number;
-  uploadedAt: string;
-  fileData?: string; // Data URL or storage link
-  fileDataUrl?: string; // Data URL or blob URL
-  highlights?: PDFHighlight[];
-  bookmarks?: PDFBookmark[];
-  stickyNotes?: PDFStickyNote[];
-  drawings?: PDFDrawingStroke[];
-  questionFlags?: PDFQuestionFlag[];
-  readingProgress?: {
-    currentPage: number;
-    totalPages: number;
-    lastReadAt: string;
-    timeStudiedSeconds: number;
-    completedPercentage: number;
-  };
-}
-
 export interface StudyFriend {
   id: string;
   name: string;
@@ -257,7 +185,6 @@ export type ActiveTab =
   | "flashcards" 
   | "planner" 
   | "calendar" 
-  | "pdf" 
   | "history" 
   | "favorites" 
   | "settings" 

@@ -8,8 +8,12 @@ import {
   Eye, EyeOff, Star, Calendar, Download, Upload, Info, RefreshCw, ArrowUpDown, Filter,
   ArrowUp, AlarmClock, Quote, MessageSquarePlus,
   Github, Linkedin, Twitter, Globe, Award, User, Folder, Brain, Users, Cloud, CloudOff,
-  Layers, LogOut, Crown, CheckCircle2, Menu, Loader2, MoreVertical, Keyboard, AlertTriangle
+  Layers, LogOut, Crown, CheckCircle2, Menu, Loader2, MoreVertical, Keyboard, AlertTriangle, Bell,
+  ExternalLink, RotateCw, Volume2, VolumeX, Link, Copy, Compass
 } from "lucide-react";
+import { 
+  updateMediaSessionMetadata 
+} from "./utils/mediaSession";
 import { motion, AnimatePresence } from "motion/react";
 import { Storage } from "./utils/storage";
 import { StudyStats } from "./components/StudyStats";
@@ -38,10 +42,19 @@ import { PersonalDashboard } from "./components/PersonalDashboard";
 import { CourseLibrary } from "./components/CourseLibrary";
 import { FlashcardsManager } from "./components/FlashcardsManager";
 import { StudyPlanner } from "./components/StudyPlanner";
-import { PDFStudyReader } from "./components/PDFStudyReader";
 import { StudyCalendar } from "./components/StudyCalendar";
 import { FeedbackModal } from "./components/feedback/FeedbackModal";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { UserAvatar } from "./components/UserAvatar";
+import { PageNavigationDirectory } from "./components/PageNavigationDirectory";
+import { 
+  APP_PAGES, 
+  searchPages, 
+  copyPageLink, 
+  getPageShareableUrl, 
+  parseInitialUrlState, 
+  syncStateToUrl 
+} from "./utils/pageRegistry";
 
 declare global {
   interface Window {
@@ -308,16 +321,24 @@ export default function App() {
     }
   }, []);
 
-  // Poll for key presence so UI stays reactive
+  // Sync key presence and playlists/videos on storage events so UI stays reactive without continuous interval polling
   useEffect(() => {
-    const checkInterval = setInterval(() => {
-      const current = hasGeminiKey();
-      if (current !== hasGeminiKeyInState) {
-        setHasGeminiKeyInState(current);
-      }
-    }, 1000);
-    return () => clearInterval(checkInterval);
-  }, [hasGeminiKeyInState]);
+    const handleStorage = () => {
+      setHasGeminiKeyInState(hasGeminiKey());
+      setPlaylists(Storage.getPlaylists());
+      setSingleVideos(Storage.getSingleVideos());
+    };
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("studytube_playlists_updated", handleStorage);
+    window.addEventListener("studytube_single_videos_updated", handleStorage);
+    window.addEventListener("studytube_custom_subjects_updated", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("studytube_playlists_updated", handleStorage);
+      window.removeEventListener("studytube_single_videos_updated", handleStorage);
+      window.removeEventListener("studytube_custom_subjects_updated", handleStorage);
+    };
+  }, []);
 
   const [isNamePromptOpen, setIsNamePromptOpen] = useState(false);
   const [tempName, setTempName] = useState("");
@@ -482,6 +503,8 @@ export default function App() {
   const activeVideoIdRef = useRef<string>("");
   const activeSessionRef = useRef<any>(null);
   const playlistsRef = useRef<any[]>([]);
+  const currentLoadedVideoIdRef = useRef<string | null>(null);
+  const playerCreatingRef = useRef<boolean>(false);
 
   useEffect(() => {
     activeVideoIdRef.current = activeVideoId;
@@ -587,52 +610,133 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleGlobalShortcuts);
   }, [pomoState.isPaused, startPomo, pausePomo, skipPomo, resetPomo]);
 
-  // Load state on mount
+  // Load state and URL parameters on mount
   useEffect(() => {
-    setPlaylists(Storage.getPlaylists());
-    setSingleVideos(Storage.getSingleVideos());
+    const loadedPlaylists = Storage.getPlaylists();
+    const loadedSingleVideos = Storage.getSingleVideos();
+    setPlaylists(loadedPlaylists);
+    setSingleVideos(loadedSingleVideos);
     setFavorites(Storage.getFavorites());
 
-    // Auto-load most recent watch session as active if available
-    const allPlaylists = Storage.getPlaylists();
-    const allSingles = Storage.getSingleVideos();
-    
-    let mostRecent: any = null;
-    let recentType: "playlist" | "video" = "video";
+    // Parse Initial URL State (direct deep linking for pages, playlists, videos, timestamps, search)
+    const initialUrl = parseInitialUrlState();
+    let hasLoadedFromUrl = false;
 
-    allPlaylists.forEach(p => {
-      if (!mostRecent || new Date(p.lastWatchedAt) > new Date(mostRecent.lastWatchedAt)) {
-        mostRecent = p;
-        recentType = "playlist";
-      }
-    });
+    if (initialUrl.tab) {
+      setActiveTab(initialUrl.tab);
+      hasLoadedFromUrl = true;
+    }
 
-    allSingles.forEach(v => {
-      if (!mostRecent || new Date(v.lastWatchedAt) > new Date(mostRecent.lastWatchedAt)) {
-        mostRecent = v;
-        recentType = "video";
-      }
-    });
+    if (initialUrl.searchQuery) {
+      setSearchQuery(initialUrl.searchQuery);
+      setActiveTab("search");
+      hasLoadedFromUrl = true;
+    }
 
-    if (mostRecent) {
-      setActiveSession({ id: mostRecent.id, type: recentType });
-      if ((recentType as string) === "playlist") {
-        // Find first unfinished video or last watched video
-        const playlist = mostRecent as PlaylistInfo;
-        const lastWatchedVideo = playlist.videos.find(v => v.progress > 0 && v.progress < 95) || playlist.videos[0];
-        if (lastWatchedVideo) {
-          setActiveVideoId(lastWatchedVideo.id);
-          setActiveVideoTitle(lastWatchedVideo.title);
-          setActiveVideoChannel(lastWatchedVideo.channelName);
+    if (initialUrl.timestamp !== undefined && !isNaN(initialUrl.timestamp)) {
+      setPendingSeekSeconds(initialUrl.timestamp);
+    }
+
+    if (initialUrl.playlistId) {
+      const targetPl = loadedPlaylists.find(p => p.id === initialUrl.playlistId);
+      if (targetPl) {
+        setActiveSession({ id: targetPl.id, type: "playlist" });
+        const targetVid = initialUrl.videoId 
+          ? targetPl.videos.find(v => v.id === initialUrl.videoId) || targetPl.videos[0]
+          : targetPl.videos[0];
+        if (targetVid) {
+          setActiveVideoId(targetVid.id);
+          setActiveVideoTitle(targetVid.title);
+          setActiveVideoChannel(targetVid.channelName);
         }
+        setActiveTab("study");
+        hasLoadedFromUrl = true;
+      }
+    } else if (initialUrl.videoId) {
+      const targetVid = loadedSingleVideos.find(v => v.id === initialUrl.videoId);
+      if (targetVid) {
+        setActiveSession({ id: targetVid.id, type: "video" });
+        setActiveVideoId(targetVid.id);
+        setActiveVideoTitle(targetVid.title);
+        setActiveVideoChannel(targetVid.channelName);
       } else {
-        const video = mostRecent as SingleVideoInfo;
-        setActiveVideoId(video.id);
-        setActiveVideoTitle(video.title);
-        setActiveVideoChannel(video.channelName);
+        // Direct YouTube video ID from URL
+        setActiveVideoId(initialUrl.videoId);
+        setActiveSession({ id: initialUrl.videoId, type: "video" });
+      }
+      setActiveTab("study");
+      hasLoadedFromUrl = true;
+    }
+
+    // If no deep link target was provided in URL, auto-load most recent watch session as active if available
+    if (!hasLoadedFromUrl) {
+      let mostRecent: any = null;
+      let recentType: "playlist" | "video" = "video";
+
+      loadedPlaylists.forEach(p => {
+        if (!mostRecent || new Date(p.lastWatchedAt) > new Date(mostRecent.lastWatchedAt)) {
+          mostRecent = p;
+          recentType = "playlist";
+        }
+      });
+
+      loadedSingleVideos.forEach(v => {
+        if (!mostRecent || new Date(v.lastWatchedAt) > new Date(mostRecent.lastWatchedAt)) {
+          mostRecent = v;
+          recentType = "video";
+        }
+      });
+
+      if (mostRecent) {
+        setActiveSession({ id: mostRecent.id, type: recentType });
+        if ((recentType as string) === "playlist") {
+          const playlist = mostRecent as PlaylistInfo;
+          const lastWatchedVideo = playlist.videos.find(v => v.progress > 0 && v.progress < 95) || playlist.videos[0];
+          if (lastWatchedVideo) {
+            setActiveVideoId(lastWatchedVideo.id);
+            setActiveVideoTitle(lastWatchedVideo.title);
+            setActiveVideoChannel(lastWatchedVideo.channelName);
+          }
+        } else {
+          const video = mostRecent as SingleVideoInfo;
+          setActiveVideoId(video.id);
+          setActiveVideoTitle(video.title);
+          setActiveVideoChannel(video.channelName);
+        }
       }
     }
   }, []);
+
+  // Listen for browser Back and Forward navigation events
+  useEffect(() => {
+    const handlePopState = () => {
+      const state = parseInitialUrlState();
+      if (state.tab) {
+        setActiveTab(state.tab);
+      }
+      if (state.searchQuery !== undefined) {
+        setSearchQuery(state.searchQuery);
+      }
+      if (state.videoId) {
+        setActiveVideoId(state.videoId);
+      }
+      if (state.timestamp !== undefined) {
+        setPendingSeekSeconds(state.timestamp);
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  // Sync state changes to browser address bar URL
+  useEffect(() => {
+    syncStateToUrl(activeTab, {
+      videoId: activeTab === "study" ? activeVideoId : undefined,
+      playlistId: activeTab === "study" && activeSession?.type === "playlist" ? activeSession.id : undefined,
+      searchQuery: searchQuery || undefined,
+      replace: true
+    });
+  }, [activeTab, activeVideoId, activeSession, searchQuery]);
 
   // Sync Theme
   useEffect(() => {
@@ -718,6 +822,14 @@ export default function App() {
         setSingleVideos(Storage.getSingleVideos());
       }
 
+      // Auto-update or add lecture in Course Library Import folder
+      Storage.addVideoToImportFolder({
+        id: activeVideoId,
+        title: mergedTitle,
+        channelName: mergedChannel,
+        duration: mergedDuration
+      });
+
       setActiveVideoTitle(mergedTitle);
       setActiveVideoChannel(mergedChannel);
 
@@ -737,27 +849,87 @@ export default function App() {
     });
   }, [activeVideoId, activeSession]);
 
-  // YT Iframe script loader
+  // 1. YouTube Iframe API Script Loader (once)
   useEffect(() => {
+    if (typeof window === "undefined") return;
     if (!window.YT) {
       const tag = document.createElement("script");
       tag.src = "https://www.youtube.com/iframe_api";
       const firstScriptTag = document.getElementsByTagName("script")[0];
-      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
+      firstScriptTag?.parentNode?.insertBefore(tag, firstScriptTag);
     }
   }, []);
 
-  // Re-build/re-initialize player on video switch or returning to study tab
+  // 2. High-Performance, Lag-Free YouTube Player Engine
   useEffect(() => {
-    if (activeTab !== "study") return;
-    if (!activeVideoId && activeSession?.type !== "playlist") return;
+    // Only manage player when user is on the study tab
+    if (activeTab !== "study") {
+      // Switched away from study tab: cleanly clean up player reference to prevent stale unmounted iframe
+      if (playerRef.current) {
+        try {
+          if (typeof playerRef.current.getCurrentTime === "function" && typeof playerRef.current.getDuration === "function") {
+            const curTime = playerRef.current.getCurrentTime();
+            const dur = playerRef.current.getDuration();
+            if (curTime > 0 && dur > 0) {
+              handleProgressUpdate(curTime, dur);
+            }
+          }
+          playerRef.current.destroy?.();
+        } catch (e) {}
+        playerRef.current = null;
+      }
+      setPlayerReady(false);
+      setIsPlaying(false);
+      playerCreatingRef.current = false;
+      currentLoadedVideoIdRef.current = null;
+      return;
+    }
 
-    let isCancelled = false;
-    let player: any = null;
-    let progressInterval: any = null;
-    setPlayerReady(false);
+    // If on study tab but activeVideoId is not yet loaded, auto-restore most recent session
+    if (!activeVideoId) {
+      const allPlaylists = Storage.getPlaylists();
+      const allSingles = Storage.getSingleVideos();
+      let mostRecent: any = null;
+      let recentType: "playlist" | "video" = "video";
 
-    // Fetch video's start timestamp if there is progress
+      allPlaylists.forEach(p => {
+        if (!mostRecent || new Date(p.lastWatchedAt) > new Date(mostRecent.lastWatchedAt)) {
+          mostRecent = p;
+          recentType = "playlist";
+        }
+      });
+
+      allSingles.forEach(v => {
+        if (!mostRecent || new Date(v.lastWatchedAt) > new Date(mostRecent.lastWatchedAt)) {
+          mostRecent = v;
+          recentType = "video";
+        }
+      });
+
+      if (mostRecent) {
+        setActiveSession({ id: mostRecent.id, type: recentType });
+        if ((recentType as string) === "playlist") {
+          const playlist = mostRecent as PlaylistInfo;
+          const lastWatchedVideo = playlist.videos.find(v => v.progress > 0 && v.progress < 95) || playlist.videos[0];
+          if (lastWatchedVideo) {
+            setActiveVideoId(lastWatchedVideo.id);
+            setActiveVideoTitle(lastWatchedVideo.title);
+            setActiveVideoChannel(lastWatchedVideo.channelName);
+          }
+        } else {
+          const video = mostRecent as SingleVideoInfo;
+          setActiveVideoId(video.id);
+          setActiveVideoTitle(video.title);
+          setActiveVideoChannel(video.channelName);
+        }
+      }
+      return;
+    }
+
+    let isEffectCancelled = false;
+    let setupTimeout: any = null;
+
+    // Determine initial start timestamp if resuming
     let startSeconds = 0;
     if (pendingSeekSeconds !== null) {
       startSeconds = pendingSeekSeconds;
@@ -766,47 +938,77 @@ export default function App() {
       if (activeSession.type === "playlist") {
         const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
         const video = currentPlaylist?.videos.find(v => v.id === activeVideoId);
-        if (video && video.lastWatchedPosition) {
+        if (video?.lastWatchedPosition && !video.completed) {
           startSeconds = Math.floor(video.lastWatchedPosition);
         }
       } else {
         const video = Storage.getSingleVideos().find(v => v.id === activeSession.id);
-        if (video && video.lastWatchedPosition) {
+        if (video?.lastWatchedPosition && !video.completed) {
           startSeconds = Math.floor(video.lastWatchedPosition);
         }
       }
     }
 
-    const initPlayer = () => {
-      if (isCancelled) return;
+    // Check if existing player instance is alive and its iframe is currently in DOM
+    const existingIframe = playerRef.current?.getIframe?.();
+    const isPlayerAttached = existingIframe && document.body.contains(existingIframe);
+
+    // A. If player instance is attached in DOM and ready, load video directly
+    if (isPlayerAttached && typeof playerRef.current.loadVideoById === "function") {
+      if (currentLoadedVideoIdRef.current !== activeVideoId) {
+        currentLoadedVideoIdRef.current = activeVideoId;
+        try {
+          if (settings.autoPlay) {
+            playerRef.current.loadVideoById({
+              videoId: activeVideoId,
+              startSeconds: startSeconds || 0
+            });
+          } else {
+            playerRef.current.cueVideoById({
+              videoId: activeVideoId,
+              startSeconds: startSeconds || 0
+            });
+          }
+          if (settings.playbackSpeed && typeof playerRef.current.setPlaybackRate === "function") {
+            playerRef.current.setPlaybackRate(settings.playbackSpeed);
+          }
+        } catch (e) {
+          console.warn("loadVideoById error:", e);
+        }
+      }
+      return;
+    }
+
+    // B. If player is not attached in DOM, clean up old reference so fresh player mounts
+    if (playerRef.current) {
+      try { playerRef.current.destroy?.(); } catch (e) {}
+      playerRef.current = null;
+    }
+    playerCreatingRef.current = false;
+    currentLoadedVideoIdRef.current = null;
+
+    // C. Initialize fresh YouTube Player into the newly mounted DOM container
+    const setupPlayer = () => {
+      if (isEffectCancelled || activeTab !== "study") return;
       if (!window.YT || !window.YT.Player) {
-        setTimeout(initPlayer, 200);
+        setupTimeout = setTimeout(setupPlayer, 80);
         return;
       }
 
-      // If previous element doesn't exist yet, retry (React DOM mounting delay)
-      const placeholder = document.getElementById("yt-player-container");
-      if (!placeholder) {
-        setTimeout(initPlayer, 50);
+      const frameElem = document.getElementById("yt-player-frame");
+      if (!frameElem) {
+        setupTimeout = setTimeout(setupPlayer, 80);
         return;
       }
 
-      placeholder.innerHTML = '<div id="yt-player-frame"></div>';
-
-      const isPlaylist = activeSession?.type === "playlist";
-      const isNativeYouTubePlaylist = isPlaylist && activeSession?.id && (
-        activeSession.id.startsWith("PL") || 
-        activeSession.id.startsWith("RD") || 
-        activeSession.id.startsWith("FL") || 
-        activeSession.id.startsWith("UU") || 
-        activeSession.id.startsWith("OLAK")
-      );
+      if (playerCreatingRef.current) return;
+      playerCreatingRef.current = true;
 
       try {
-        player = new window.YT.Player("yt-player-frame", {
+        const newPlayer = new window.YT.Player("yt-player-frame", {
           width: "100%",
           height: "100%",
-          videoId: activeVideoId || undefined,
+          videoId: activeVideoId,
           playerVars: {
             autoplay: settings.autoPlay ? 1 : 0,
             controls: 1,
@@ -814,25 +1016,29 @@ export default function App() {
             showinfo: 0,
             modestbranding: 1,
             playsinline: 1,
-            start: startSeconds,
-            ...(isNativeYouTubePlaylist ? { listType: "playlist", list: activeSession.id } : {})
+            start: startSeconds || 0,
+            origin: window.location.origin
           },
           events: {
             onReady: (event: any) => {
-              if (isCancelled) {
+              playerCreatingRef.current = false;
+              if (isEffectCancelled || activeTab !== "study") {
                 try { event.target.destroy(); } catch (e) {}
                 return;
               }
               playerRef.current = event.target;
+              currentLoadedVideoIdRef.current = activeVideoId;
               setPlayerReady(true);
               setPlayerDuration(event.target.getDuration() || 0);
-              
-              if (event.target && typeof event.target.setPlaybackRate === "function") {
+
+              if (startSeconds > 0 && typeof event.target.seekTo === "function") {
+                try { event.target.seekTo(startSeconds, true); } catch (e) {}
+              }
+
+              if (settings.playbackSpeed && typeof event.target.setPlaybackRate === "function") {
                 try {
                   event.target.setPlaybackRate(settings.playbackSpeed);
-                } catch (e) {
-                  console.warn("Could not set playback speed", e);
-                }
+                } catch (e) {}
               }
 
               if (settings.autoPlay && typeof event.target.playVideo === "function") {
@@ -840,213 +1046,73 @@ export default function App() {
                   event.target.playVideo();
                 } catch (e) {}
               }
-
-              // Extract playlist metadata immediately if available
-              if (activeSession?.type === "playlist") {
-                try {
-                  const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
-                  if (currentPlaylist && currentPlaylist.videos.length === 0) {
-                    if (typeof event.target.getPlaylist === "function") {
-                      let attempts = 0;
-                      const intervalId = setInterval(() => {
-                        if (isCancelled) {
-                          clearInterval(intervalId);
-                          return;
-                        }
-                        try {
-                          attempts++;
-                          const videoIds = event.target.getPlaylist() || [];
-                          const updatedPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
-                          
-                          if (videoIds.length > 0 && updatedPlaylist && updatedPlaylist.videos.length === 0) {
-                            clearInterval(intervalId);
-                            updatedPlaylist.videos = videoIds.map((vid: string, index: number) => ({
-                              id: vid,
-                              title: `Video ${index + 1}`,
-                              channelName: updatedPlaylist.channelName || "Unknown Channel",
-                              duration: "10:00",
-                              thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
-                              progress: 0,
-                              lastWatchedPosition: 0,
-                              completed: false,
-                              lectureNumber: index + 1
-                            }));
-                            updatedPlaylist.totalVideos = videoIds.length;
-                            Storage.savePlaylist(updatedPlaylist);
-                            setPlaylists(Storage.getPlaylists());
-
-                            // Also kickstart activeVideoId if it is empty
-                            if (!activeVideoIdRef.current) {
-                              setActiveVideoId(videoIds[0]);
-                              setActiveVideoTitle(`Video 1`);
-                            }
-                          } else if (attempts >= 20 || (updatedPlaylist && updatedPlaylist.videos.length > 0)) {
-                            clearInterval(intervalId);
-                          }
-                        } catch (e) {
-                          if (attempts >= 20) clearInterval(intervalId);
-                        }
-                      }, 500);
-                    }
-                  }
-                } catch (err) {}
-              }
-
-              // Record session progress every 5s
-              progressInterval = setInterval(() => {
-                if (isCancelled) return;
-                if (playerRef.current && typeof playerRef.current.getCurrentTime === "function" && typeof playerRef.current.getDuration === "function") {
-                  try {
-                    const currentTime = playerRef.current.getCurrentTime();
-                    const duration = playerRef.current.getDuration();
-                    const isLive = duration <= 0 || !isFinite(duration) || isNaN(duration);
-                    if (duration > 0 || isLive) {
-                      handleProgressUpdate(currentTime, duration);
-                    }
-                  } catch (e) {
-                    console.error("Failed to read playback times", e);
-                  }
-                }
-              }, 5000);
             },
             onStateChange: (event: any) => {
-              if (isCancelled) return;
+              if (isEffectCancelled) return;
 
-              // Extract metadata if it's a playlist
-              if (activeSession?.type === "playlist") {
-                try {
-                  const currentPlaylist = Storage.getPlaylists().find(p => p.id === activeSession.id);
-                  if (currentPlaylist) {
-                    let modified = false;
-                    if (typeof event.target.getPlaylist === "function") {
-                      const videoIds = event.target.getPlaylist() || [];
-                      if (videoIds.length > 0 && currentPlaylist.videos.length === 0) {
-                        currentPlaylist.videos = videoIds.map((vid: string, index: number) => ({
-                          id: vid,
-                          title: `Video ${index + 1}`,
-                          channelName: currentPlaylist.channelName || "Unknown Channel",
-                          duration: "10:00", // Default placeholder
-                          thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
-                          progress: 0,
-                          lastWatchedPosition: 0,
-                          completed: false,
-                          lectureNumber: index + 1
-                        }));
-                        currentPlaylist.totalVideos = videoIds.length;
-                        modified = true;
-                      }
-                    }
-
-                    if (typeof event.target.getVideoData === "function") {
-                      const videoData = event.target.getVideoData();
-                      if (videoData && videoData.video_id) {
-                        const vId = videoData.video_id;
-                        const vTitle = videoData.title;
-                        const vAuthor = videoData.author;
-                        if (currentPlaylist.title === "YouTube Playlist" && vTitle) {
-                           currentPlaylist.title = `Playlist: ${vTitle} & more`;
-                           modified = true;
-                        }
-                        if (currentPlaylist.channelName === "Unknown Channel" && vAuthor) {
-                           currentPlaylist.channelName = vAuthor;
-                           modified = true;
-                        }
-                        if (!currentPlaylist.thumbnail) {
-                           currentPlaylist.thumbnail = `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
-                           modified = true;
-                        }
-                        
-                        const videoIndex = currentPlaylist.videos.findIndex(v => v.id === vId);
-                        if (videoIndex >= 0) {
-                          if (vTitle && currentPlaylist.videos[videoIndex].title !== vTitle) {
-                            currentPlaylist.videos[videoIndex].title = vTitle;
-                            modified = true;
-                          }
-                          if (vAuthor && currentPlaylist.videos[videoIndex].channelName !== vAuthor) {
-                            currentPlaylist.videos[videoIndex].channelName = vAuthor;
-                            modified = true;
-                          }
-                        }
-
-                        // Use activeVideoIdRef to prevent stale closure comparison
-                        if (activeVideoIdRef.current !== vId) {
-                          setActiveVideoId(vId);
-                          setActiveVideoTitle(vTitle || currentPlaylist.videos[videoIndex]?.title || "YouTube Video");
-                          setActiveVideoChannel(vAuthor || currentPlaylist.videos[videoIndex]?.channelName || "Unknown Channel");
-                        }
-                      }
-                    }
-
-                    if (modified) {
-                      Storage.savePlaylist(currentPlaylist);
-                      setPlaylists(Storage.getPlaylists());
-                    }
-                  }
-                } catch (err) {
-                  console.warn("Failed to extract playlist metadata", err);
-                }
-              } else if (activeSession?.type === "video") {
-                 try {
-                   if (typeof event.target.getVideoData === "function") {
-                      const videoData = event.target.getVideoData();
-                      if (videoData && (videoData.title || videoData.author)) {
-                         const vTitle = videoData.title;
-                         const vAuthor = videoData.author;
-                         let modified = false;
-                         const currentVideo = Storage.getSingleVideos().find(v => v.id === activeSession.id);
-                         if (currentVideo) {
-                            if (vTitle && currentVideo.title === "YouTube Video" && currentVideo.title !== vTitle) {
-                               currentVideo.title = vTitle;
-                               setActiveVideoTitle(vTitle);
-                               modified = true;
-                            }
-                            if (vAuthor && currentVideo.channelName === "Unknown Channel" && currentVideo.channelName !== vAuthor) {
-                               currentVideo.channelName = vAuthor;
-                               setActiveVideoChannel(vAuthor);
-                               modified = true;
-                            }
-                            if (modified) {
-                               Storage.saveSingleVideo(currentVideo);
-                               setSingleVideos(Storage.getSingleVideos());
-                            }
-                         }
-                      }
-                   }
-                 } catch (err) {}
-              }
-
-              if (event.data === 1) { // Playing
+              // 1: Playing, 2: Paused, 0: Ended
+              if (event.data === 1) {
                 setIsPlaying(true);
-              } else if (event.data === 2) { // Paused
+                try {
+                  const vData = event.target.getVideoData?.();
+                  if (vData && vData.video_id && vData.video_id !== currentLoadedVideoIdRef.current) {
+                    currentLoadedVideoIdRef.current = vData.video_id;
+                    activeVideoIdRef.current = vData.video_id;
+                    setActiveVideoId(vData.video_id);
+                    if (vData.title) setActiveVideoTitle(vData.title);
+                    if (vData.author) setActiveVideoChannel(vData.author);
+                  }
+                } catch (err) {}
+              } else if (event.data === 2) {
                 setIsPlaying(false);
-              } else if (event.data === 0) { // Video ended
+              } else if (event.data === 0) {
                 setIsPlaying(false);
                 handleVideoEnded();
               }
+            },
+            onError: (err: any) => {
+              playerCreatingRef.current = false;
+              console.warn("YouTube player error event:", err);
             }
           }
         });
       } catch (err) {
-        console.error("YT Player construction failed:", err);
+        playerCreatingRef.current = false;
+        console.error("YT.Player construction failed:", err);
       }
     };
 
-    initPlayer();
+    setupPlayer();
 
     return () => {
-      isCancelled = true;
-      if (progressInterval) clearInterval(progressInterval);
-      try {
-        if (player && typeof player.destroy === "function") {
-          player.destroy();
-        }
-      } catch (e) {
-        console.warn("Player cleanup warning:", e);
-      }
-      playerRef.current = null;
+      isEffectCancelled = true;
+      if (setupTimeout) clearTimeout(setupTimeout);
     };
-  }, [activeSession, activeTab]);
+  }, [activeVideoId, activeTab, settings.autoPlay, settings.playbackSpeed]);
 
+  // MediaSession Sync Effect
+  useEffect(() => {
+    if (!activeVideoId) return;
+
+    updateMediaSessionMetadata({
+      title: activeVideoTitle || "YouTube Lecture",
+      artist: activeVideoChannel || "StudyTube Creator",
+      album: currentPlaylist?.title || "Lecture Series",
+      artworkUrl: `https://i.ytimg.com/vi/${activeVideoId}/hqdefault.jpg`,
+      isPlaying,
+      onPlay: () => {
+        try { playerRef.current?.playVideo(); } catch (e) {}
+      },
+      onPause: () => {
+        try { playerRef.current?.pauseVideo(); } catch (e) {}
+      },
+      onNext: handleNextVideo,
+      onPrev: handlePrevVideo,
+      onSeek: (seconds) => {
+        try { playerRef.current?.seekTo(seconds, true); } catch (e) {}
+      }
+    });
+  }, [activeVideoId, activeVideoTitle, activeVideoChannel, currentPlaylist, isPlaying]);
 
   // Seek to pending timestamp if player is already loaded and ready
   useEffect(() => {
@@ -1065,71 +1131,47 @@ export default function App() {
     }
   }, [pendingSeekSeconds, playerReady]);
 
-  // Poll player states for custom controls
+  // Poll player states for custom controls (only active while playing)
   useEffect(() => {
-    let interval: any;
-    if (playerReady && playerRef.current) {
-      interval = setInterval(() => {
-        try {
-          if (playerRef.current && typeof playerRef.current.getCurrentTime === "function") {
-            setPlayerTime(playerRef.current.getCurrentTime() || 0);
-            const dur = playerRef.current.getDuration();
-            if (dur && dur > 0) {
-              setPlayerDuration(dur);
-            }
-            if (typeof playerRef.current.isMuted === "function") {
-              setIsMuted(playerRef.current.isMuted());
-            }
-            if (typeof playerRef.current.getPlayerState === "function") {
-              const state = playerRef.current.getPlayerState();
-              setIsPlaying(state === 1);
-            }
-          }
-        } catch (err) {
-          console.warn("Polling active states failed", err);
-        }
-      }, 500);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [playerReady, activeVideoId]);
+    if (!playerReady || !isPlaying || !playerRef.current) return;
 
-  // Handle explicit video changes within the same session
-  useEffect(() => {
-    if (playerReady && playerRef.current && activeVideoId) {
+    const interval = setInterval(() => {
       try {
-        if (typeof playerRef.current.getVideoData === "function") {
-          const currentVideoData = playerRef.current.getVideoData();
-          if (!currentVideoData || currentVideoData.video_id !== activeVideoId) {
-            const isNativeYTPlaylist = activeSession?.type === "playlist" && 
-              activeSession.id && 
-              (activeSession.id.startsWith("PL") || activeSession.id.startsWith("RD") || activeSession.id.startsWith("FL") || activeSession.id.startsWith("UU") || activeSession.id.startsWith("OLAK"));
-
-            if (isNativeYTPlaylist && typeof playerRef.current.getPlaylist === "function" && typeof playerRef.current.playVideoAt === "function") {
-              const playlist = playerRef.current.getPlaylist();
-              if (playlist && Array.isArray(playlist) && playlist.length > 0) {
-                const idx = playlist.indexOf(activeVideoId);
-                if (idx >= 0) {
-                  playerRef.current.playVideoAt(idx);
-                } else if (typeof playerRef.current.loadVideoById === "function") {
-                  playerRef.current.loadVideoById(activeVideoId);
-                }
-              } else if (typeof playerRef.current.loadVideoById === "function") {
-                playerRef.current.loadVideoById(activeVideoId);
-              }
-            } else if (typeof playerRef.current.loadVideoById === "function") {
-              playerRef.current.loadVideoById(activeVideoId);
-            }
+        if (playerRef.current && typeof playerRef.current.getCurrentTime === "function") {
+          const time = playerRef.current.getCurrentTime() || 0;
+          setPlayerTime(time);
+          const dur = playerRef.current.getDuration?.();
+          if (dur && dur > 0) {
+            setPlayerDuration(dur);
           }
-        } else if (typeof playerRef.current.loadVideoById === "function") {
-          playerRef.current.loadVideoById(activeVideoId);
+          if (typeof playerRef.current.isMuted === "function") {
+            setIsMuted(playerRef.current.isMuted());
+          }
         }
-      } catch (e) {
-        console.warn("Failed to sync video id with player", e);
-      }
-    }
-  }, [activeVideoId, playerReady, activeSession]);
+      } catch (err) {}
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [playerReady, isPlaying]);
+
+  // Record session progress every 5s while video is actively playing
+  useEffect(() => {
+    if (!playerReady || !isPlaying || !activeVideoId) return;
+
+    const interval = setInterval(() => {
+      try {
+        if (playerRef.current && typeof playerRef.current.getCurrentTime === "function" && typeof playerRef.current.getDuration === "function") {
+          const currentTime = playerRef.current.getCurrentTime();
+          const duration = playerRef.current.getDuration();
+          if (duration > 0 && currentTime > 0) {
+            handleProgressUpdate(currentTime, duration);
+          }
+        }
+      } catch (e) {}
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [playerReady, isPlaying, activeVideoId]);
 
   const formatSecondsToDuration = (totalSeconds: number): string => {
     if (isNaN(totalSeconds) || totalSeconds <= 0) return "0:00";
@@ -1232,6 +1274,17 @@ export default function App() {
         }
       }
     }
+
+    // 3. Bidirectional Sync: update Custom Subject Folders in Course Library
+    if (activeVideoId) {
+      Storage.syncVideoProgressToSubjects(
+        activeVideoId,
+        percent,
+        isCompleted,
+        currentTime,
+        formattedDur
+      );
+    }
   };
 
   // Skip / Autoplay next video on completion
@@ -1258,6 +1311,10 @@ export default function App() {
         Storage.saveSingleVideo(video);
         setSingleVideos(singlesFromDb);
       }
+    }
+
+    if (activeVideoId) {
+      Storage.syncVideoProgressToSubjects(activeVideoId, 100, true);
     }
 
     if (settings.autoPlay && activeSession?.type !== "playlist") {
@@ -1358,34 +1415,6 @@ export default function App() {
     setActiveVideoChannel(channelName);
   };
 
-  // Background Prefetching of upcoming lectures to ensure instant transitions
-  useEffect(() => {
-    if (!activeVideoId || activeSession?.type !== "playlist") return;
-    
-    const currentPlaylist = playlists.find(p => p.id === activeSession.id);
-    if (!currentPlaylist) return;
-
-    const currentIndex = currentPlaylist.videos.findIndex(v => v.id === activeVideoId);
-    if (currentIndex === -1) return;
-
-    // Prefetch next 3 lectures (e.g., current index + 1, + 2, + 3)
-    const videosToPrefetch = currentPlaylist.videos.slice(currentIndex + 1, currentIndex + 4);
-    
-    videosToPrefetch.forEach(video => {
-      // 1. Prefetch images to browser memory
-      if (video.thumbnail) {
-        const img = new Image();
-        img.src = video.thumbnail;
-      }
-
-      // 2. Warm up browser cache by calling the metadata endpoint silently
-      if (video.id) {
-        fetch(`/api/video-metadata?id=${video.id}`).catch(() => {});
-      }
-    });
-  }, [activeVideoId, activeSession, playlists]);
-
-
   const scrollToWorkspace = () => {
     setTimeout(() => {
       const element = document.getElementById("lecture-workspace");
@@ -1443,6 +1472,7 @@ export default function App() {
         if (cachedPlaylist && cachedPlaylist.videos.length > 0) {
           // Immediately display cached version! Instant loading (<500ms)
           setPlaylists(Storage.getPlaylists());
+          Storage.addPlaylistToImportFolder(cachedPlaylist);
           setActiveSession({ id: cachedPlaylist.id, type: "playlist" });
           
           const lastWatchedVideo = cachedPlaylist.videos.find(v => v.progress > 0 && v.progress < 95) || cachedPlaylist.videos[0];
@@ -1486,6 +1516,7 @@ export default function App() {
                       thumbnail: data.thumbnail || cachedPlaylist!.thumbnail,
                     };
                     Storage.savePlaylist(updated);
+                    Storage.addPlaylistToImportFolder(updated);
                     setPlaylists(Storage.getPlaylists());
                   }
                 }
@@ -1583,6 +1614,7 @@ export default function App() {
         }
 
         Storage.savePlaylist(playlist);
+        Storage.addPlaylistToImportFolder(playlist);
         setPlaylists(Storage.getPlaylists());
         setActiveSession({ id: playlist.id, type: "playlist" });
         
@@ -1611,6 +1643,14 @@ export default function App() {
         // --- SINGLE VIDEO LOAD (HANDLED BY UNIFIED METADATA EFFECT) ---
         let video = Storage.getSingleVideos().find(v => v.id === id);
         
+        // Auto-add to Course Library Import folder
+        Storage.addVideoToImportFolder({
+          id,
+          title: video?.title || "Imported Lecture",
+          channelName: video?.channelName || "YouTube",
+          duration: video?.duration || "10:00"
+        });
+
         // Set immediately to render skeleton and start player frame immediately
         setIsSingleVideoDetailsLoading(true);
         setSingleVideoMetadata(null);
@@ -1661,6 +1701,7 @@ export default function App() {
 
       playlistsFromDb[plIndex] = pl;
       Storage.savePlaylist(pl);
+      Storage.addPlaylistToImportFolder(pl);
       setPlaylists(playlistsFromDb);
       setProgressiveLoadedCount(nextCount);
 
@@ -1707,6 +1748,7 @@ export default function App() {
 
     playlistsFromDb[plIndex] = currentPl;
     Storage.savePlaylist(currentPl);
+    Storage.addPlaylistToImportFolder(currentPl);
     setPlaylists(playlistsFromDb);
 
     // Reset background update state
@@ -2425,12 +2467,16 @@ export default function App() {
     const rawQuery = searchQuery.toLowerCase().trim();
     
     // Check if it's a category filter
+    const isPagesFilter = rawQuery === "pages" || rawQuery === "links" || rawQuery === "portals";
     const isPlaylistsFilter = rawQuery === "playlists";
     const isVideosFilter = rawQuery === "videos";
     const isNotesFilter = rawQuery === "notes";
     const isHistoryFilter = rawQuery === "history";
     
-    const query = (isPlaylistsFilter || isVideosFilter || isNotesFilter || isHistoryFilter) ? "" : rawQuery;
+    const query = (isPagesFilter || isPlaylistsFilter || isVideosFilter || isNotesFilter || isHistoryFilter) ? "" : rawQuery;
+
+    // Matching Registered Pages & Portals
+    const matchedPages = searchPages(query);
 
     // Matching Playlists & single videos
     const matchedPlaylists = playlists.filter(p => 
@@ -2481,11 +2527,12 @@ export default function App() {
     );
 
     return {
-      playlists: isVideosFilter || isNotesFilter || isHistoryFilter ? [] : matchedPlaylists,
-      videos: isPlaylistsFilter || isNotesFilter || isHistoryFilter ? [] : matchedSingles,
-      notes: isPlaylistsFilter || isVideosFilter || isHistoryFilter ? [] : matchedNotes,
-      bookmarks: isPlaylistsFilter || isVideosFilter || isHistoryFilter ? [] : matchedBookmarks,
-      history: isPlaylistsFilter || isVideosFilter || isNotesFilter ? [] : matchedHistory
+      pages: isPlaylistsFilter || isVideosFilter || isNotesFilter || isHistoryFilter ? [] : matchedPages,
+      playlists: isPagesFilter || isVideosFilter || isNotesFilter || isHistoryFilter ? [] : matchedPlaylists,
+      videos: isPagesFilter || isPlaylistsFilter || isNotesFilter || isHistoryFilter ? [] : matchedSingles,
+      notes: isPagesFilter || isPlaylistsFilter || isVideosFilter || isHistoryFilter ? [] : matchedNotes,
+      bookmarks: isPagesFilter || isPlaylistsFilter || isVideosFilter || isHistoryFilter ? [] : matchedBookmarks,
+      history: isPagesFilter || isPlaylistsFilter || isVideosFilter || isNotesFilter ? [] : matchedHistory
     };
   }, [searchQuery, playlists, singleVideos, sortedHistoryItems]);
 
@@ -2618,7 +2665,7 @@ export default function App() {
               }`}
               title="Pomodoro Timer"
             >
-              <AlarmClock className={`w-4 h-4 sm:w-5 sm:h-5 ${!pomoState.isPaused && pomoState.mode === "focus" ? "animate-spin" : ""}`} style={{ animationDuration: "12s" }} />
+              <AlarmClock className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="text-xs font-black hidden xs:inline tracking-wide font-mono">
                 {(() => {
                   const remainingSecs = Math.ceil(pomoState.remainingMs / 1000);
@@ -2629,33 +2676,29 @@ export default function App() {
               </span>
             </button>
 
-            {/* Mobile Search Button (Redirects to Search Tab) */}
+            {/* Mobile Search Button */}
             <button
               onClick={() => { setActiveTab("search"); setSearchQuery(""); }}
-              className={`p-2 sm:p-2.5 rounded-xl border cursor-pointer transition-all duration-200 hover:scale-[1.04] active:scale-[0.96] shadow-sm hover:shadow-md flex md:hidden items-center justify-center ${
-                activeTab === "search"
-                  ? "bg-blue-500/15 border-blue-500/40 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25 hover:border-blue-500/60"
-                  : "bg-slate-100 hover:bg-slate-200/80 border-slate-200/50 hover:border-slate-300 text-slate-700 hover:text-slate-900 dark:bg-zinc-900 dark:hover:bg-zinc-800 border-zinc-800 dark:border-zinc-800/80 dark:hover:border-zinc-700 dark:text-zinc-300 dark:hover:text-white"
-              }`}
-              title="Search Platform"
+              className={`p-2 sm:p-2.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300 transition-all cursor-pointer flex items-center justify-center`}
+              title="Search"
             >
               <Search className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
 
-            {/* Theme Single Switch Toggle */}
+            {/* Theme Toggle */}
             <button
               onClick={() => {
                 const nextTheme = settings.theme === "light" ? "dark" : settings.theme === "dark" ? "system" : "light";
                 handleSettingChange("theme", nextTheme);
               }}
-              className={`p-2 sm:p-2.5 rounded-xl border cursor-pointer transition-all duration-200 hover:scale-[1.04] active:scale-[0.96] shadow-sm hover:shadow-md flex items-center justify-center ${
+              className={`p-2 sm:p-2.5 rounded-full border cursor-pointer transition-all flex items-center justify-center ${
                 settings.theme === "dark"
-                  ? "bg-zinc-900 hover:bg-zinc-800 border-zinc-800 hover:border-zinc-700 text-blue-400 hover:text-blue-300"
+                  ? "bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-blue-400"
                   : settings.theme === "system"
                   ? "bg-slate-100 dark:bg-zinc-900 hover:bg-slate-200 dark:hover:bg-zinc-800 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400"
-                  : "bg-slate-100 hover:bg-slate-200 border-slate-200 hover:border-slate-300 text-amber-500 hover:text-amber-600"
+                  : "bg-slate-100 hover:bg-slate-200 border-slate-200 text-amber-500"
               }`}
-              title={settings.theme === "dark" ? "Switch to System Theme" : settings.theme === "system" ? "Switch to Light Theme" : "Switch to Dark Theme"}
+              title="Toggle Theme"
             >
               {settings.theme === "dark" ? <Moon className="w-4 h-4 sm:w-5 sm:h-5" /> : settings.theme === "system" ? <Laptop className="w-4 h-4 sm:w-5 sm:h-5" /> : <Sun className="w-4 h-4 sm:w-5 sm:h-5" />}
             </button>
@@ -2673,24 +2716,24 @@ export default function App() {
           />
 
           {/* Drawer Panel */}
-          <div className="relative w-72 max-w-[82vw] bg-[#0B0B10] h-full shadow-2xl flex flex-col z-10 overflow-hidden border-r border-white/5 animate-in slide-in-from-left duration-200">
+          <div className="relative w-72 max-w-[82vw] bg-white dark:bg-[#0B0B10] h-full shadow-2xl flex flex-col z-10 overflow-hidden border-r border-slate-200 dark:border-white/5 animate-in slide-in-from-left duration-200">
             {/* Header */}
-            <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
+            <div className="p-4 border-b border-slate-200 dark:border-white/5 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5">
                 <img src="/favicon.svg" alt="LearnStudy" className="w-5 h-5 object-contain shrink-0" referrerPolicy="no-referrer" />
-                <span className="font-extrabold text-lg text-white">Learn<span className="bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">Study</span></span>
+                <span className="font-extrabold text-lg text-slate-900 dark:text-white">Learn<span className="bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400 bg-clip-text text-transparent">Study</span></span>
               </div>
               <button
                 onClick={() => setMobileSidebarOpen(false)}
-                className="p-2 rounded-xl hover:bg-white/5 text-white/50 hover:text-white cursor-pointer"
+                className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-white/5 text-slate-400 dark:text-white/50 hover:text-slate-900 dark:hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Nav list */}
-            <div className="p-3 space-y-[5px] flex-1 overflow-y-auto bg-[#0B0B10]">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 pt-1 pb-2 opacity-60">
+            <div className="p-3 space-y-[5px] flex-1 overflow-y-auto bg-white dark:bg-[#0B0B10]">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3 pt-1 pb-2 opacity-80">
                 Core Hub
               </div>
               {[
@@ -2710,41 +2753,40 @@ export default function App() {
                     item.id === "study" && !activeVideoId && !activeSession ? "opacity-30 cursor-not-allowed" : ""
                   } ${
                     activeTab === item.id && !searchQuery
-                      ? "text-white font-semibold"
-                      : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                      ? "text-blue-700 dark:text-blue-300 font-semibold"
+                      : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                   }`}
                 >
                   {activeTab === item.id && !searchQuery && (
                     <motion.div
                       layoutId="mobile-nav-active"
-                      className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                      className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
                       transition={{ type: "spring", stiffness: 380, damping: 30 }}
                     />
                   )}
-                  <div className="flex items-center gap-3 relative z-10">
-                    <div className={activeTab === item.id && !searchQuery ? "text-white opacity-100" : "text-white opacity-55"}>
+                  {activeTab === item.id && !searchQuery && (
+                    <motion.div 
+                      layoutId="mobile-active-indicator"
+                      className="absolute left-1 top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <div className="flex items-center gap-3 relative z-10 pl-1.5">
+                    <div className={activeTab === item.id && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105 transition-all" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100 transition-all"}>
                       {item.icon}
                     </div>
                     <span>{item.label}</span>
                   </div>
-                  {activeTab === item.id && !searchQuery && (
-                    <motion.div 
-                      layoutId="mobile-active-indicator"
-                      className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                    />
-                  )}
                 </button>
               ))}
 
-              <div className="pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 opacity-60">
+              <div className="pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3 opacity-80">
                 Smart Study Tools
               </div>
               {[
                 { id: "flashcards", label: "Flashcards & Quiz", icon: <Brain className="w-[18px] h-[18px]" /> },
                 { id: "planner", label: "Study Planner & Tasks", icon: <CheckCircle2 className="w-[18px] h-[18px]" /> },
                 { id: "calendar", label: "Study Calendar", icon: <Calendar className="w-[18px] h-[18px]" /> },
-                { id: "pdf", label: "PDF Study Reader", icon: <FileText className="w-[18px] h-[18px]" /> },
               ].map((item) => (
                 <button
                   key={item.id}
@@ -2755,34 +2797,34 @@ export default function App() {
                   }}
                   className={`w-full relative flex items-center justify-between px-4 h-[42px] rounded-[12px] text-xs transition-all duration-250 cursor-pointer group ${
                     activeTab === item.id && !searchQuery
-                      ? "text-white font-semibold"
-                      : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                      ? "text-blue-700 dark:text-blue-300 font-semibold"
+                      : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                   }`}
                 >
                   {activeTab === item.id && !searchQuery && (
                     <motion.div
                       layoutId="mobile-nav-active"
-                      className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                      className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
                       transition={{ type: "spring", stiffness: 380, damping: 30 }}
                     />
                   )}
-                  <div className="flex items-center gap-3 relative z-10">
-                    <div className={activeTab === item.id && !searchQuery ? "text-white opacity-100" : "text-white opacity-55"}>
+                  {activeTab === item.id && !searchQuery && (
+                    <motion.div 
+                      layoutId="mobile-active-indicator"
+                      className="absolute left-1 top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <div className="flex items-center gap-3 relative z-10 pl-1.5">
+                    <div className={activeTab === item.id && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105 transition-all" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100 transition-all"}>
                       {item.icon}
                     </div>
                     <span>{item.label}</span>
                   </div>
-                  {activeTab === item.id && !searchQuery && (
-                    <motion.div 
-                      layoutId="mobile-active-indicator"
-                      className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                    />
-                  )}
                 </button>
               ))}
 
-              <div className="pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 opacity-60">
+              <div className="pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3 opacity-80">
                 Utilities
               </div>
               {[
@@ -2801,30 +2843,30 @@ export default function App() {
                   }}
                   className={`w-full relative flex items-center justify-between px-4 h-[42px] rounded-[12px] text-xs transition-all duration-250 cursor-pointer group ${
                     activeTab === item.id && !searchQuery
-                      ? "text-white font-semibold"
-                      : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                      ? "text-blue-700 dark:text-blue-300 font-semibold"
+                      : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                   }`}
                 >
                   {activeTab === item.id && !searchQuery && (
                     <motion.div
                       layoutId="mobile-nav-active"
-                      className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                      className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
                       transition={{ type: "spring", stiffness: 380, damping: 30 }}
                     />
                   )}
-                  <div className="flex items-center gap-3 relative z-10">
-                    <div className={activeTab === item.id && !searchQuery ? "text-white opacity-100" : "text-white opacity-55"}>
+                  {activeTab === item.id && !searchQuery && (
+                    <motion.div 
+                      layoutId="mobile-active-indicator"
+                      className="absolute left-1 top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <div className="flex items-center gap-3 relative z-10 pl-1.5">
+                    <div className={activeTab === item.id && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105 transition-all" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100 transition-all"}>
                       {item.icon}
                     </div>
                     <span>{item.label}</span>
                   </div>
-                  {activeTab === item.id && !searchQuery && (
-                    <motion.div 
-                      layoutId="mobile-active-indicator"
-                      className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                    />
-                  )}
                 </button>
               ))}
 
@@ -2852,17 +2894,26 @@ export default function App() {
             </div>
 
             {/* Bottom Account Drawer Section */}
-            <div className="p-3.5 border-t border-white/5 bg-white/2 shrink-0">
+            <div className="p-3.5 border-t border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-white/2 shrink-0">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-black flex items-center justify-center text-xs shrink-0">
-                    {(settings.userName || "Scholar")[0].toUpperCase()}
-                  </div>
+                  <UserAvatar
+                    userName={settings.userName || "Scholar"}
+                    customAvatarUrl={settings.userAvatarUrl}
+                    customSeed={settings.userAvatarSeed}
+                    customStyle={settings.userAvatarStyle}
+                    size="sm"
+                    className="shrink-0 cursor-pointer"
+                    onClick={() => {
+                      setMobileSidebarOpen(false);
+                      setActiveTab("settings");
+                    }}
+                  />
                   <div className="truncate">
-                    <div className="text-xs font-bold text-white truncate">
+                    <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
                       {settings.userName || "Scholar"} Workspace
                     </div>
-                    <div className="text-[10px] text-white/50 font-semibold">
+                    <div className="text-[10px] text-slate-500 dark:text-white/50 font-semibold">
                       Local Offline Mode
                     </div>
                   </div>
@@ -2872,16 +2923,16 @@ export default function App() {
                     setMobileSidebarOpen(false);
                     setActiveTab("settings");
                   }}
-                  className={`relative p-2 h-[38px] min-w-[80px] flex items-center justify-center rounded-xl border border-white/10 cursor-pointer text-xs font-bold transition-all duration-250 ${
+                  className={`relative p-2 h-[38px] min-w-[80px] flex items-center justify-center rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer text-xs font-bold transition-all duration-250 ${
                     activeTab === "settings" && !searchQuery
-                      ? "text-white"
-                      : "text-white/60 hover:text-white hover:bg-white/5"
+                      ? "text-slate-900 dark:text-white"
+                      : "text-slate-600 dark:text-white/60 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5"
                   }`}
                 >
                   {activeTab === "settings" && !searchQuery && (
                     <motion.div
                       layoutId="mobile-nav-active"
-                      className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-xl"
+                      className="absolute inset-0 bg-slate-100 border border-slate-200 shadow-xs dark:bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] dark:border-white/5 rounded-xl"
                       transition={{ type: "spring", stiffness: 380, damping: 30 }}
                     />
                   )}
@@ -2895,16 +2946,16 @@ export default function App() {
         
       <div className="flex-1 flex flex-col md:flex-row relative md:overflow-hidden">
         {/* Desktop Sidebar */}
-        <aside className={`border-r border-white/5 bg-[#0B0B10] p-4 shrink-0 transition-all duration-300 ${focusMode ? "hidden" : "hidden md:flex flex-col justify-between"} ${sidebarCollapsed ? "w-[72px]" : "w-[260px]"}`}>
+        <aside className={`border-r border-slate-200 dark:border-white/5 bg-white dark:bg-[#0B0B10] p-4 shrink-0 transition-all duration-300 ${focusMode ? "hidden" : "hidden md:flex flex-col justify-between"} ${sidebarCollapsed ? "w-[72px]" : "w-[260px]"}`}>
           <div className="space-y-6">
             {!sidebarCollapsed ? (
               <div className="flex items-center justify-between px-3">
-                <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest opacity-60">
+                <div className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest opacity-80">
                   Core Hub
                 </div>
                 <button
                   onClick={() => setSidebarCollapsed(true)}
-                  className="p-1 rounded-lg text-zinc-500 hover:text-white hover:bg-white/5 transition-colors hidden md:block cursor-pointer"
+                  className="p-1 rounded-lg text-slate-400 dark:text-zinc-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-colors hidden md:block cursor-pointer"
                   title="Collapse Sidebar"
                 >
                   <ChevronLeft className="w-4 h-4" />
@@ -2914,7 +2965,7 @@ export default function App() {
               <div className="flex flex-col items-center justify-center py-2">
                 <button
                   onClick={() => setSidebarCollapsed(false)}
-                  className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-white/5 transition-colors hidden md:block cursor-pointer"
+                  className="p-1.5 rounded-lg text-slate-400 dark:text-zinc-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-colors hidden md:block cursor-pointer"
                   title="Expand Sidebar"
                 >
                   <ChevronRight className="w-4.5 h-4.5" />
@@ -2928,8 +2979,8 @@ export default function App() {
                 onClick={() => { setActiveTab("home"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "home" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Dashboard" : undefined}
               >
@@ -2937,31 +2988,28 @@ export default function App() {
                 {activeTab === "home" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "home" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <Home className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "home" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                <Home className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "home" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Dashboard</span>}
-                {activeTab === "home" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("study"); setSearchQuery(""); }}
-                disabled={!activeVideoId && !activeSession}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
-                  !activeVideoId && !activeSession ? "opacity-30 cursor-not-allowed" : ""
-                } ${
                   activeTab === "study" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Lecture Player" : undefined}
               >
@@ -2969,28 +3017,28 @@ export default function App() {
                 {activeTab === "study" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "study" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <Tv className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "study" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                <Tv className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "study" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Lecture Player</span>}
-                {activeTab === "study" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("library"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "library" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Course Library" : undefined}
               >
@@ -2998,25 +3046,25 @@ export default function App() {
                 {activeTab === "library" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "library" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <Folder className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "library" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                <Folder className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "library" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Course Library</span>}
-                {activeTab === "library" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
               </button>
 
               {/* Study Tools Section */}
               {!sidebarCollapsed && (
-                <div className="pt-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 opacity-60">
+                <div className="pt-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3 opacity-80">
                   Smart Study Tools
                 </div>
               )}
@@ -3025,8 +3073,8 @@ export default function App() {
                 onClick={() => { setActiveTab("flashcards"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "flashcards" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Flashcards" : undefined}
               >
@@ -3034,28 +3082,28 @@ export default function App() {
                 {activeTab === "flashcards" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "flashcards" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <Brain className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "flashcards" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                <Brain className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "flashcards" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Flashcards & Quiz</span>}
-                {activeTab === "flashcards" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("planner"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "planner" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Study Planner" : undefined}
               >
@@ -3063,28 +3111,28 @@ export default function App() {
                 {activeTab === "planner" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "planner" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <CheckCircle2 className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "planner" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                <CheckCircle2 className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "planner" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Planner & Tasks</span>}
-                {activeTab === "planner" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("calendar"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "calendar" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Calendar & Streak" : undefined}
               >
@@ -3092,54 +3140,25 @@ export default function App() {
                 {activeTab === "calendar" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
-
-                <Calendar className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "calendar" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
-                {!sidebarCollapsed && <span className="relative z-10">Calendar & Streaks</span>}
                 {activeTab === "calendar" && !searchQuery && (
                   <motion.div 
                     layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
-              </button>
-
-              <button
-                onClick={() => { setActiveTab("pdf"); setSearchQuery(""); }}
-                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
-                  activeTab === "pdf" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
-                } cursor-pointer group`}
-                title={sidebarCollapsed ? "PDF Reader" : undefined}
-              >
-                {/* Animated Background Highlight */}
-                {activeTab === "pdf" && !searchQuery && (
-                  <motion.div
-                    layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <FileText className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "pdf" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
-                {!sidebarCollapsed && <span className="relative z-10">PDF Reader</span>}
-                {activeTab === "pdf" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
+                <Calendar className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "calendar" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Calendar & Streaks</span>}
               </button>
 
               {/* General Utilities */}
               {!sidebarCollapsed && (
-                <div className="pt-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500 px-3 opacity-60">
+                <div className="pt-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3 opacity-80">
                   Utilities
                 </div>
               )}
@@ -3148,8 +3167,8 @@ export default function App() {
                 onClick={() => { setActiveTab("pomodoro"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "pomodoro" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Pomodoro Timer" : undefined}
               >
@@ -3157,28 +3176,28 @@ export default function App() {
                 {activeTab === "pomodoro" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "pomodoro" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <AlarmClock className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "pomodoro" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                <AlarmClock className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "pomodoro" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Pomodoro Timer</span>}
-                {activeTab === "pomodoro" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("history"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "history" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Watch History" : undefined}
               >
@@ -3186,28 +3205,28 @@ export default function App() {
                 {activeTab === "history" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "history" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <History className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "history" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                <History className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "history" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Watch History</span>}
-                {activeTab === "history" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("favorites"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "favorites" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Favorites" : undefined}
               >
@@ -3215,28 +3234,28 @@ export default function App() {
                 {activeTab === "favorites" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "favorites" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <Heart className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "favorites" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                <Heart className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "favorites" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Favorites</span>}
-                {activeTab === "favorites" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
               </button>
 
               <button
                 onClick={() => { setActiveTab("stats"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "stats" && !searchQuery
-                    ? "text-white font-semibold" 
-                    : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
                 title={sidebarCollapsed ? "Statistics" : undefined}
               >
@@ -3244,20 +3263,49 @@ export default function App() {
                 {activeTab === "stats" && !searchQuery && (
                   <motion.div
                     layoutId="sidebar-nav-active"
-                    className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "stats" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
 
-                <TrendingUp className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "stats" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+                <TrendingUp className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "stats" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Statistics</span>}
-                {activeTab === "stats" && !searchQuery && (
-                  <motion.div 
-                    layoutId="sidebar-active-indicator"
-                    className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
+              </button>
+
+              <button
+                onClick={() => { setActiveTab("developer"); setSearchQuery(""); }}
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
+                  activeTab === "developer" && !searchQuery
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
+                } cursor-pointer group`}
+                title={sidebarCollapsed ? "Developer Profile" : undefined}
+              >
+                {/* Animated Background Highlight */}
+                {activeTab === "developer" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
                 )}
+                {activeTab === "developer" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <User className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "developer" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Developer Profile</span>}
               </button>
 
               <button
@@ -3285,13 +3333,13 @@ export default function App() {
           </div>
 
           {/* Settings Section at the absolute bottom */}
-          <div className="pt-4 border-t border-white/5 shrink-0 space-y-[5px]">
+          <div className="pt-4 border-t border-slate-200 dark:border-white/5 shrink-0 space-y-[5px]">
             <button
               onClick={() => { setActiveTab("settings"); setSearchQuery(""); }}
               className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                 activeTab === "settings" && !searchQuery
-                  ? "text-white font-semibold" 
-                  : "text-white/60 font-medium hover:bg-white/5 hover:text-white"
+                  ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                  : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
               } cursor-pointer group`}
               title={sidebarCollapsed ? "Settings" : undefined}
             >
@@ -3299,20 +3347,20 @@ export default function App() {
               {activeTab === "settings" && !searchQuery && (
                 <motion.div
                   layoutId="sidebar-nav-active"
-                  className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] border border-white/5 shadow-[inset_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(78,94,255,0.18)] rounded-[12px]"
+                  className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
+              {activeTab === "settings" && !searchQuery && (
+                <motion.div 
+                  layoutId="sidebar-active-indicator"
+                  className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
                   transition={{ type: "spring", stiffness: 380, damping: 30 }}
                 />
               )}
 
-              <Settings className={`w-[18px] h-[18px] shrink-0 transition-opacity relative z-10 ${activeTab === "settings" && !searchQuery ? "opacity-100" : "opacity-55"}`} />
+              <Settings className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "settings" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
               {!sidebarCollapsed && <span className="relative z-10">Settings & Account</span>}
-              {activeTab === "settings" && !searchQuery && (
-                <motion.div 
-                  layoutId="sidebar-active-indicator"
-                  className="absolute right-0 top-2 w-1 h-[26px] rounded-full bg-[#5a52ff] shadow-[0_0_8px_#5a52ff,0_0_16px_rgba(90,82,255,0.7)] z-10"
-                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                />
-              )}
             </button>
           </div>
         </aside>
@@ -3366,7 +3414,7 @@ export default function App() {
 
                     {/* Refined Category Pills */}
                     <div className="flex items-center justify-center flex-wrap gap-2.5 mt-8">
-                      {["Everything", "Playlists", "Videos", "Notes", "History"].map((cat) => (
+                      {["Everything", "Pages", "Playlists", "Videos", "Notes", "History"].map((cat) => (
                         <button
                           key={cat}
                           onClick={() => {
@@ -3391,42 +3439,24 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Refined Empty State - NO QUERY */}
+                {/* Refined Empty State - NO QUERY -> DIRECTORY OF ALL PAGES & LINKS */}
                 {!searchQuery && (
                   <motion.div 
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="grid grid-cols-1 md:grid-cols-3 gap-6"
+                    className="space-y-8"
                   >
-                    <div className="bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800/60 p-8 md:p-10 rounded-[2rem] text-center space-y-5 shadow-sm group hover:bg-white dark:hover:bg-zinc-900 transition-all duration-300">
-                      <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center mx-auto text-blue-500 group-hover:scale-110 transition-transform">
-                        <Youtube className="w-6 h-6" />
-                      </div>
-                      <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Video Library</h3>
-                      <p className="text-sm text-slate-500 dark:text-zinc-400 leading-relaxed font-medium">
-                        Search across all your imported educational playlists and lectures.
-                      </p>
-                    </div>
-
-                    <div className="bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800/60 p-8 md:p-10 rounded-[2rem] text-center space-y-5 shadow-sm group hover:bg-white dark:hover:bg-zinc-900 transition-all duration-300">
-                      <div className="w-12 h-12 bg-purple-500/10 rounded-2xl flex items-center justify-center mx-auto text-purple-500 group-hover:scale-110 transition-transform">
-                        <FileText className="w-6 h-6" />
-                      </div>
-                      <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Smart Notes</h3>
-                      <p className="text-sm text-slate-500 dark:text-zinc-400 leading-relaxed font-medium">
-                        Find specific insights and keywords across your markdown summaries.
-                      </p>
-                    </div>
-
-                    <div className="bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm border border-slate-200/60 dark:border-zinc-800/60 p-8 md:p-10 rounded-[2rem] text-center space-y-5 shadow-sm group hover:bg-white dark:hover:bg-zinc-900 transition-all duration-300">
-                      <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto text-emerald-500 group-hover:scale-110 transition-transform">
-                        <Clock className="w-6 h-6" />
-                      </div>
-                      <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-50">Study History</h3>
-                      <p className="text-sm text-slate-500 dark:text-zinc-400 leading-relaxed font-medium">
-                        Review your focus sessions and previously studied materials.
-                      </p>
-                    </div>
+                    <PageNavigationDirectory
+                      variant="full"
+                      activeTab={activeTab}
+                      onNavigate={(tab) => {
+                        setActiveTab(tab);
+                        setSearchQuery("");
+                      }}
+                      onCopySuccess={(title, url) => {
+                        toast.success(`Copied direct link to ${title}!`, url);
+                      }}
+                    />
                   </motion.div>
                 )}
 
@@ -3437,10 +3467,26 @@ export default function App() {
                       <div className="flex items-center gap-3">
                         <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
                         <span className="text-sm font-semibold text-slate-900 dark:text-zinc-50 tracking-tight">
-                          {searchResults.playlists.length + searchResults.videos.length + searchResults.notes.length + searchResults.bookmarks.length + (searchResults.history?.length || 0)} results found for "{searchQuery}"
+                          {(searchResults.pages?.length || 0) + searchResults.playlists.length + searchResults.videos.length + searchResults.notes.length + searchResults.bookmarks.length + (searchResults.history?.length || 0)} results found for "{searchQuery}"
                         </span>
                       </div>
                     </div>
+
+                    {/* Registered Pages & Portals Section */}
+                    {searchResults.pages && searchResults.pages.length > 0 && (
+                      <PageNavigationDirectory
+                        variant="search-results"
+                        activeTab={activeTab}
+                        filterQuery={searchQuery}
+                        onNavigate={(tab) => {
+                          setActiveTab(tab);
+                          setSearchQuery("");
+                        }}
+                        onCopySuccess={(title, url) => {
+                          toast.success(`Copied direct link to ${title}!`, url);
+                        }}
+                      />
+                    )}
 
                     {/* History Section */}
                     {searchResults.history && searchResults.history.length > 0 && (
@@ -3679,14 +3725,39 @@ export default function App() {
               {/* HOME TAB */}
               {activeTab === "home" && (
                 <div className="space-y-8 max-w-6xl mx-auto py-2">
-                  {/* Personal Dashboard Header */}
+                  {/* Personal Dashboard Header & Navigation Hub */}
                   <PersonalDashboard 
                     setActiveTab={setActiveTab}
                     userName={settings.userName}
+                    settings={settings}
+                    onResumeSession={(session) => {
+                      if (session.type === "playlist") {
+                        const targetPl = playlists.find(p => p.id === session.id);
+                        if (targetPl) {
+                          setActiveSession({ id: targetPl.id, type: "playlist" });
+                          const firstVid = targetPl.videos.find(v => v.progress > 0 && v.progress < 95) || targetPl.videos[0];
+                          if (firstVid) {
+                            setActiveVideoId(firstVid.id);
+                            setActiveVideoTitle(firstVid.title);
+                            setActiveVideoChannel(firstVid.channelName);
+                          }
+                          setActiveTab("study");
+                        }
+                      } else {
+                        const targetVid = singleVideos.find(v => v.id === session.id);
+                        if (targetVid) {
+                          setActiveSession({ id: targetVid.id, type: "video" });
+                          setActiveVideoId(targetVid.id);
+                          setActiveVideoTitle(targetVid.title);
+                          setActiveVideoChannel(targetVid.channelName);
+                          setActiveTab("study");
+                        }
+                      }
+                    }}
                   />
 
                   {/* Quick Import Lecture URL Box */}
-                  <div className="py-8 px-6 md:px-10 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-sm relative overflow-hidden">
+                  <div id="import-study-container" className="py-8 px-6 md:px-10 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-sm relative overflow-hidden">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                       <div>
                         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50/80 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/30 text-blue-600 dark:text-blue-400 text-xs font-bold tracking-wide uppercase shadow-xs">
@@ -4106,7 +4177,7 @@ export default function App() {
                               </span>
                             </h3>
                             <p className="text-xs text-slate-500 dark:text-zinc-400 max-w-md">
-                              Study at least 60 minutes daily to level up your streak. Longest streak: <span className="font-bold text-orange-600 dark:text-orange-400">{stats.longest} Days</span>.
+                              Study at least {settings?.dailyGoalMinutes || Storage.getSettings().dailyGoalMinutes || 45} minutes daily (or complete daily tasks) to level up your streak. Longest streak: <span className="font-bold text-orange-600 dark:text-orange-400">{stats.longest} Days</span>.
                             </p>
 
                             {/* Week Consistency Tracker dots */}
@@ -4293,7 +4364,8 @@ export default function App() {
               )}
 
               {/* STUDY PLAYER TAB */}
-              {activeTab === "study" && (activeVideoId || activeSession) && (
+              {activeTab === "study" && (
+                (activeVideoId || activeSession) ? (
                 <div className={`space-y-6 max-w-7xl mx-auto ${focusMode ? "pb-12" : ""}`}>
                   
                   {/* Focus Mode top bar */}
@@ -4323,9 +4395,7 @@ export default function App() {
                         ref={playerContainerRef}
                         className={`relative w-full overflow-hidden rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-sm bg-black ${theatreMode ? "aspect-video" : "aspect-video"}`}
                       >
-                        <div id="yt-player-container" className="w-full h-full">
-                          <div id="yt-player-frame"></div>
-                        </div>
+                        <div id="yt-player-frame" className="w-full h-full"></div>
                       </div>
 
                       {/* --- UPGRADED BRAND CONTROL BAR (DESKTOP) --- */}
@@ -4333,8 +4403,8 @@ export default function App() {
                         
                         {/* Row 1: Primary Actions, Favorites, and AI Hub Dropdown */}
                         <div className="flex items-center justify-between gap-4">
-                          {/* Left Group: Navigation + Save + Bookmark */}
-                          <div className="flex items-center gap-2">
+                          {/* Left Group: Navigation + Save + Bookmark + PiP & Lock Screen Controls */}
+                          <div className="flex items-center gap-2 flex-wrap">
                             {activeSession?.type === "playlist" && (
                               <div className="flex items-center bg-slate-100 dark:bg-zinc-800 p-1 rounded-xl border border-slate-200/40 dark:border-zinc-700/40 shrink-0">
                                 <button 
@@ -4375,12 +4445,22 @@ export default function App() {
                             <div className="relative">
                               <button 
                                 onClick={() => setActiveAiDropdown(prev => !prev)}
-                                className="bg-purple-600 hover:bg-purple-700 text-white font-black text-xs h-11 px-4.5 rounded-xl flex items-center gap-2 transition shadow-sm hover:scale-[1.01] active:scale-[0.99] shrink-0"
+                                className="relative group p-[3px] rounded-full bg-purple-200/70 dark:bg-purple-950/60 border border-purple-300/70 dark:border-purple-600/40 shadow-[0_4px_22px_rgba(147,51,234,0.3)] hover:shadow-[0_6px_28px_rgba(168,85,247,0.5)] transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.02] shrink-0"
                                 title="AI Assistant Study Hub"
                               >
-                                <Sparkles className="w-4 h-4 text-purple-200 animate-pulse" />
-                                <span>AI Notes Hub</span>
-                                <ChevronDown className="w-3.5 h-3.5 text-purple-200 transition-transform" />
+                                <div className="relative overflow-hidden rounded-full px-5 py-2 sm:px-6 sm:py-2.5 bg-gradient-to-r from-[#601fd1] via-[#7e29ea] to-[#6d21d3] dark:from-[#6b21a8] dark:via-[#8b5cf6] dark:to-[#7c3aed] flex items-center gap-2 text-white font-bold text-xs sm:text-sm tracking-wide">
+                                  {/* Glossy top highlight */}
+                                  <span className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/25 via-white/5 to-transparent pointer-events-none rounded-t-full" />
+                                  {/* Center bottom light glow beam from image */}
+                                  <span className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 w-20 h-5 bg-white/50 dark:bg-white/60 rounded-full blur-[6px] pointer-events-none group-hover:scale-125 transition-transform duration-300" />
+                                  <span className="absolute inset-0 bg-radial from-white/15 via-transparent to-transparent opacity-60 pointer-events-none" />
+
+                                  <span className="relative z-10 font-bold drop-shadow-xs">AI Notes Hub</span>
+                                  <div className="relative z-10 flex items-center gap-1">
+                                    <Sparkles className="w-3.5 h-3.5 fill-white text-white drop-shadow-xs group-hover:rotate-12 transition-transform duration-300" />
+                                    <ChevronDown className="w-3 h-3 text-purple-200 group-hover:translate-y-0.5 transition-transform" />
+                                  </div>
+                                </div>
                               </button>
 
                               {activeAiDropdown && (
@@ -5295,6 +5375,35 @@ export default function App() {
                   </div>
 
                 </div>
+                ) : (
+                  <div className="max-w-xl mx-auto py-16 px-6 text-center space-y-6 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-sm my-8">
+                    <div className="w-16 h-16 rounded-2xl bg-blue-500/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center mx-auto shadow-xs">
+                      <Tv className="w-8 h-8" />
+                    </div>
+                    <div className="space-y-2">
+                      <h2 className="text-xl font-bold text-slate-900 dark:text-zinc-50">No Active Lecture Loaded</h2>
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 max-w-sm mx-auto leading-relaxed">
+                        Choose a course from your educational library or enter a YouTube lecture link on the dashboard to start learning with zero distractions.
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-center gap-3 flex-wrap pt-2">
+                      <button
+                        onClick={() => setActiveTab("library")}
+                        className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition flex items-center gap-2 shadow-sm cursor-pointer"
+                      >
+                        <Folder className="w-4 h-4" />
+                        <span>Course Library</span>
+                      </button>
+                      <button
+                        onClick={() => setActiveTab("home")}
+                        className="px-5 py-2.5 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 text-xs font-bold transition flex items-center gap-2 cursor-pointer"
+                      >
+                        <Home className="w-4 h-4" />
+                        <span>Go to Dashboard</span>
+                      </button>
+                    </div>
+                  </div>
+                )
               )}
 
               {/* WATCH HISTORY TAB */}
@@ -5751,13 +5860,6 @@ export default function App() {
                   <StudyCalendar />
                 </div>
               )}
-
-              {/* PDF READER TAB */}
-              {activeTab === "pdf" && (
-                <div className="max-w-7xl mx-auto py-2">
-                  <PDFStudyReader />
-                </div>
-              )}
             </>
           )}
 
@@ -5783,10 +5885,7 @@ export default function App() {
 
           <button
             onClick={() => { setActiveTab("study"); setSearchQuery(""); }}
-            disabled={!activeVideoId && !activeSession}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
-              !activeVideoId && !activeSession ? "opacity-35 cursor-not-allowed" : ""
-            } ${
               activeTab === "study" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
                 : "text-slate-500 dark:text-zinc-400 font-bold hover:text-slate-900 dark:hover:text-zinc-200 opacity-80"
@@ -5938,7 +6037,12 @@ export default function App() {
 
       {/* 10. Sticky Bottom Study Bar */}
       {scrolledPast && activeTab === "study" && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border-t border-slate-200 dark:border-zinc-800 shadow-xl py-3 px-4 z-40 animate-in slide-in-from-bottom duration-300">
+        <div 
+          id="sticky-study-bar"
+          className={`fixed bottom-0 right-0 ${
+            focusMode ? "left-0" : sidebarCollapsed ? "left-0 md:left-[72px]" : "left-0 md:left-[260px]"
+          } bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border-t border-slate-200 dark:border-zinc-800 shadow-xl py-3 px-4 z-40 transition-all duration-300 animate-in slide-in-from-bottom`}
+        >
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
             {/* Left Column: Video thumbnail, Title, & Progress Indicator */}
             <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -6180,6 +6284,8 @@ export default function App() {
         isOpen={feedbackModalOpen}
         onClose={() => setFeedbackModalOpen(false)}
       />
+
+
 
     </div>
   );
