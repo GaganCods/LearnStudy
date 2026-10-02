@@ -396,6 +396,116 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
   // Expanded chapters in accordion
   const [expandedChapterIds, setExpandedChapterIds] = useState<Record<string, boolean>>({});
 
+  // Helper to extract YouTube ID from video link
+  const extractYoutubeId = (url: string): string => {
+    if (!url) return "";
+    const cleaned = url.trim();
+    if (cleaned.length === 11 && !cleaned.includes("/") && !cleaned.includes(".")) return cleaned;
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    const match = cleaned.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : cleaned;
+  };
+
+  /**
+   * Compares the `completed` status of videos stored in singleVideos or playlists
+   * with corresponding entries in Course Library subjects, and updates both
+   * storage and component state to ensure the UI displays accurate completion indicators.
+   */
+  const syncCompletedStatusWithStoredVideos = (customSubjectsList?: CustomSubjectFolder[]) => {
+    const subjectsToSync = customSubjectsList || Storage.getCustomSubjects() || [];
+    if (!subjectsToSync || subjectsToSync.length === 0) return subjectsToSync;
+
+    const singleVideos = Storage.getSingleVideos() || [];
+    const playlists = Storage.getPlaylists() || [];
+
+    // Map video IDs to their stored completion, progress, and watch position
+    const videoStatusMap = new Map<string, { completed: boolean; progress: number; lastWatchedPosition?: number }>();
+
+    singleVideos.forEach((v) => {
+      if (v.id) {
+        videoStatusMap.set(v.id, {
+          completed: !!v.completed,
+          progress: v.progress || (v.completed ? 100 : 0),
+          lastWatchedPosition: v.lastWatchedPosition,
+        });
+      }
+    });
+
+    playlists.forEach((pl) => {
+      pl.videos?.forEach((v) => {
+        if (v.id) {
+          const existing = videoStatusMap.get(v.id);
+          const isCompleted = existing ? (existing.completed || !!v.completed) : !!v.completed;
+          const maxProgress = Math.max(existing?.progress || 0, v.progress || 0, isCompleted ? 100 : 0);
+          const lastPos = v.lastWatchedPosition !== undefined ? v.lastWatchedPosition : existing?.lastWatchedPosition;
+          videoStatusMap.set(v.id, {
+            completed: isCompleted,
+            progress: maxProgress,
+            lastWatchedPosition: lastPos,
+          });
+        }
+      });
+    });
+
+    let modified = false;
+
+    const updatedSubjects = subjectsToSync.map((subj) => {
+      let subjChanged = false;
+      const updatedChapters = (subj.chapters || []).map((ch) => {
+        let chChanged = false;
+        const updatedLectures = (ch.lectures || []).map((lec) => {
+          const ytId = lec.youtubeVideoId || extractYoutubeId(lec.videoUrl || "") || lec.id;
+          
+          let storedMatch: { completed: boolean; progress: number; lastWatchedPosition?: number } | undefined = undefined;
+
+          if (ytId && videoStatusMap.has(ytId)) {
+            storedMatch = videoStatusMap.get(ytId);
+          } else {
+            for (const [vId, status] of videoStatusMap.entries()) {
+              if (
+                (lec.videoUrl && lec.videoUrl.includes(vId)) ||
+                lec.id.includes(vId) ||
+                (lec.youtubeVideoId && lec.youtubeVideoId === vId)
+              ) {
+                storedMatch = status;
+                break;
+              }
+            }
+          }
+
+          if (storedMatch) {
+            const targetCompleted = storedMatch.completed || !!lec.completed;
+            const targetProgress = targetCompleted ? 100 : Math.max(lec.progress || 0, storedMatch.progress || 0);
+            const targetLastPos = storedMatch.lastWatchedPosition !== undefined ? storedMatch.lastWatchedPosition : lec.lastWatchedPosition;
+
+            if (lec.completed !== targetCompleted || (targetCompleted && (lec.progress || 0) < 100)) {
+              subjChanged = true;
+              chChanged = true;
+              modified = true;
+              return {
+                ...lec,
+                completed: targetCompleted,
+                progress: targetProgress,
+                lastWatchedPosition: targetLastPos !== undefined ? targetLastPos : lec.lastWatchedPosition,
+              };
+            }
+          }
+          return lec;
+        });
+
+        return chChanged ? { ...ch, lectures: updatedLectures } : ch;
+      });
+
+      return subjChanged ? { ...subj, chapters: updatedChapters } : subj;
+    });
+
+    if (modified) {
+      Storage.saveCustomSubjects(updatedSubjects);
+    }
+
+    return modified ? updatedSubjects : subjectsToSync;
+  };
+
   // Load subjects on mount and listen to storage updates
   useEffect(() => {
     loadSubjects();
@@ -405,10 +515,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     };
 
     window.addEventListener("studytube_custom_subjects_updated", handleSubjectsUpdated);
+    window.addEventListener("studytube_playlists_updated", handleSubjectsUpdated);
+    window.addEventListener("studytube_single_videos_updated", handleSubjectsUpdated);
     window.addEventListener("storage", handleSubjectsUpdated);
 
     return () => {
       window.removeEventListener("studytube_custom_subjects_updated", handleSubjectsUpdated);
+      window.removeEventListener("studytube_playlists_updated", handleSubjectsUpdated);
+      window.removeEventListener("studytube_single_videos_updated", handleSubjectsUpdated);
       window.removeEventListener("storage", handleSubjectsUpdated);
     };
   }, []);
@@ -506,11 +620,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
       Storage.saveCustomSubjects(filtered);
     }
     
-    setSubjects(filtered);
-    setSelectedSubject((prev) => (prev ? filtered.find((s) => s.id === prev.id) || null : null));
-    setPlaylistPlayerSubject((prev) => (prev ? filtered.find((s) => s.id === prev.id) || null : null));
-    if (filtered[0]?.chapters?.[0]?.id) {
-      setExpandedChapterIds((prev) => ({ ...prev, [filtered[0].chapters[0].id]: true }));
+    // Sync completion status with singleVideos and playlists on load
+    const synced = syncCompletedStatusWithStoredVideos(filtered);
+
+    setSubjects(synced);
+    setSelectedSubject((prev) => (prev ? synced.find((s) => s.id === prev.id) || null : null));
+    setPlaylistPlayerSubject((prev) => (prev ? synced.find((s) => s.id === prev.id) || null : null));
+    if (synced[0]?.chapters?.[0]?.id) {
+      setExpandedChapterIds((prev) => ({ ...prev, [synced[0].chapters[0].id]: true }));
     }
 
     // Load custom categories based on actual remaining subjects
@@ -525,20 +642,10 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
     }
     
     // Merge with actual categories from stored subjects
-    const actualCats = Array.from(new Set(filtered.map(s => s.category).filter(Boolean)));
+    const actualCats = Array.from(new Set(synced.map(s => s.category).filter(Boolean)));
     const mergedCats = Array.from(new Set([...catsList, ...actualCats]));
     setCustomCategories(mergedCats);
     localStorage.setItem("studyai_custom_categories", JSON.stringify(mergedCats));
-  };
-
-  // Helper to extract YouTube ID from video link
-  const extractYoutubeId = (url: string): string => {
-    if (!url) return "";
-    const cleaned = url.trim();
-    if (cleaned.length === 11 && !cleaned.includes("/") && !cleaned.includes(".")) return cleaned;
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-    const match = cleaned.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : cleaned;
   };
 
   // Auto-fetch video details from YouTube endpoint as user enters URL

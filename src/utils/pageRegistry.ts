@@ -144,11 +144,11 @@ export const APP_PAGES: PageItem[] = [
   },
   {
     id: "favorites",
-    title: "Favorites & Starred",
+    title: "Favorites & Liked",
     shortTitle: "Favorites",
-    badge: "Bookmarks",
-    description: "Fast one-click access to all your starred playlists, top-priority lectures, and saved learning materials.",
-    keywords: ["favorites", "favorite", "starred", "bookmarks", "saved", "priority", "likes", "loved"],
+    badge: "Saved",
+    description: "Fast one-click access to all your favorite playlists, top-priority lectures, and saved learning materials.",
+    keywords: ["favorites", "favorite", "heart", "liked", "bookmarks", "saved", "priority", "likes", "loved"],
     category: "Personal Archive",
     accentColor: "rose",
     accentBg: "bg-rose-500/10 dark:bg-rose-500/15",
@@ -203,18 +203,35 @@ export const APP_PAGES: PageItem[] = [
 export interface NavigationUrlParams {
   tab?: ActiveTab;
   v?: string;
+  title?: string;
   list?: string;
   q?: string;
   t?: number;
 }
 
 /**
- * Returns the shareable link (relative or absolute) for a specific page or resource.
+ * Converts text into a clean, URL-safe slug
+ */
+export function slugify(text: string): string {
+  if (!text) return "";
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "") // remove non-alphanumerics except spaces & hyphens
+    .replace(/\s+/g, "-") // replace multiple spaces with hyphen
+    .replace(/-+/g, "-") // collapse repeated hyphens
+    .slice(0, 60) // clean length limit
+    .replace(/^-+|-+$/g, ""); // trim hyphens at ends
+}
+
+/**
+ * Returns the clean, semantic shareable link (e.g. /home, /study?v=...&title=..., /library)
  */
 export function getPageShareableUrl(
   tab: ActiveTab,
   params?: {
     videoId?: string;
+    videoTitle?: string;
     playlistId?: string;
     searchQuery?: string;
     timestamp?: number;
@@ -222,35 +239,40 @@ export function getPageShareableUrl(
   }
 ): string {
   const isAbsolute = params?.absolute !== false;
-  const baseUrl = typeof window !== "undefined"
-    ? `${window.location.origin}${window.location.pathname}`
-    : "";
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+
+  let pathname = `/${tab}`;
+  if (tab === "home") pathname = "/home";
 
   const searchParams = new URLSearchParams();
 
   if (tab === "search" || params?.searchQuery) {
-    searchParams.set("tab", "search");
+    pathname = "/search";
     if (params?.searchQuery) {
       searchParams.set("q", params.searchQuery);
     }
   } else if (tab === "study") {
-    searchParams.set("tab", "study");
-    if (params?.playlistId) {
-      searchParams.set("list", params.playlistId);
-    }
+    pathname = "/study";
     if (params?.videoId) {
       searchParams.set("v", params.videoId);
+      if (params.videoTitle) {
+        const titleSlug = slugify(params.videoTitle);
+        if (titleSlug) {
+          searchParams.set("title", titleSlug);
+        }
+      }
+    }
+    if (params?.playlistId) {
+      searchParams.set("list", params.playlistId);
     }
     if (params?.timestamp && params.timestamp > 0) {
       searchParams.set("t", String(Math.floor(params.timestamp)));
     }
-  } else {
-    searchParams.set("tab", tab);
   }
 
   const queryString = searchParams.toString();
-  const fullUrl = queryString ? `${baseUrl}?${queryString}` : `${baseUrl}?tab=${tab}`;
-  return isAbsolute ? fullUrl : `?${queryString}`;
+  const relativeUrl = queryString ? `${pathname}?${queryString}` : pathname;
+  return isAbsolute ? `${origin}${relativeUrl}` : relativeUrl;
 }
 
 /**
@@ -260,6 +282,7 @@ export async function copyPageLink(
   tab: ActiveTab,
   params?: {
     videoId?: string;
+    videoTitle?: string;
     playlistId?: string;
     searchQuery?: string;
     timestamp?: number;
@@ -305,11 +328,12 @@ export function searchPages(rawQuery: string): PageItem[] {
 }
 
 /**
- * Parse the current window URL (search params or hash) to determine direct landing target.
+ * Parse the current window URL (pathname, search params or hash) to determine direct landing target.
  */
 export function parseInitialUrlState(): {
   tab: ActiveTab | null;
   videoId?: string;
+  videoTitle?: string;
   playlistId?: string;
   searchQuery?: string;
   timestamp?: number;
@@ -319,43 +343,76 @@ export function parseInitialUrlState(): {
   }
 
   try {
+    const rawPath = window.location.pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
     const params = new URLSearchParams(window.location.search);
-    
-    // Check tab or page param
-    let tabParam = (params.get("tab") || params.get("page")) as ActiveTab | null;
-    
-    // Also check hash (e.g. #flashcards or #/planner)
-    const hash = window.location.hash.replace(/^#\/?/, "").toLowerCase();
-    if (!tabParam && hash) {
-      const matchedPage = APP_PAGES.find(p => p.tabParam === hash || p.id === hash);
-      if (matchedPage) {
-        tabParam = matchedPage.id;
+    const pathParts = rawPath.split("/").filter(Boolean);
+    const firstSegment = pathParts[0] || "";
+
+    const pathTabMap: Record<string, ActiveTab> = {
+      "": "home",
+      "home": "home",
+      "study": "study",
+      "library": "library",
+      "courses": "library",
+      "flashcards": "flashcards",
+      "quiz": "flashcards",
+      "planner": "planner",
+      "tasks": "planner",
+      "calendar": "calendar",
+      "schedule": "calendar",
+      "pomodoro": "pomodoro",
+      "timer": "pomodoro",
+      "stats": "stats",
+      "analytics": "stats",
+      "history": "history",
+      "favorites": "favorites",
+      "search": "search",
+      "settings": "settings",
+      "developer": "developer",
+      "about": "developer",
+    };
+
+    let tabFromPath: ActiveTab | null = pathTabMap[firstSegment] || null;
+    let videoIdFromPath: string | undefined = undefined;
+    let titleFromPath: string | undefined = undefined;
+
+    // Check path patterns like /study/v/:videoId or /study/:videoId
+    if (firstSegment === "study" || firstSegment === "v") {
+      if (pathParts[1] === "v" && pathParts[2]) {
+        videoIdFromPath = pathParts[2];
+        if (pathParts[3]) titleFromPath = pathParts[3];
+      } else if (pathParts[1] && pathParts[1].length === 11) {
+        videoIdFromPath = pathParts[1];
+        if (pathParts[2]) titleFromPath = pathParts[2];
       }
     }
 
-    const videoId = params.get("v") || params.get("videoId") || undefined;
+    // Check query params
+    let tabParam = (params.get("tab") || params.get("page")) as ActiveTab | null;
+    if (tabParam && !APP_PAGES.some(p => p.id === tabParam)) {
+      tabParam = null;
+    }
+
+    // Check hash fallback (e.g. #flashcards or #/planner)
+    const hash = window.location.hash.replace(/^#\/?/, "").toLowerCase();
+    let tabFromHash: ActiveTab | null = null;
+    if (hash && pathTabMap[hash]) {
+      tabFromHash = pathTabMap[hash];
+    }
+
+    const videoId = params.get("v") || params.get("videoId") || videoIdFromPath || undefined;
+    const titleSlug = params.get("title") || params.get("name") || titleFromPath || undefined;
     const playlistId = params.get("list") || params.get("playlistId") || undefined;
     const searchQuery = params.get("q") || params.get("search") || undefined;
     const tParam = params.get("t") || params.get("time");
     const timestamp = tParam ? parseInt(tParam, 10) : undefined;
 
-    // If a video or playlist ID is directly in the URL without tab, default to study tab
-    if ((videoId || playlistId) && !tabParam) {
-      tabParam = "study";
-    }
-
-    // If a search query is present without tab, default to search tab
-    if (searchQuery && !tabParam) {
-      tabParam = "search";
-    }
-
-    // Validate that tab is a known ActiveTab
-    const validTabs: ActiveTab[] = APP_PAGES.map(p => p.id);
-    const validTab = tabParam && validTabs.includes(tabParam) ? tabParam : null;
+    const finalTab: ActiveTab | null = tabParam || tabFromPath || tabFromHash || (videoId || playlistId ? "study" : (searchQuery ? "search" : null));
 
     return {
-      tab: validTab,
+      tab: finalTab,
       videoId,
+      videoTitle: titleSlug ? titleSlug.replace(/-/g, " ") : undefined,
       playlistId,
       searchQuery,
       timestamp: isNaN(timestamp as any) ? undefined : timestamp
@@ -367,12 +424,13 @@ export function parseInitialUrlState(): {
 }
 
 /**
- * Sync the current app state to browser history URL.
+ * Sync the current app state to browser history URL with clean paths & video slugs.
  */
 export function syncStateToUrl(
   tab: ActiveTab,
   params?: {
     videoId?: string;
+    videoTitle?: string;
     playlistId?: string;
     searchQuery?: string;
     replace?: boolean;
@@ -381,30 +439,35 @@ export function syncStateToUrl(
   if (typeof window === "undefined") return;
 
   try {
+    let pathname = `/${tab}`;
     const searchParams = new URLSearchParams();
 
     if (params?.searchQuery && params.searchQuery.trim()) {
-      searchParams.set("tab", "search");
+      pathname = "/search";
       searchParams.set("q", params.searchQuery.trim());
     } else if (tab === "study") {
-      searchParams.set("tab", "study");
+      pathname = "/study";
+      if (params?.videoId) {
+        searchParams.set("v", params.videoId);
+        if (params.videoTitle) {
+          const titleSlug = slugify(params.videoTitle);
+          if (titleSlug) {
+            searchParams.set("title", titleSlug);
+          }
+        }
+      }
       if (params?.playlistId) {
         searchParams.set("list", params.playlistId);
       }
-      if (params?.videoId) {
-        searchParams.set("v", params.videoId);
-      }
     } else if (tab === "home") {
-      searchParams.set("tab", "home");
-    } else {
-      searchParams.set("tab", tab);
+      pathname = "/home";
     }
 
-    const newSearch = searchParams.toString();
-    const newRelativeUrl = newSearch ? `?${newSearch}` : window.location.pathname;
-    const currentRelativeUrl = window.location.search || window.location.pathname;
+    const newQuery = searchParams.toString();
+    const newRelativeUrl = newQuery ? `${pathname}?${newQuery}` : pathname;
+    const currentRelativeUrl = `${window.location.pathname}${window.location.search}`;
 
-    if (currentRelativeUrl !== newRelativeUrl && window.location.search !== `?${newSearch}`) {
+    if (currentRelativeUrl !== newRelativeUrl) {
       if (params?.replace) {
         window.history.replaceState({ tab, ...params }, "", newRelativeUrl);
       } else {

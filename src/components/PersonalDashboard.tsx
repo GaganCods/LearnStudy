@@ -5,19 +5,22 @@ import {
 import { Storage } from "../utils/storage";
 import { ActiveTab, StudySettings } from "../types";
 import { UserAvatar } from "./UserAvatar";
+import { useAuth } from "../context/AuthContext";
 
 interface PersonalDashboardProps {
   setActiveTab?: (tab: ActiveTab) => void;
   userName?: string;
   settings?: StudySettings;
   onResumeSession?: (id: string, type: "playlist" | "video") => void;
+  showRecentMaterials?: boolean;
 }
 
 export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({ 
   setActiveTab,
   userName,
   settings,
-  onResumeSession
+  onResumeSession,
+  showRecentMaterials = false
 }) => {
   const [stats, setStats] = useState(() => Storage.getStreakStats());
   const [studyLogs, setStudyLogs] = useState(() => Storage.getStudyLogs());
@@ -44,36 +47,15 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
 
     window.addEventListener("studytube_logs_updated", handleUpdate);
     window.addEventListener("studytube_settings_updated", handleUpdate);
+    window.addEventListener("studytube_playlists_updated", handleUpdate);
+    window.addEventListener("studytube_single_videos_updated", handleUpdate);
     window.addEventListener("storage", handleUpdate);
 
     return () => {
       window.removeEventListener("studytube_logs_updated", handleUpdate);
       window.removeEventListener("studytube_settings_updated", handleUpdate);
-      window.removeEventListener("storage", handleUpdate);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (settings) {
-      setCurrentSettings(settings);
-    }
-  }, [settings]);
-
-  useEffect(() => {
-    const handleUpdate = () => {
-      setStats(Storage.getStreakStats());
-      setStudyLogs(Storage.getStudyLogs());
-      setPlans(Storage.getStudyPlans());
-      setCurrentSettings(Storage.getSettings());
-    };
-
-    window.addEventListener("studytube_logs_updated", handleUpdate);
-    window.addEventListener("studytube_settings_updated", handleUpdate);
-    window.addEventListener("storage", handleUpdate);
-
-    return () => {
-      window.removeEventListener("studytube_logs_updated", handleUpdate);
-      window.removeEventListener("studytube_settings_updated", handleUpdate);
+      window.removeEventListener("studytube_playlists_updated", handleUpdate);
+      window.removeEventListener("studytube_single_videos_updated", handleUpdate);
       window.removeEventListener("storage", handleUpdate);
     };
   }, []);
@@ -111,10 +93,12 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
     : 0;
   const taskPercent = totalPlans > 0 ? Math.min(100, Math.round((completedPlans / totalPlans) * 100)) : 0;
 
+  const { currentUser } = useAuth();
+
   // Real completion rate calculation: average course progress if courses exist, otherwise today's study goal progress
   const completionRate = totalVideosCount > 0 ? overallCompletionRate : todayProgressPercent;
 
-  const displayName = userName || currentSettings?.userName || "SHAILENDRA PRATAP";
+  const displayName = currentUser?.displayName || userName || currentSettings?.userName || "Scholar";
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -157,7 +141,7 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
             <div className="relative shrink-0">
               <UserAvatar
                 userName={displayName}
-                customAvatarUrl={currentSettings?.userAvatarUrl}
+                customAvatarUrl={currentUser?.photoURL || currentSettings?.userAvatarUrl}
                 customSeed={currentSettings?.userAvatarSeed}
                 customStyle={currentSettings?.userAvatarStyle}
                 size="lg"
@@ -497,74 +481,76 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
         </div>
       </div>
 
-      {/* 5. RECENT MATERIALS Section */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-[10px] sm:text-xs font-extrabold text-slate-500 dark:text-zinc-500 uppercase tracking-widest">
-            RECENT MATERIALS
-          </span>
-          <button 
-            onClick={() => setActiveTab?.("library")}
-            className="text-xs font-bold text-blue-600 dark:text-blue-500 hover:text-blue-500 dark:hover:text-blue-400 cursor-pointer"
-          >
-            View all
-          </button>
-        </div>
-
-        {playlists.length === 0 && singleVideos.length === 0 ? (
-          <div 
-            onClick={() => setActiveTab?.("library")}
-            className="p-4 rounded-2xl bg-white dark:bg-[#111217] border border-slate-200 dark:border-[rgba(255,255,255,0.08)] shadow-xs dark:shadow-none hover:border-slate-300 dark:hover:border-zinc-700 flex items-center justify-between gap-3 cursor-pointer transition group"
-          >
-            <div className="flex items-center gap-3.5 min-w-0">
-              <div className="p-3 rounded-2xl bg-blue-600/15 text-blue-600 dark:text-blue-500 shrink-0 flex items-center justify-center">
-                <Folder className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
-                  No recent materials
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-zinc-400 truncate mt-0.5">
-                  Import lectures or courses to get started.
-                </p>
-              </div>
-            </div>
-
-            <ChevronRight className="w-5 h-5 text-slate-400 dark:text-zinc-500 group-hover:text-slate-700 dark:group-hover:text-zinc-300 transition-colors shrink-0" />
+      {/* 5. RECENT MATERIALS Section (Optional) */}
+      {showRecentMaterials && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-[10px] sm:text-xs font-extrabold text-slate-500 dark:text-zinc-500 uppercase tracking-widest">
+              RECENT MATERIALS
+            </span>
+            <button 
+              onClick={() => setActiveTab?.("library")}
+              className="text-xs font-bold text-blue-600 dark:text-blue-500 hover:text-blue-500 dark:hover:text-blue-400 cursor-pointer"
+            >
+              View all
+            </button>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            {playlists.slice(0, 2).map((p) => (
-              <div
-                key={p.id}
-                onClick={() => {
-                  if (onResumeSession) onResumeSession(p.id, "playlist");
-                  else setActiveTab?.("study");
-                }}
-                className="p-4 rounded-2xl bg-white dark:bg-[#111217] border border-slate-200 dark:border-[rgba(255,255,255,0.08)] hover:border-blue-500/50 flex items-center justify-between gap-3 cursor-pointer transition group"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-12 h-10 rounded-xl overflow-hidden bg-slate-100 dark:bg-zinc-800 shrink-0 relative">
-                    <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800"} className="w-full h-full object-cover" alt="" />
-                    <div className="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Play className="w-4 h-4 text-white fill-white" />
+
+          {playlists.length === 0 && singleVideos.length === 0 ? (
+            <div 
+              onClick={() => setActiveTab?.("library")}
+              className="p-4 rounded-2xl bg-white dark:bg-[#111217] border border-slate-200 dark:border-[rgba(255,255,255,0.08)] shadow-xs dark:shadow-none hover:border-slate-300 dark:hover:border-zinc-700 flex items-center justify-between gap-3 cursor-pointer transition group"
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="p-3 rounded-2xl bg-blue-600/15 text-blue-600 dark:text-blue-500 shrink-0 flex items-center justify-center">
+                  <Folder className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                    No recent materials
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 truncate mt-0.5">
+                    Import lectures or courses to get started.
+                  </p>
+                </div>
+              </div>
+
+              <ChevronRight className="w-5 h-5 text-slate-400 dark:text-zinc-500 group-hover:text-slate-700 dark:group-hover:text-zinc-300 transition-colors shrink-0" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {playlists.slice(0, 2).map((p) => (
+                <div
+                  key={p.id}
+                  onClick={() => {
+                    if (onResumeSession) onResumeSession(p.id, "playlist");
+                    else setActiveTab?.("study");
+                  }}
+                  className="p-4 rounded-2xl bg-white dark:bg-[#111217] border border-slate-200 dark:border-[rgba(255,255,255,0.08)] hover:border-blue-500/50 flex items-center justify-between gap-3 cursor-pointer transition group"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-12 h-10 rounded-xl overflow-hidden bg-slate-100 dark:bg-zinc-800 shrink-0 relative">
+                      <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800"} className="w-full h-full object-cover" alt="" />
+                      <div className="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Play className="w-4 h-4 text-white fill-white" />
+                      </div>
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="text-xs font-bold text-slate-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                        {p.title}
+                      </h3>
+                      <p className="text-[11px] text-slate-500 dark:text-zinc-400 truncate mt-0.5">
+                        {p.totalVideos} lectures • {p.channelName}
+                      </p>
                     </div>
                   </div>
-                  <div className="min-w-0">
-                    <h3 className="text-xs font-bold text-slate-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                      {p.title}
-                    </h3>
-                    <p className="text-[11px] text-slate-500 dark:text-zinc-400 truncate mt-0.5">
-                      {p.totalVideos} lectures • {p.channelName}
-                    </p>
-                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
                 </div>
-                <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition-transform shrink-0" />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
     </div>
   );

@@ -887,21 +887,59 @@ app.post("/api/ai/validate-key", async (req, res) => {
       contents: "Respond with OK.",
     });
     if (response && response.text) {
-      return res.json({ valid: true });
+      return res.json({ 
+        valid: true, 
+        message: "API key verified. Your Gemini AI features are ready." 
+      });
     }
-    return res.json({ valid: true, note: "Key registered successfully." });
+    return res.json({ valid: true, message: "API key verified and registered successfully." });
   } catch (err: any) {
     console.warn("[Gemini Validation Warning]:", err?.message || err);
-    const rawMsg = err?.message || String(err);
-    const isExplicitlyBadKey = rawMsg.includes("API_KEY_INVALID") || 
-                               rawMsg.toLowerCase().includes("api key not valid") || 
+    const rawMsg = (err?.message || String(err)).toLowerCase();
+    
+    const isExplicitlyBadKey = rawMsg.includes("api_key_invalid") || 
+                               rawMsg.includes("api key not valid") || 
                                rawMsg.includes("401") || 
-                               rawMsg.includes("UNAUTHENTICATED");
+                               rawMsg.includes("unauthenticated") ||
+                               rawMsg.includes("invalid api key");
     if (isExplicitlyBadKey) {
-      return res.status(400).json({ error: "Invalid API key. Please verify your key from Google AI Studio (aistudio.google.com/api-keys)." });
+      return res.status(400).json({ 
+        valid: false,
+        errorType: "invalid",
+        error: "The API key appears to be invalid. Please create a new key in Google AI Studio." 
+      });
     }
-    // For transient timeouts or new key warmup, accept key without blocking user
-    return res.json({ valid: true, note: "API key accepted and saved." });
+
+    const isQuota = rawMsg.includes("429") || 
+                    rawMsg.includes("resource_exhausted") || 
+                    rawMsg.includes("quota exceeded") || 
+                    rawMsg.includes("rate limit");
+    if (isQuota) {
+      return res.status(429).json({
+        valid: false,
+        errorType: "quota",
+        error: "This API key has reached its available quota. Try another key or check your Google AI Studio usage."
+      });
+    }
+
+    const isModelUnavailable = rawMsg.includes("503") || 
+                               rawMsg.includes("unavailable") || 
+                               rawMsg.includes("high demand") || 
+                               rawMsg.includes("not found");
+    if (isModelUnavailable) {
+      return res.status(503).json({
+        valid: false,
+        errorType: "model",
+        error: "This Gemini model isn't available for this API key. Try another supported model or wait a moment."
+      });
+    }
+
+    // Network / generic fallback error
+    return res.status(500).json({ 
+      valid: false, 
+      errorType: "network",
+      error: "LearnStudy couldn't connect to Gemini. Check your internet connection and try again." 
+    });
   }
 });
 

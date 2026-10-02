@@ -43,11 +43,16 @@ import {
   Flame,
   Globe,
   Github,
-  Twitter
+  Twitter,
+  Key,
+  ShieldCheck,
+  LogOut
 } from "lucide-react";
 import { StudySettings } from "../types";
 import { Storage } from "../utils/storage";
 import { UserAvatar } from "./UserAvatar";
+import { useAuth } from "../context/AuthContext";
+import { GoogleSignInButton } from "./auth/GoogleSignInButton";
 import {
   PRESET_DOODLE_AVATARS,
   DOODLE_STYLES,
@@ -104,6 +109,8 @@ export function SettingsPanel({
   toast,
   onNavigateTab,
 }: SettingsPanelProps) {
+  const { currentUser, userProfile, signOutUser } = useAuth();
+
   // Local edit state for sticky save bar
   const [localSettings, setLocalSettings] = useState<StudySettings>({ ...settings });
   const [savedSettings, setSavedSettings] = useState<StudySettings>({ ...settings });
@@ -186,7 +193,7 @@ export function SettingsPanel({
   const maskApiKey = (key: string | null) => {
     if (!key) return "No Key Connected";
     if (key.length <= 8) return "••••••••••••";
-    return key.substring(0, 4) + "••••••••••••••••" + key.substring(key.length - 4);
+    return key.substring(0, 4) + "••••••••••••" + key.substring(key.length - 3);
   };
 
   // Test Gemini API key
@@ -196,18 +203,23 @@ export function SettingsPanel({
     try {
       const key = getGeminiKey();
       if (!key) throw new Error("No connected Gemini key found.");
-      const { validateGeminiKey } = await import("../utils/gemini");
-      const isValid = await validateGeminiKey(key);
-      if (isValid) {
+      const { testGeminiKey } = await import("../utils/gemini");
+      const result = await testGeminiKey(key);
+      if (result.valid) {
         setTestResult({
           type: "success",
-          message: "API key validated successfully! Gemini 2.5 Flash connection is active.",
+          message: "✅ API key verified. Your Gemini AI features are ready.",
+        });
+      } else {
+        setTestResult({
+          type: "error",
+          message: `${result.title}: ${result.message}`,
         });
       }
     } catch (err: any) {
       setTestResult({
         type: "error",
-        message: err.message || "Failed to validate API Key. Please verify key permissions.",
+        message: err.message || "LearnStudy couldn't connect to Gemini. Check your internet connection and try again.",
       });
     } finally {
       setIsTestingKey(false);
@@ -369,8 +381,94 @@ export function SettingsPanel({
                 General Settings
               </h2>
               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                Manage your user profile identity and workspace targets.
+                Manage your user profile identity, Google authentication, and workspace targets.
               </p>
+            </div>
+
+            {/* Google Authentication & Account Card */}
+            <div className="bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 rounded-3xl p-6 md:p-8 shadow-xs space-y-5 hover:-translate-y-0.5 transition-all duration-300">
+              <div className="flex items-start justify-between flex-wrap gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                    <h3 className="text-base font-extrabold text-slate-900 dark:text-zinc-100">
+                      Google Account & Cloud Sync
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
+                    Authenticate securely with Google to synchronize study playlists, notes, bookmarks, and streaks to Firebase Realtime Database.
+                  </p>
+                </div>
+
+                {currentUser ? (
+                  <span className="px-3 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-black rounded-full border border-emerald-500/20 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    Authenticated with Google
+                  </span>
+                ) : (
+                  <span className="px-3 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-bold rounded-full border border-amber-500/20">
+                    Not Signed In
+                  </span>
+                )}
+              </div>
+
+              {currentUser ? (
+                <div className="p-4 sm:p-5 bg-slate-50 dark:bg-zinc-950/60 border border-slate-200/70 dark:border-zinc-800 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    {currentUser.photoURL ? (
+                      <img
+                        src={currentUser.photoURL}
+                        alt={currentUser.displayName || "Google User"}
+                        className="w-12 h-12 rounded-full object-cover border-2 border-white dark:border-zinc-800 shadow-sm shrink-0"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-black text-base flex items-center justify-center shrink-0 shadow-sm">
+                        {(currentUser.displayName || currentUser.email || "G").charAt(0).toUpperCase()}
+                      </div>
+                    )}
+
+                    <div className="min-w-0">
+                      <div className="text-sm font-extrabold text-slate-900 dark:text-zinc-50 truncate">
+                        {currentUser.displayName || "Google Scholar"}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-zinc-400 truncate">
+                        {currentUser.email}
+                      </div>
+                      <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono truncate mt-0.5">
+                        UID: {currentUser.uid} • Realtime Database: users/{currentUser.uid}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await signOutUser();
+                      toast.info("Signed Out", "You have signed out of your Google account.");
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="p-4 sm:p-5 bg-gradient-to-br from-blue-50/60 to-indigo-50/40 dark:from-blue-950/20 dark:to-indigo-950/10 border border-blue-200/60 dark:border-blue-800/30 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="space-y-1 text-center sm:text-left">
+                    <div className="text-xs font-bold text-slate-800 dark:text-zinc-200">
+                      Single Sign-On with Google
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-zinc-400">
+                      No password required. One-click sign-in to protect and restore your learning history.
+                    </p>
+                  </div>
+
+                  <div className="w-full sm:w-auto shrink-0">
+                    <GoogleSignInButton variant="compact" label="Continue with Google" />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Display Name Card */}
@@ -873,27 +971,27 @@ export function SettingsPanel({
           <div className="space-y-6 animate-in fade-in duration-200">
             <div>
               <h2 className="text-xl font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-violet-500 animate-pulse" />
-                Gemini AI Engine Settings
+                <Sparkles className="w-5 h-5 text-indigo-500 animate-pulse" />
+                Gemini AI Key & Engine
               </h2>
               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                Manage your Google GenAI API connection powering lecture summaries, tutor chat & mastery quizzes.
+                Add your Google AI Studio API key to use AI-powered features in LearnStudy.
               </p>
             </div>
 
             {/* Connection Status & Quality Metrics */}
-            <div className="bg-gradient-to-br from-violet-600/10 via-purple-600/10 to-indigo-600/10 border border-violet-500/20 dark:border-violet-500/30 rounded-3xl p-6 md:p-8 shadow-xs space-y-6">
+            <div className="bg-gradient-to-br from-indigo-600/10 via-purple-600/10 to-blue-600/10 border border-indigo-500/20 dark:border-indigo-500/30 rounded-3xl p-6 md:p-8 shadow-xs space-y-6">
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="p-3 bg-gradient-to-br from-violet-600 to-indigo-600 text-white rounded-2xl shadow-lg shadow-violet-500/20">
+                  <div className="p-3 bg-gradient-to-br from-indigo-600 to-purple-600 text-white rounded-2xl shadow-lg shadow-indigo-500/20">
                     <Sparkles className="w-6 h-6" />
                   </div>
                   <div>
                     <h3 className="text-base font-extrabold text-slate-900 dark:text-zinc-50">
-                      Gemini 2.5 Flash Model
+                      Google GenAI Model
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-zinc-400">
-                      Direct client-to-API zero-latency connection
+                      Bring Your Own Key (BYOK) — Private Local Storage
                     </p>
                   </div>
                 </div>
@@ -902,11 +1000,11 @@ export function SettingsPanel({
                   className={`px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${
                     hasGeminiKeyInState
                       ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
-                      : "bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30"
+                      : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
                   }`}
                 >
-                  <span className={`w-2 h-2 rounded-full ${hasGeminiKeyInState ? "bg-emerald-500 animate-ping" : "bg-red-500"}`} />
-                  {hasGeminiKeyInState ? "● Connected" : "● Disconnected"}
+                  <span className={`w-2 h-2 rounded-full ${hasGeminiKeyInState ? "bg-emerald-500" : "bg-amber-500"}`} />
+                  {hasGeminiKeyInState ? "API key configured ✓" : "No API key added"}
                 </span>
               </div>
 
@@ -915,28 +1013,28 @@ export function SettingsPanel({
                 <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-3.5 rounded-2xl border border-slate-200/80 dark:border-zinc-800">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Latency</div>
                   <div className="text-sm font-extrabold text-slate-800 dark:text-zinc-100 mt-1 flex items-center gap-1">
-                    <Zap className="w-3.5 h-3.5 text-amber-500" /> ~110 ms
+                    <Zap className="w-3.5 h-3.5 text-amber-500" /> Fast
                   </div>
                 </div>
 
                 <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-3.5 rounded-2xl border border-slate-200/80 dark:border-zinc-800">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Model Alias</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Active Engine</div>
                   <div className="text-sm font-extrabold text-slate-800 dark:text-zinc-100 mt-1">
-                    gemini-2.5-flash
+                    gemini-3.7-flash
                   </div>
                 </div>
 
                 <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-3.5 rounded-2xl border border-slate-200/80 dark:border-zinc-800">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Last Used</div>
-                  <div className="text-sm font-extrabold text-slate-800 dark:text-zinc-100 mt-1">
-                    Just now
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Privacy</div>
+                  <div className="text-sm font-extrabold text-slate-800 dark:text-zinc-100 mt-1 flex items-center gap-1">
+                    <Lock className="w-3.5 h-3.5 text-indigo-500" /> Device Only
                   </div>
                 </div>
 
                 <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xs p-3.5 rounded-2xl border border-slate-200/80 dark:border-zinc-800">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Quota Tier</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Tier</div>
                   <div className="text-sm font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">
-                    Free / BYOK
+                    Free BYOK
                   </div>
                 </div>
               </div>
@@ -946,10 +1044,10 @@ export function SettingsPanel({
             <div className="bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 rounded-3xl p-6 md:p-8 shadow-xs space-y-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-100">
-                  API Key Management
+                  Gemini API Key
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                  Your Google AI Studio key is saved securely in your browser's private local storage.
+                  🔒 Your API key is stored locally in this browser and isn't uploaded to LearnStudy's server.
                 </p>
               </div>
 
@@ -1005,9 +1103,9 @@ export function SettingsPanel({
                       type="button"
                       disabled={isTestingKey}
                       onClick={handleTestKey}
-                      className="bg-violet-600 hover:bg-violet-700 text-white font-extrabold text-xs px-5 py-2.5 rounded-2xl transition shadow-md shadow-violet-500/20 cursor-pointer disabled:opacity-50"
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs px-5 py-2.5 rounded-2xl transition shadow-md shadow-indigo-500/20 cursor-pointer disabled:opacity-50"
                     >
-                      {isTestingKey ? "Testing Connection..." : "Test Connection"}
+                      {isTestingKey ? "Testing Key..." : "Test Key"}
                     </button>
 
                     <button
@@ -1015,7 +1113,7 @@ export function SettingsPanel({
                       onClick={() => setOnboardingOpen(true)}
                       className="bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-200 font-bold text-xs px-5 py-2.5 rounded-2xl transition cursor-pointer"
                     >
-                      Replace Key
+                      Change Key
                     </button>
 
                     <button
@@ -1037,22 +1135,42 @@ export function SettingsPanel({
                       }}
                       className="bg-red-50 dark:bg-red-950/20 text-red-600 hover:bg-red-100 dark:hover:bg-red-900/30 border border-red-200 dark:border-red-900/30 font-bold text-xs px-5 py-2.5 rounded-2xl transition cursor-pointer"
                     >
-                      Remove Key
+                      Remove
                     </button>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <p className="text-xs text-slate-500 dark:text-zinc-400">
-                    Your Gemini API key is currently disconnected. Connect your free Google AI Studio key to unlock AI notes, chapter summaries & tutor chat.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setOnboardingOpen(true)}
-                    className="bg-violet-600 hover:bg-violet-700 text-white font-extrabold text-xs px-6 py-3 rounded-2xl shadow-lg shadow-violet-500/20 transition cursor-pointer"
-                  >
-                    Connect Free API Key
-                  </button>
+                  <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-500/30 rounded-2xl p-4 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-black text-amber-800 dark:text-amber-300">
+                        No API key added
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                        Add your Gemini API key to enable AI-powered summaries, notes & tutor assistance.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setOnboardingOpen(true)}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs px-6 py-3 rounded-2xl shadow-lg shadow-indigo-500/20 transition cursor-pointer flex items-center gap-2"
+                    >
+                      <Key className="w-4 h-4" />
+                      Add Gemini API Key
+                    </button>
+
+                    <a
+                      href="https://aistudio.google.com/app/apikey"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-bold text-xs px-5 py-3 rounded-2xl transition flex items-center gap-1.5"
+                    >
+                      Get API Key ↗
+                    </a>
+                  </div>
                 </div>
               )}
             </div>

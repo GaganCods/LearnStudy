@@ -609,7 +609,7 @@ export function AIStudyCompanion({
                 onClick={onOpenKeyModal}
                 className="text-xs font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5 cursor-pointer"
               >
-                Update API Key <ChevronRight className="w-3 h-3" />
+                {hasKey ? "Check API Key" : "Add Gemini API Key"} <ChevronRight className="w-3 h-3" />
               </button>
             </div>
           </div>
@@ -624,24 +624,24 @@ export function AIStudyCompanion({
             <div className="p-3 bg-indigo-500/5 dark:bg-indigo-500/10 rounded-full border border-indigo-500/15 mb-3">
               <Key className="w-6 h-6 text-indigo-500" />
             </div>
-            <h3 className="text-sm font-extrabold text-slate-800 dark:text-zinc-200">Connect Gemini API</h3>
-            <p className="text-xs text-slate-400 dark:text-zinc-500 mt-2 leading-relaxed">
-              Unlock the complete AI Study Materials Generator suite, interactive doubt clearing, and customized concept quizzes by adding your Gemini API key.
+            <h3 className="text-sm font-extrabold text-slate-800 dark:text-zinc-200">No API key added</h3>
+            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-2 leading-relaxed">
+              Add your Google AI Studio API key to use AI-powered features in LearnStudy, including lecture summaries, personalized study notes, doubt solving, and practice quizzes.
             </p>
             <div className="flex items-center gap-3 mt-5 w-full">
               <button
                 onClick={onOpenKeyModal}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs py-2.5 rounded-xl transition shadow-md shadow-indigo-500/15 cursor-pointer"
               >
-                Connect Key
+                Add Gemini API Key
               </button>
               <a
-                href="https://aistudio.google.com/api-keys"
+                href="https://aistudio.google.com/app/apikey"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex-1 border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-900 text-slate-700 dark:text-zinc-300 font-bold text-xs py-2.5 rounded-xl transition flex items-center justify-center gap-1 cursor-pointer"
               >
-                Get Free Key
+                Get API Key ↗
               </a>
             </div>
           </div>

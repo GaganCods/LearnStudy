@@ -47,6 +47,9 @@ import { FeedbackModal } from "./components/feedback/FeedbackModal";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { UserAvatar } from "./components/UserAvatar";
 import { PageNavigationDirectory } from "./components/PageNavigationDirectory";
+import { useAuth } from "./context/AuthContext";
+import { GoogleSignInButton } from "./components/auth/GoogleSignInButton";
+import { AuthModal } from "./components/auth/AuthModal";
 import { 
   APP_PAGES, 
   searchPages, 
@@ -261,6 +264,10 @@ async function fetchVideoFromYouTubeClient(id: string): Promise<any> {
 
 export default function App() {
   const { toast, soundEnabled, setSoundEnabled } = useToast();
+  const { currentUser, userProfile, signOutUser } = useAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
   // Pomodoro Study Timer Context
   const {
     activeState: pomoState,
@@ -732,20 +739,34 @@ export default function App() {
   useEffect(() => {
     syncStateToUrl(activeTab, {
       videoId: activeTab === "study" ? activeVideoId : undefined,
+      videoTitle: activeTab === "study" ? activeVideoTitle : undefined,
       playlistId: activeTab === "study" && activeSession?.type === "playlist" ? activeSession.id : undefined,
       searchQuery: searchQuery || undefined,
       replace: true
     });
-  }, [activeTab, activeVideoId, activeSession, searchQuery]);
+  }, [activeTab, activeVideoId, activeVideoTitle, activeSession, searchQuery]);
 
-  // Sync Theme
+  // Sync Theme with smooth transition
   useEffect(() => {
     const root = document.documentElement;
-    const updateTheme = () => {
-      if (settings.theme === "dark" || (settings.theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+    const applyThemeClasses = (isDark: boolean) => {
+      if (isDark) {
         root.classList.add("dark");
       } else {
         root.classList.remove("dark");
+      }
+    };
+
+    const updateTheme = () => {
+      const isDark = settings.theme === "dark" || (settings.theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      
+      // If View Transition API is supported, use it for seamless transition
+      if ("startViewTransition" in document && typeof (document as any).startViewTransition === "function") {
+        (document as any).startViewTransition(() => {
+          applyThemeClasses(isDark);
+        });
+      } else {
+        applyThemeClasses(isDark);
       }
     };
 
@@ -2423,6 +2444,52 @@ export default function App() {
     return all.sort((a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime())[0];
   }, [playlists, singleVideos]);
 
+  // Combined Recent Materials list (playlists and single video lectures)
+  const recentMaterialsList = useMemo(() => {
+    const combined: Array<{
+      id: string;
+      type: "playlist" | "video";
+      title: string;
+      channelName: string;
+      thumbnail: string;
+      progress: number;
+      completed: boolean;
+      duration?: string;
+      totalVideos?: number;
+      lastWatchedAt: string;
+    }> = [];
+
+    playlists.forEach(p => {
+      combined.push({
+        id: p.id,
+        type: "playlist",
+        title: p.title || "YouTube Playlist",
+        channelName: p.channelName || "Unknown Creator",
+        thumbnail: p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800",
+        progress: p.progress || 0,
+        completed: (p.progress || 0) >= 95,
+        totalVideos: p.totalVideos || p.videos?.length || 0,
+        lastWatchedAt: p.lastWatchedAt || new Date(0).toISOString()
+      });
+    });
+
+    singleVideos.forEach(v => {
+      combined.push({
+        id: v.id,
+        type: "video",
+        title: v.title || "YouTube Video",
+        channelName: v.channelName || "Unknown Creator",
+        thumbnail: v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+        progress: v.progress || 0,
+        completed: !!v.completed,
+        duration: v.duration,
+        lastWatchedAt: v.lastWatchedAt || new Date(0).toISOString()
+      });
+    });
+
+    return combined.sort((a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime());
+  }, [playlists, singleVideos]);
+
   // Sorted and filtered watch history items (most recently watched first)
   const sortedHistoryItems = useMemo(() => {
     let items: Array<PlaylistInfo | SingleVideoInfo> = [];
@@ -2702,6 +2769,78 @@ export default function App() {
             >
               {settings.theme === "dark" ? <Moon className="w-4 h-4 sm:w-5 sm:h-5" /> : settings.theme === "system" ? <Laptop className="w-4 h-4 sm:w-5 sm:h-5" /> : <Sun className="w-4 h-4 sm:w-5 sm:h-5" />}
             </button>
+
+            {/* Google Authentication User Header Pill / Sign In */}
+            {currentUser ? (
+              <div className="relative">
+                <button
+                  onClick={() => setUserMenuOpen(prev => !prev)}
+                  className="flex items-center gap-2 p-1 pl-1.5 pr-2.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200/80 dark:border-zinc-800 transition-all cursor-pointer group"
+                  title={`${currentUser.displayName || currentUser.email} (Google Account)`}
+                >
+                  {currentUser.photoURL ? (
+                    <img
+                      src={currentUser.photoURL}
+                      alt={currentUser.displayName || "Google User"}
+                      className="w-7 h-7 rounded-full object-cover border border-white dark:border-zinc-700 shadow-xs"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
+                      {(currentUser.displayName || currentUser.email || "G").charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <span className="text-xs font-bold text-slate-800 dark:text-zinc-200 max-w-[100px] truncate hidden sm:inline">
+                    {currentUser.displayName?.split(" ")[0] || "Account"}
+                  </span>
+                  <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-zinc-300" />
+                </button>
+
+                {userMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
+                    <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl z-50 p-2 py-2.5 animate-in fade-in slide-in-from-top-2 duration-150 text-left">
+                      <div className="px-3 py-2 border-b border-slate-100 dark:border-zinc-800 mb-1.5">
+                        <div className="text-xs font-extrabold text-slate-900 dark:text-zinc-50 truncate">
+                          {currentUser.displayName || "Google Scholar"}
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-zinc-400 truncate">
+                          {currentUser.email}
+                        </div>
+                        <div className="mt-1 flex items-center gap-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md w-fit">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                          Google Synchronized
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setActiveTab("settings");
+                          setUserMenuOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-800 transition flex items-center gap-2 cursor-pointer"
+                      >
+                        <Settings className="w-4 h-4 text-slate-400" />
+                        <span>Account & Settings</span>
+                      </button>
+
+                      <button
+                        onClick={async () => {
+                          setUserMenuOpen(false);
+                          await signOutUser();
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30 transition flex items-center gap-2 cursor-pointer"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        <span>Sign Out</span>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <GoogleSignInButton variant="header" />
+            )}
           </div>
         </header>
       )}
@@ -2895,50 +3034,56 @@ export default function App() {
 
             {/* Bottom Account Drawer Section */}
             <div className="p-3.5 border-t border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-white/2 shrink-0">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <UserAvatar
-                    userName={settings.userName || "Scholar"}
-                    customAvatarUrl={settings.userAvatarUrl}
-                    customSeed={settings.userAvatarSeed}
-                    customStyle={settings.userAvatarStyle}
-                    size="sm"
-                    className="shrink-0 cursor-pointer"
+              {currentUser ? (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {currentUser.photoURL ? (
+                      <img
+                        src={currentUser.photoURL}
+                        alt={currentUser.displayName || "User"}
+                        className="w-8 h-8 rounded-full object-cover border border-white dark:border-zinc-700 shrink-0 shadow-xs"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <UserAvatar
+                        userName={currentUser.displayName || settings.userName || "Scholar"}
+                        size="sm"
+                        className="shrink-0 cursor-pointer"
+                      />
+                    )}
+                    <div className="truncate">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {currentUser.displayName || "Google Scholar"}
+                      </div>
+                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold truncate flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        Google Sync Active
+                      </div>
+                    </div>
+                  </div>
+                  <button
                     onClick={() => {
                       setMobileSidebarOpen(false);
                       setActiveTab("settings");
                     }}
-                  />
-                  <div className="truncate">
-                    <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                      {settings.userName || "Scholar"} Workspace
-                    </div>
-                    <div className="text-[10px] text-slate-500 dark:text-white/50 font-semibold">
-                      Local Offline Mode
-                    </div>
-                  </div>
+                    className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-zinc-800 transition cursor-pointer"
+                    title="Settings"
+                  >
+                    <Settings className="w-4 h-4" />
+                  </button>
                 </div>
-                <button
-                  onClick={() => {
-                    setMobileSidebarOpen(false);
-                    setActiveTab("settings");
-                  }}
-                  className={`relative p-2 h-[38px] min-w-[80px] flex items-center justify-center rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer text-xs font-bold transition-all duration-250 ${
-                    activeTab === "settings" && !searchQuery
-                      ? "text-slate-900 dark:text-white"
-                      : "text-slate-600 dark:text-white/60 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5"
-                  }`}
-                >
-                  {activeTab === "settings" && !searchQuery && (
-                    <motion.div
-                      layoutId="mobile-nav-active"
-                      className="absolute inset-0 bg-slate-100 border border-slate-200 shadow-xs dark:bg-[linear-gradient(90deg,rgba(255,255,255,0.06),rgba(78,94,255,0.16)_55%,rgba(78,94,255,0.42))] dark:border-white/5 rounded-xl"
-                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                    />
-                  )}
-                  <span className="relative z-10">Settings</span>
-                </button>
-              </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-semibold text-slate-500 dark:text-zinc-400 text-center">
+                    Sync your modules & notes
+                  </div>
+                  <GoogleSignInButton
+                    variant="compact"
+                    onSuccess={() => setMobileSidebarOpen(false)}
+                    label="Sign In with Google"
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -4271,89 +4416,138 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* 2. RECENT LECTURES / PLAYLISTS GRID */}
+                  {/* RECENT MATERIALS SECTION (Positioned directly below Continue Learning) */}
                   <div className="space-y-4">
-                    <h2 className="text-lg font-bold text-slate-950 dark:text-zinc-50 flex items-center gap-2">
-                      <BookOpen className="w-5 h-5 text-blue-500" />
-                      Recently Studied
-                    </h2>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-blue-500/10 dark:bg-blue-400/10 flex items-center justify-center text-blue-600 dark:text-blue-400">
+                          <Folder className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-zinc-50 tracking-tight flex items-center gap-2">
+                            Recent Materials
+                            {recentMaterialsList.length > 0 && (
+                              <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 border border-slate-200/60 dark:border-zinc-750">
+                                {recentMaterialsList.length}
+                              </span>
+                            )}
+                          </h2>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => { setActiveTab("library"); setSearchQuery(""); }}
+                        className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>View all in Library</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
 
-                    {[...playlists, ...singleVideos].length === 0 ? (
-                      <div className="text-center py-12 bg-white dark:bg-zinc-900 rounded-3xl border border-slate-200 dark:border-zinc-900">
-                        <Tv className="w-12 h-12 text-slate-300 dark:text-zinc-700 mx-auto" />
-                        <h3 className="text-base font-bold text-slate-700 dark:text-zinc-300 mt-3">Ready to study?</h3>
-                        <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-xs mx-auto mt-1">
-                          No history logged yet. Paste any educational playlist URL or single lecture URL above to start studying distraction-free.
-                        </p>
+                    {recentMaterialsList.length === 0 ? (
+                      <div 
+                        onClick={() => {
+                          const input = document.getElementById("youtube-url-input") as HTMLInputElement;
+                          if (input) {
+                            input.focus();
+                            input.scrollIntoView({ behavior: "smooth", block: "center" });
+                          }
+                        }}
+                        className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-center flex flex-col items-center justify-center gap-3 cursor-pointer hover:border-blue-500/50 transition-all group"
+                      >
+                        <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 flex items-center justify-center group-hover:scale-110 transition-transform">
+                          <Folder className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-100">No recent materials yet</h3>
+                          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-sm">
+                            Paste any YouTube playlist or video link in the Import box above to start studying distraction-free.
+                          </p>
+                        </div>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {playlists.map((p) => (
-                          <div 
-                            key={p.id} 
-                            onClick={() => resumeLearningSession(p.id, "playlist")}
-                            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {recentMaterialsList.slice(0, 6).map((item) => (
+                          <div
+                            key={`${item.type}-${item.id}`}
+                            onClick={() => {
+                              if (item.type === "playlist") {
+                                const targetPl = playlists.find(p => p.id === item.id);
+                                if (targetPl) {
+                                  setActiveSession({ id: targetPl.id, type: "playlist" });
+                                  const firstVid = targetPl.videos.find(v => v.progress > 0 && v.progress < 95) || targetPl.videos[0];
+                                  if (firstVid) {
+                                    setActiveVideoId(firstVid.id);
+                                    setActiveVideoTitle(firstVid.title);
+                                    setActiveVideoChannel(firstVid.channelName);
+                                  }
+                                  setActiveTab("study");
+                                }
+                              } else {
+                                setActiveSession({ id: item.id, type: "video" });
+                                setActiveVideoId(item.id);
+                                setActiveVideoTitle(item.title);
+                                setActiveVideoChannel(item.channelName);
+                                setActiveTab("study");
+                              }
+                            }}
+                            className="group p-3.5 bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 rounded-2xl cursor-pointer hover:border-blue-500/50 hover:shadow-lg transition-all duration-300 flex flex-col justify-between"
                           >
                             <div>
-                              <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={p.thumbnail || "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&auto=format&fit=crop&q=60"} className="w-full h-full object-cover" alt={p.title} />
-                                <span className="absolute bottom-2.5 right-2.5 text-[10px] bg-black/80 font-bold px-2 py-0.5 rounded text-white flex items-center gap-1">
-                                  Playlist ({p.totalVideos} videos)
-                                </span>
-                              </div>
-                              <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
-                                {p.title}
-                              </h3>
-                              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{p.channelName}</p>
-                            </div>
-                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
-                              <div className="flex items-center gap-1.5">
-                                <CheckCircle className="w-3.5 h-3.5 text-blue-500" />
-                                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">{p.progress}% done</span>
-                              </div>
-                              <button 
-                                onClick={(e) => handleToggleFav("playlist", p.id, e)}
-                                className="p-1 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded-lg text-slate-400 hover:text-amber-500 transition"
-                              >
-                                <Star className={`w-4 h-4 ${favorites.playlists.includes(p.id) ? "fill-amber-500 text-amber-500" : ""}`} />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-
-                        {singleVideos.map((v) => (
-                          <div 
-                            key={v.id} 
-                            onClick={() => resumeLearningSession(v.id, "video")}
-                            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-4 rounded-3xl cursor-pointer hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition flex flex-col justify-between"
-                          >
-                            <div>
-                              <div className="relative aspect-video rounded-2xl overflow-hidden border border-slate-100 dark:border-zinc-850">
-                                <img src={v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`} className="w-full h-full object-cover" alt={v.title} />
-                                {v.duration !== "LIVE" && (
-                                  <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded text-white bg-black/80">
-                                    {v.duration}
-                                  </span>
+                              <div className="relative aspect-video rounded-xl overflow-hidden bg-slate-100 dark:bg-zinc-800 mb-3">
+                                <img 
+                                  src={item.thumbnail} 
+                                  alt={item.title} 
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                                  referrerPolicy="no-referrer"
+                                />
+                                <div className="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <div className="p-2.5 rounded-full bg-white/90 dark:bg-zinc-900/90 shadow-md transform scale-90 group-hover:scale-100 transition-transform">
+                                    <Play className="w-4 h-4 text-blue-600 dark:text-blue-400 fill-current" />
+                                  </div>
+                                </div>
+                                <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/80 text-white text-[10px] font-bold backdrop-blur-xs">
+                                  {item.type === "playlist" ? `${item.totalVideos} Lectures` : (item.duration || "Video")}
+                                </div>
+                                {item.completed && (
+                                  <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-emerald-600/90 text-white text-[10px] font-bold backdrop-blur-xs">
+                                    ✓ Completed
+                                  </div>
                                 )}
                               </div>
-                              <h3 className="font-bold text-sm text-slate-950 dark:text-zinc-50 mt-3 line-clamp-2 leading-tight">
-                                {v.title}
+
+                              <h3 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-zinc-50 line-clamp-2 leading-tight group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                {item.title}
                               </h3>
-                              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">{v.channelName}</p>
+                              <p className="text-[11px] text-slate-500 dark:text-zinc-400 font-medium truncate mt-1">
+                                {item.channelName}
+                              </p>
                             </div>
-                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
-                              <div className="flex items-center gap-1.5">
-                                <CheckCircle className={`w-3.5 h-3.5 ${v.completed ? "text-emerald-500" : "text-slate-400"}`} />
-                                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-300">
-                                  {v.progress}% watched
+
+                            <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-zinc-800 flex items-center justify-between text-xs">
+                              <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500">
+                                {item.progress > 0 ? `${item.progress}% completed` : "Ready to study"}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <button 
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleFav(item.type, item.id, e);
+                                  }}
+                                  className={`p-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg transition cursor-pointer ${
+                                    (item.type === "playlist" ? favorites.playlists.includes(item.id) : favorites.videos.includes(item.id))
+                                      ? "text-rose-500"
+                                      : "text-slate-400 hover:text-rose-500 dark:text-zinc-500 dark:hover:text-rose-400"
+                                  }`}
+                                  title={(item.type === "playlist" ? favorites.playlists.includes(item.id) : favorites.videos.includes(item.id)) ? "Remove from Favorites" : "Add to Favorites"}
+                                >
+                                  <Heart className={`w-3.5 h-3.5 ${(item.type === "playlist" ? favorites.playlists.includes(item.id) : favorites.videos.includes(item.id)) ? "fill-rose-500 text-rose-500" : ""}`} />
+                                </button>
+                                <span className="text-blue-600 dark:text-blue-400 font-bold text-[11px] group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5">
+                                  <span>Resume</span>
+                                  <ChevronRight className="w-3 h-3" />
                                 </span>
                               </div>
-                              <button 
-                                onClick={(e) => handleToggleFav("video", v.id, e)}
-                                className="p-1 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded-lg text-slate-400 hover:text-amber-500 transition"
-                              >
-                                <Star className={`w-4 h-4 ${favorites.videos.includes(v.id) ? "fill-amber-500 text-amber-500" : ""}`} />
-                              </button>
                             </div>
                           </div>
                         ))}
@@ -5586,7 +5780,7 @@ export default function App() {
                       <Heart className="w-12 h-12 text-slate-300 dark:text-zinc-700 mx-auto" />
                       <h3 className="text-base font-bold text-slate-700 dark:text-zinc-300 mt-3">No favorite modules</h3>
                       <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-xs mx-auto mt-1">
-                        Pin a playlist or lecture using the star icon to easily access them here.
+                        Pin a playlist or lecture using the heart icon to easily access them here.
                       </p>
                     </div>
                   ) : (
@@ -5596,7 +5790,7 @@ export default function App() {
                           onClick={() => setFavTypeFilter("all")}
                           className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${favTypeFilter === "all" ? "bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-50 shadow-sm" : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-300"}`}
                         >
-                          <Star className="w-3.5 h-3.5" />
+                          <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500" />
                           All ({playlists.filter(p => favorites.playlists.includes(p.id)).length + singleVideos.filter(v => favorites.videos.includes(v.id)).length})
                         </button>
                         <button
@@ -5623,8 +5817,8 @@ export default function App() {
                           </h3>
                           <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-xs mx-auto mt-1">
                             {favTypeFilter === "playlist" 
-                              ? "Pin a playlist using the star icon to easily access whole modules here."
-                              : "Click 'Save Lecture' inside the study page to add specific lessons here."
+                              ? "Pin a playlist using the heart icon to easily access whole modules here."
+                              : "Click 'Save' inside the study page or heart on cards to add specific lessons here."
                             }
                           </p>
                         </div>
@@ -5659,10 +5853,10 @@ export default function App() {
                                     <div className="flex items-center gap-1">
                                       <button 
                                         onClick={(e) => handleToggleFav("playlist", p.id, e)}
-                                        className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-lg text-amber-500 transition"
-                                        title="Unfavorite"
+                                        className="p-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg text-rose-500 transition cursor-pointer"
+                                        title="Remove from favorites"
                                       >
-                                        <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
+                                        <Heart className="w-4 h-4 fill-rose-500 text-rose-500" />
                                       </button>
                                       <button 
                                         onClick={(e) => {
@@ -5717,10 +5911,10 @@ export default function App() {
                                     <div className="flex items-center gap-1">
                                       <button 
                                         onClick={(e) => handleToggleFav("video", v.id, e)}
-                                        className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-lg text-amber-500 transition"
-                                        title="Unfavorite"
+                                        className="p-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg text-rose-500 transition cursor-pointer"
+                                        title="Remove from favorites"
                                       >
-                                        <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
+                                        <Heart className="w-4 h-4 fill-rose-500 text-rose-500" />
                                       </button>
                                       <button 
                                         onClick={(e) => {
@@ -6285,7 +6479,11 @@ export default function App() {
         onClose={() => setFeedbackModalOpen(false)}
       />
 
-
+      {/* Google Authentication Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+      />
 
     </div>
   );
