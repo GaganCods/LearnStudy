@@ -30,8 +30,10 @@ import {
   set, 
   get, 
   update, 
+  remove,
   child,
   onValue,
+  off,
   Database
 } from "firebase/database";
 import rawConfig from "../../firebase-applet-config.json";
@@ -99,8 +101,10 @@ export {
   set,
   get,
   update,
+  remove,
   child,
   onValue,
+  off,
   collection,
   doc,
   setDoc,

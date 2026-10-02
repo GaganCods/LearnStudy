@@ -50,6 +50,7 @@ import { PageNavigationDirectory } from "./components/PageNavigationDirectory";
 import { useAuth } from "./context/AuthContext";
 import { GoogleSignInButton } from "./components/auth/GoogleSignInButton";
 import { AuthModal } from "./components/auth/AuthModal";
+import { LandingPage } from "./components/LandingPage";
 import { 
   APP_PAGES, 
   searchPages, 
@@ -58,6 +59,47 @@ import {
   parseInitialUrlState, 
   syncStateToUrl 
 } from "./utils/pageRegistry";
+
+function getInitialRoute(): "landing" | "app" {
+  if (typeof window === "undefined") return "landing";
+  const path = window.location.pathname.toLowerCase().replace(/\/+$/, "");
+  // If path is /app or subpath of /app, or direct sub-paths, load the tool
+  if (
+    path === "/app" ||
+    path.startsWith("/app/") ||
+    path === "/study" ||
+    path.startsWith("/study/") ||
+    path === "/library" ||
+    path.startsWith("/library/") ||
+    path === "/flashcards" ||
+    path.startsWith("/flashcards/") ||
+    path === "/planner" ||
+    path.startsWith("/planner/") ||
+    path === "/calendar" ||
+    path.startsWith("/calendar/") ||
+    path === "/pomodoro" ||
+    path.startsWith("/pomodoro/") ||
+    path === "/stats" ||
+    path.startsWith("/stats/") ||
+    path === "/history" ||
+    path.startsWith("/history/") ||
+    path === "/favorites" ||
+    path.startsWith("/favorites/") ||
+    path === "/search" ||
+    path.startsWith("/search/") ||
+    path === "/settings" ||
+    path.startsWith("/settings/") ||
+    path === "/developer" ||
+    path.startsWith("/developer/")
+  ) {
+    return "app";
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("v") || params.get("list") || params.get("videoId") || params.get("playlistId")) {
+    return "app";
+  }
+  return "landing";
+}
 
 declare global {
   interface Window {
@@ -264,9 +306,27 @@ async function fetchVideoFromYouTubeClient(id: string): Promise<any> {
 
 export default function App() {
   const { toast, soundEnabled, setSoundEnabled } = useToast();
-  const { currentUser, userProfile, signOutUser } = useAuth();
+  const { currentUser, userProfile, signOutUser, syncStatus, lastSyncedAt, syncNow } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [isSyncingFromMenu, setIsSyncingFromMenu] = useState(false);
+
+  // Top-level route: Landing Page ("/") or Study Tool Application ("/app")
+  const [currentRoute, setCurrentRoute] = useState<"landing" | "app">(getInitialRoute);
+
+  const navigateToApp = (targetTab: ActiveTab = "home") => {
+    const targetUrl = targetTab === "home" ? "/app" : `/app/${targetTab}`;
+    window.history.pushState({}, "", targetUrl);
+    setActiveTab(targetTab);
+    setCurrentRoute("app");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const navigateToLanding = () => {
+    window.history.pushState({}, "", "/");
+    setCurrentRoute("landing");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   // Pomodoro Study Timer Context
   const {
@@ -717,34 +777,40 @@ export default function App() {
   // Listen for browser Back and Forward navigation events
   useEffect(() => {
     const handlePopState = () => {
-      const state = parseInitialUrlState();
-      if (state.tab) {
-        setActiveTab(state.tab);
-      }
-      if (state.searchQuery !== undefined) {
-        setSearchQuery(state.searchQuery);
-      }
-      if (state.videoId) {
-        setActiveVideoId(state.videoId);
-      }
-      if (state.timestamp !== undefined) {
-        setPendingSeekSeconds(state.timestamp);
+      const route = getInitialRoute();
+      setCurrentRoute(route);
+      if (route === "app") {
+        const state = parseInitialUrlState();
+        if (state.tab) {
+          setActiveTab(state.tab);
+        }
+        if (state.searchQuery !== undefined) {
+          setSearchQuery(state.searchQuery);
+        }
+        if (state.videoId) {
+          setActiveVideoId(state.videoId);
+        }
+        if (state.timestamp !== undefined) {
+          setPendingSeekSeconds(state.timestamp);
+        }
       }
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
-  // Sync state changes to browser address bar URL
+  // Sync state changes to browser address bar URL only when inside the app
   useEffect(() => {
-    syncStateToUrl(activeTab, {
-      videoId: activeTab === "study" ? activeVideoId : undefined,
-      videoTitle: activeTab === "study" ? activeVideoTitle : undefined,
-      playlistId: activeTab === "study" && activeSession?.type === "playlist" ? activeSession.id : undefined,
-      searchQuery: searchQuery || undefined,
-      replace: true
-    });
-  }, [activeTab, activeVideoId, activeVideoTitle, activeSession, searchQuery]);
+    if (currentRoute === "app") {
+      syncStateToUrl(activeTab, {
+        videoId: activeTab === "study" ? activeVideoId : undefined,
+        videoTitle: activeTab === "study" ? activeVideoTitle : undefined,
+        playlistId: activeTab === "study" && activeSession?.type === "playlist" ? activeSession.id : undefined,
+        searchQuery: searchQuery || undefined,
+        replace: true
+      });
+    }
+  }, [currentRoute, activeTab, activeVideoId, activeVideoTitle, activeSession, searchQuery]);
 
   // Sync Theme with smooth transition
   useEffect(() => {
@@ -2613,6 +2679,11 @@ export default function App() {
     }
   };
 
+  // If user is at root "/" or landing sub-anchors, render the SEO Landing Page
+  if (currentRoute === "landing") {
+    return <LandingPage onNavigateToApp={navigateToApp} />;
+  }
+
   return (
     <div className="min-h-screen md:h-screen md:max-h-screen bg-slate-50 dark:bg-[#09090B] text-slate-900 dark:text-zinc-100 flex flex-col font-sans transition-colors duration-300 md:overflow-hidden">
       
@@ -2807,11 +2878,34 @@ export default function App() {
                         <div className="text-[11px] text-slate-500 dark:text-zinc-400 truncate">
                           {currentUser.email}
                         </div>
-                        <div className="mt-1 flex items-center gap-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md w-fit">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                          Google Synchronized
+                        <div className="mt-1 flex items-center justify-between gap-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-1 rounded-md">
+                          <span className="flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            {syncStatus === "syncing" ? "Syncing..." : "Multi-Device Synced"}
+                          </span>
+                          {lastSyncedAt && (
+                            <span className="text-slate-400 dark:text-zinc-500 font-mono">
+                              {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
                         </div>
                       </div>
+
+                      <button
+                        disabled={isSyncingFromMenu}
+                        onClick={async () => {
+                          setIsSyncingFromMenu(true);
+                          await syncNow();
+                          setIsSyncingFromMenu(false);
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950/40 transition flex items-center justify-between cursor-pointer"
+                      >
+                        <span className="flex items-center gap-2">
+                          <RefreshCw className={`w-4 h-4 text-blue-500 ${isSyncingFromMenu ? "animate-spin" : ""}`} />
+                          <span>Sync with Cloud</span>
+                        </span>
+                        <span className="text-[10px] bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded font-mono font-bold">Now</span>
+                      </button>
 
                       <button
                         onClick={() => {
@@ -2822,6 +2916,17 @@ export default function App() {
                       >
                         <Settings className="w-4 h-4 text-slate-400" />
                         <span>Account & Settings</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          navigateToLanding();
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/30 transition flex items-center gap-2 cursor-pointer"
+                      >
+                        <Globe className="w-4 h-4" />
+                        <span>LearnStudy Landing Page</span>
                       </button>
 
                       <button
@@ -3084,6 +3189,17 @@ export default function App() {
                   />
                 </div>
               )}
+
+              <button
+                onClick={() => {
+                  setMobileSidebarOpen(false);
+                  navigateToLanding();
+                }}
+                className="w-full mt-2.5 py-2 px-3 rounded-xl text-xs font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 flex items-center justify-center gap-2 transition cursor-pointer border border-blue-200/60 dark:border-blue-900/40"
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span>Visit Landing Page</span>
+              </button>
             </div>
           </div>
         </div>
@@ -3506,6 +3622,15 @@ export default function App() {
 
               <Settings className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "settings" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
               {!sidebarCollapsed && <span className="relative z-10">Settings & Account</span>}
+            </button>
+
+            <button
+              onClick={navigateToLanding}
+              className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[40px] w-[40px] mx-auto" : "gap-3 px-4 h-[40px]"} rounded-[12px] text-xs text-slate-500 dark:text-white/50 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-blue-600 dark:hover:text-blue-400 transition-all duration-200 cursor-pointer group`}
+              title={sidebarCollapsed ? "View Landing Page" : undefined}
+            >
+              <Globe className="w-[18px] h-[18px] shrink-0 opacity-70 group-hover:opacity-100 group-hover:scale-105 transition-all text-blue-500" />
+              {!sidebarCollapsed && <span className="relative z-10">Landing Page</span>}
             </button>
           </div>
         </aside>

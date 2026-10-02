@@ -225,7 +225,7 @@ export function slugify(text: string): string {
 }
 
 /**
- * Returns the clean, semantic shareable link (e.g. /home, /study?v=...&title=..., /library)
+ * Returns the clean, semantic shareable link (e.g. /app/home, /app/study?v=...&title=..., /app/library)
  */
 export function getPageShareableUrl(
   tab: ActiveTab,
@@ -241,18 +241,17 @@ export function getPageShareableUrl(
   const isAbsolute = params?.absolute !== false;
   const origin = typeof window !== "undefined" ? window.location.origin : "";
 
-  let pathname = `/${tab}`;
-  if (tab === "home") pathname = "/home";
+  let pathname = `/app/${tab}`;
 
   const searchParams = new URLSearchParams();
 
   if (tab === "search" || params?.searchQuery) {
-    pathname = "/search";
+    pathname = "/app/search";
     if (params?.searchQuery) {
       searchParams.set("q", params.searchQuery);
     }
   } else if (tab === "study") {
-    pathname = "/study";
+    pathname = "/app/study";
     if (params?.videoId) {
       searchParams.set("v", params.videoId);
       if (params.videoTitle) {
@@ -350,6 +349,7 @@ export function parseInitialUrlState(): {
 
     const pathTabMap: Record<string, ActiveTab> = {
       "": "home",
+      "app": "home",
       "home": "home",
       "study": "study",
       "library": "library",
@@ -372,18 +372,26 @@ export function parseInitialUrlState(): {
       "about": "developer",
     };
 
-    let tabFromPath: ActiveTab | null = pathTabMap[firstSegment] || null;
+    let targetSegment = firstSegment;
+    let subSegment = pathParts[1] || "";
+
+    if (firstSegment === "app") {
+      targetSegment = subSegment || "home";
+    }
+
+    let tabFromPath: ActiveTab | null = pathTabMap[targetSegment] || null;
     let videoIdFromPath: string | undefined = undefined;
     let titleFromPath: string | undefined = undefined;
 
-    // Check path patterns like /study/v/:videoId or /study/:videoId
-    if (firstSegment === "study" || firstSegment === "v") {
-      if (pathParts[1] === "v" && pathParts[2]) {
-        videoIdFromPath = pathParts[2];
-        if (pathParts[3]) titleFromPath = pathParts[3];
-      } else if (pathParts[1] && pathParts[1].length === 11) {
-        videoIdFromPath = pathParts[1];
-        if (pathParts[2]) titleFromPath = pathParts[2];
+    // Check path patterns like /study/v/:videoId or /app/study/v/:videoId
+    if (targetSegment === "study" || targetSegment === "v") {
+      const remainingParts = firstSegment === "app" ? pathParts.slice(1) : pathParts;
+      if (remainingParts[1] === "v" && remainingParts[2]) {
+        videoIdFromPath = remainingParts[2];
+        if (remainingParts[3]) titleFromPath = remainingParts[3];
+      } else if (remainingParts[1] && remainingParts[1].length === 11) {
+        videoIdFromPath = remainingParts[1];
+        if (remainingParts[2]) titleFromPath = remainingParts[2];
       }
     }
 
@@ -439,14 +447,14 @@ export function syncStateToUrl(
   if (typeof window === "undefined") return;
 
   try {
-    let pathname = `/${tab}`;
+    let pathname = `/app/${tab}`;
     const searchParams = new URLSearchParams();
 
     if (params?.searchQuery && params.searchQuery.trim()) {
-      pathname = "/search";
+      pathname = "/app/search";
       searchParams.set("q", params.searchQuery.trim());
     } else if (tab === "study") {
-      pathname = "/study";
+      pathname = "/app/study";
       if (params?.videoId) {
         searchParams.set("v", params.videoId);
         if (params.videoTitle) {
@@ -459,8 +467,6 @@ export function syncStateToUrl(
       if (params?.playlistId) {
         searchParams.set("list", params.playlistId);
       }
-    } else if (tab === "home") {
-      pathname = "/home";
     }
 
     const newQuery = searchParams.toString();

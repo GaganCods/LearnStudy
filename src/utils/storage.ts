@@ -12,22 +12,29 @@ import {
   ChapterLecture,
   UserProfile
 } from "../types";
+import { userAccountSync, DEFAULT_ACCOUNT_SETTINGS } from "../services/userAccountSync";
 
-// Default settings
-const DEFAULT_SETTINGS: StudySettings = {
-  playbackSpeed: 1,
-  autoPlay: true,
-  skipCompleted: false,
-  theme: "system",
-  enableShortcuts: true,
-  userName: "",
-};
+// Default settings for fallback
+const DEFAULT_SETTINGS: StudySettings = { ...DEFAULT_ACCOUNT_SETTINGS };
+
+function notifyStorageMutation(eventKey?: string) {
+  if (typeof window !== "undefined") {
+    if (eventKey) {
+      window.dispatchEvent(new Event(eventKey));
+    }
+    window.dispatchEvent(new Event("storage"));
+    window.dispatchEvent(new Event("studytube_data_updated"));
+  }
+}
 
 export const Storage = {
   // Flashcards
   getFlashcards(): Flashcard[] {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getFlashcards();
+    }
     try {
-      const data = localStorage.getItem("studytube_flashcards");
+      const data = localStorage.getItem("studytube_guest_flashcards");
       return data ? JSON.parse(data) : [];
     } catch {
       return [];
@@ -35,10 +42,19 @@ export const Storage = {
   },
 
   saveFlashcards(flashcards: Flashcard[]) {
-    localStorage.setItem("studytube_flashcards", JSON.stringify(flashcards));
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveFlashcards(flashcards);
+      return;
+    }
+    localStorage.setItem("studytube_guest_flashcards", JSON.stringify(flashcards));
+    notifyStorageMutation();
   },
 
   saveFlashcard(card: Flashcard) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveFlashcard(card);
+      return;
+    }
     const cards = this.getFlashcards();
     const index = cards.findIndex(c => c.id === card.id);
     if (index > -1) {
@@ -50,14 +66,21 @@ export const Storage = {
   },
 
   deleteFlashcard(id: string) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.deleteFlashcard(id);
+      return;
+    }
     const cards = this.getFlashcards().filter(c => c.id !== id);
     this.saveFlashcards(cards);
   },
 
   // Study Plans / Homework Tasks
   getStudyPlans(): StudyPlanItem[] {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getStudyPlans();
+    }
     try {
-      const data = localStorage.getItem("studytube_study_plans");
+      const data = localStorage.getItem("studytube_guest_study_plans");
       return data ? JSON.parse(data) : [];
     } catch {
       return [];
@@ -65,10 +88,19 @@ export const Storage = {
   },
 
   saveStudyPlans(plans: StudyPlanItem[]) {
-    localStorage.setItem("studytube_study_plans", JSON.stringify(plans));
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveStudyPlans(plans);
+      return;
+    }
+    localStorage.setItem("studytube_guest_study_plans", JSON.stringify(plans));
+    notifyStorageMutation();
   },
 
   saveStudyPlan(plan: StudyPlanItem) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveStudyPlan(plan);
+      return;
+    }
     const plans = this.getStudyPlans();
     const index = plans.findIndex(p => p.id === plan.id);
     if (index > -1) {
@@ -80,14 +112,21 @@ export const Storage = {
   },
 
   deleteStudyPlan(id: string) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.deleteStudyPlan(id);
+      return;
+    }
     const plans = this.getStudyPlans().filter(p => p.id !== id);
     this.saveStudyPlans(plans);
   },
 
   // Course Folders (e.g. "Algorithms", "Machine Learning")
   getCourseFolders(): CourseFolder[] {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getCourseFolders();
+    }
     try {
-      const data = localStorage.getItem("studytube_course_folders");
+      const data = localStorage.getItem("studytube_guest_course_folders");
       return data ? JSON.parse(data) : [
         { id: "c1", name: "Computer Science", color: "blue", playlistIds: [], singleVideoIds: [] },
         { id: "c2", name: "Mathematics & Physics", color: "purple", playlistIds: [], singleVideoIds: [] },
@@ -99,14 +138,21 @@ export const Storage = {
   },
 
   saveCourseFolders(folders: CourseFolder[]) {
-    localStorage.setItem("studytube_course_folders", JSON.stringify(folders));
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveCourseFolders(folders);
+      return;
+    }
+    localStorage.setItem("studytube_guest_course_folders", JSON.stringify(folders));
+    notifyStorageMutation();
   },
 
-  // Playlists (contains lists of playlists fetched and saved)
-
+  // Playlists
   getPlaylists(): PlaylistInfo[] {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getPlaylists();
+    }
     try {
-      const data = localStorage.getItem("studytube_playlists");
+      const data = localStorage.getItem("studytube_guest_playlists");
       return data ? JSON.parse(data) : [];
     } catch {
       return [];
@@ -114,10 +160,19 @@ export const Storage = {
   },
 
   savePlaylists(playlists: PlaylistInfo[]) {
-    localStorage.setItem("studytube_playlists", JSON.stringify(playlists));
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.savePlaylists(playlists);
+      return;
+    }
+    localStorage.setItem("studytube_guest_playlists", JSON.stringify(playlists));
+    notifyStorageMutation("studytube_playlists_updated");
   },
 
   savePlaylist(playlist: PlaylistInfo) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.savePlaylist(playlist);
+      return;
+    }
     const playlists = this.getPlaylists();
     const index = playlists.findIndex((p) => p.id === playlist.id);
     if (index > -1) {
@@ -128,10 +183,13 @@ export const Storage = {
     this.savePlaylists(playlists);
   },
 
-  // Single Videos (loaded and saved directly)
+  // Single Videos
   getSingleVideos(): SingleVideoInfo[] {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getSingleVideos();
+    }
     try {
-      const data = localStorage.getItem("studytube_single_videos");
+      const data = localStorage.getItem("studytube_guest_single_videos");
       return data ? JSON.parse(data) : [];
     } catch {
       return [];
@@ -139,10 +197,19 @@ export const Storage = {
   },
 
   saveSingleVideos(videos: SingleVideoInfo[]) {
-    localStorage.setItem("studytube_single_videos", JSON.stringify(videos));
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveSingleVideos(videos);
+      return;
+    }
+    localStorage.setItem("studytube_guest_single_videos", JSON.stringify(videos));
+    notifyStorageMutation("studytube_single_videos_updated");
   },
 
   saveSingleVideo(video: SingleVideoInfo) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveSingleVideo(video);
+      return;
+    }
     const videos = this.getSingleVideos();
     const index = videos.findIndex((v) => v.id === video.id);
     if (index > -1) {
@@ -153,10 +220,13 @@ export const Storage = {
     this.saveSingleVideos(videos);
   },
 
-  // Notes (Video ID -> Note Markdown)
+  // Notes
   getNotes(): Record<string, string> {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getNotes();
+    }
     try {
-      const data = localStorage.getItem("studytube_notes");
+      const data = localStorage.getItem("studytube_guest_notes");
       return data ? JSON.parse(data) : {};
     } catch {
       return {};
@@ -164,19 +234,30 @@ export const Storage = {
   },
 
   getNoteForVideo(videoId: string): string {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getNoteForVideo(videoId);
+    }
     return this.getNotes()[videoId] || "";
   },
 
   saveNoteForVideo(videoId: string, markdown: string) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveNoteForVideo(videoId, markdown);
+      return;
+    }
     const notes = this.getNotes();
     notes[videoId] = markdown;
-    localStorage.setItem("studytube_notes", JSON.stringify(notes));
+    localStorage.setItem("studytube_guest_notes", JSON.stringify(notes));
+    notifyStorageMutation();
   },
 
-  // Bookmarks (Video ID -> Array of Bookmarks)
+  // Bookmarks
   getBookmarks(): Record<string, Bookmark[]> {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getBookmarks();
+    }
     try {
-      const data = localStorage.getItem("studytube_bookmarks");
+      const data = localStorage.getItem("studytube_guest_bookmarks");
       return data ? JSON.parse(data) : {};
     } catch {
       return {};
@@ -184,49 +265,68 @@ export const Storage = {
   },
 
   getBookmarksForVideo(videoId: string): Bookmark[] {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getBookmarksForVideo(videoId);
+    }
     return this.getBookmarks()[videoId] || [];
   },
 
   saveBookmark(bookmark: Bookmark) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveBookmark(bookmark);
+      return;
+    }
     const bookmarks = this.getBookmarks();
     if (!bookmarks[bookmark.videoId]) {
       bookmarks[bookmark.videoId] = [];
     }
-    // Avoid duplicates of exactly the same second
     const existsIdx = bookmarks[bookmark.videoId].findIndex(b => Math.floor(b.timestamp) === Math.floor(bookmark.timestamp));
     if (existsIdx > -1) {
       bookmarks[bookmark.videoId][existsIdx] = bookmark;
     } else {
       bookmarks[bookmark.videoId].push(bookmark);
     }
-    // Sort bookmarks by timestamp
     bookmarks[bookmark.videoId].sort((a, b) => a.timestamp - b.timestamp);
-    localStorage.setItem("studytube_bookmarks", JSON.stringify(bookmarks));
+    localStorage.setItem("studytube_guest_bookmarks", JSON.stringify(bookmarks));
+    notifyStorageMutation();
   },
 
   deleteBookmark(videoId: string, bookmarkId: string) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.deleteBookmark(videoId, bookmarkId);
+      return;
+    }
     const bookmarks = this.getBookmarks();
     if (bookmarks[videoId]) {
       bookmarks[videoId] = bookmarks[videoId].filter((b) => b.id !== bookmarkId);
-      localStorage.setItem("studytube_bookmarks", JSON.stringify(bookmarks));
+      localStorage.setItem("studytube_guest_bookmarks", JSON.stringify(bookmarks));
+      notifyStorageMutation();
     }
   },
 
   updateBookmarkLabel(videoId: string, bookmarkId: string, newLabel: string) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.updateBookmarkLabel(videoId, bookmarkId, newLabel);
+      return;
+    }
     const bookmarks = this.getBookmarks();
     if (bookmarks[videoId]) {
       const b = bookmarks[videoId].find(x => x.id === bookmarkId);
       if (b) {
         b.label = newLabel;
-        localStorage.setItem("studytube_bookmarks", JSON.stringify(bookmarks));
+        localStorage.setItem("studytube_guest_bookmarks", JSON.stringify(bookmarks));
+        notifyStorageMutation();
       }
     }
   },
 
   // Study Session Logs
   getStudyLogs(): StudySessionLog[] {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getStudyLogs();
+    }
     try {
-      const data = localStorage.getItem("studytube_study_logs");
+      const data = localStorage.getItem("studytube_guest_study_logs");
       return data ? JSON.parse(data) : [];
     } catch {
       return [];
@@ -234,9 +334,12 @@ export const Storage = {
   },
 
   addStudyTime(videoId: string, title: string, seconds: number) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.addStudyTime(videoId, title, seconds);
+      return;
+    }
     const logs = this.getStudyLogs();
-    const today = new Date().toLocaleDateString("en-CA"); // "YYYY-MM-DD" in local time zone
-    
+    const today = new Date().toLocaleDateString("en-CA");
     const existingLogIdx = logs.findIndex(l => l.date === today && l.videoId === videoId);
     if (existingLogIdx > -1) {
       logs[existingLogIdx].secondsStudied += seconds;
@@ -248,14 +351,18 @@ export const Storage = {
         videoTitle: title
       });
     }
-    localStorage.setItem("studytube_study_logs", JSON.stringify(logs));
+    localStorage.setItem("studytube_guest_study_logs", JSON.stringify(logs));
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("studytube_logs_updated"));
     }
   },
 
   saveStudyLogs(logs: any[]) {
-    localStorage.setItem("studytube_study_logs", JSON.stringify(logs));
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveStudyLogs(logs);
+      return;
+    }
+    localStorage.setItem("studytube_guest_study_logs", JSON.stringify(logs));
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("studytube_logs_updated"));
     }
@@ -270,12 +377,10 @@ export const Storage = {
     const totalSeconds = dateLogs.reduce((acc, curr) => acc + curr.secondsStudied, 0);
     
     if (totalSeconds >= targetSecs) {
-      // It is studied, let's remove logs for this date to mark it as unstudied/rest day
       const updatedLogs = logs.filter(l => l.date !== dateStr);
       this.saveStudyLogs(updatedLogs);
       return false;
     } else {
-      // It is not studied, let's add a manual log to reach daily goal
       const neededSeconds = targetSecs - totalSeconds;
       logs.push({
         date: dateStr,
@@ -290,8 +395,11 @@ export const Storage = {
 
   // Settings
   getSettings(): StudySettings {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getSettings();
+    }
     try {
-      const data = localStorage.getItem("studytube_settings");
+      const data = localStorage.getItem("studytube_guest_settings");
       return data ? { ...DEFAULT_SETTINGS, ...JSON.parse(data) } : DEFAULT_SETTINGS;
     } catch {
       return DEFAULT_SETTINGS;
@@ -299,7 +407,11 @@ export const Storage = {
   },
 
   saveSettings(settings: StudySettings) {
-    localStorage.setItem("studytube_settings", JSON.stringify(settings));
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveSettings(settings);
+      return;
+    }
+    localStorage.setItem("studytube_guest_settings", JSON.stringify(settings));
     if (settings.dailyGoalMinutes) {
       const hours = Math.max(1, Math.round(settings.dailyGoalMinutes / 60));
       localStorage.setItem("studytube_target_hours", String(hours));
@@ -307,12 +419,16 @@ export const Storage = {
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("studytube_settings_updated"));
     }
+    notifyStorageMutation();
   },
 
   // Custom Subjects with Chapter-wise Lectures
   getCustomSubjects(): CustomSubjectFolder[] {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getCustomSubjects();
+    }
     try {
-      const data = localStorage.getItem("studytube_custom_subjects");
+      const data = localStorage.getItem("studytube_guest_custom_subjects");
       return data ? JSON.parse(data) : [];
     } catch {
       return [];
@@ -320,13 +436,22 @@ export const Storage = {
   },
 
   saveCustomSubjects(subjects: CustomSubjectFolder[]) {
-    localStorage.setItem("studytube_custom_subjects", JSON.stringify(subjects));
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveCustomSubjects(subjects);
+      return;
+    }
+    localStorage.setItem("studytube_guest_custom_subjects", JSON.stringify(subjects));
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("studytube_custom_subjects_updated"));
     }
+    notifyStorageMutation("studytube_custom_subjects_updated");
   },
 
   saveCustomSubject(subject: CustomSubjectFolder) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveCustomSubject(subject);
+      return;
+    }
     const subjects = this.getCustomSubjects();
     const idx = subjects.findIndex((s) => s.id === subject.id);
     if (idx > -1) {
@@ -338,11 +463,31 @@ export const Storage = {
   },
 
   deleteCustomSubject(id: string) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.deleteCustomSubject(id);
+      return;
+    }
     const subjects = this.getCustomSubjects().filter((s) => s.id !== id);
     this.saveCustomSubjects(subjects);
   },
 
-  // Bidirectional Synchronization between Study Player and Course Library Custom Subjects
+  // Progress debouncing
+  saveProgressDebounced(
+    videoId: string,
+    data: {
+      position: number;
+      duration: string;
+      percentage: number;
+      completed: boolean;
+      playlistId?: string;
+    }
+  ) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveProgressDebounced(videoId, data);
+    }
+  },
+
+  // Progress synchronization across custom subjects & playlists
   syncVideoProgressToSubjects(
     videoId: string,
     progress: number,
@@ -391,7 +536,7 @@ export const Storage = {
   setLectureCompletionEverywhere(videoId: string, completed: boolean) {
     if (!videoId) return;
 
-    // 1. Sync all custom subjects
+    // 1. Sync custom subjects
     const subjects = this.getCustomSubjects();
     let subjectsModified = false;
     subjects.forEach((subj) => {
@@ -413,7 +558,7 @@ export const Storage = {
       this.saveCustomSubjects(subjects);
     }
 
-    // 2. Sync all playlists
+    // 2. Sync playlists
     const playlists = this.getPlaylists();
     let playlistsModified = false;
     playlists.forEach((pl) => {
@@ -457,7 +602,7 @@ export const Storage = {
     }
   },
 
-  // Import Folder in Course Library (Auto-adds all Home-page imported playlists and videos)
+  // Import Folder in Course Library
   getOrCreateImportSubject(): CustomSubjectFolder {
     const subjects = this.getCustomSubjects();
     let importSubj = subjects.find(
@@ -477,16 +622,6 @@ export const Storage = {
       this.saveCustomSubject(importSubj);
     }
 
-    // Ensure "Imports" category is saved in custom categories
-    try {
-      const storedCats = localStorage.getItem("studyai_custom_categories");
-      let cats: string[] = storedCats ? JSON.parse(storedCats) : [];
-      if (!cats.includes("Imports")) {
-        cats.unshift("Imports");
-        localStorage.setItem("studyai_custom_categories", JSON.stringify(cats));
-      }
-    } catch {}
-
     return importSubj;
   },
 
@@ -497,7 +632,6 @@ export const Storage = {
     const playlistTitle = playlist.title || "Imported Playlist";
     const playlistId = playlist.id;
 
-    // Check if chapter for this playlist already exists
     const existingChapterIndex = importSubj.chapters.findIndex(
       (ch) => ch.id === `ch-import-pl-${playlistId}` || (ch.description && ch.description.includes(playlistId))
     );
@@ -549,7 +683,6 @@ export const Storage = {
       importSubj.chapters.push(newChapter);
     }
 
-    // Ensure all chapter numbers are sequential
     importSubj.chapters.forEach((ch, idx) => {
       ch.chapterNumber = idx + 1;
       if (/^Chapter \d+:/i.test(ch.title)) {
@@ -565,8 +698,6 @@ export const Storage = {
     if (!video || !video.id) return this.getOrCreateImportSubject();
 
     const importSubj = this.getOrCreateImportSubject();
-    
-    // Find or create the Single / Individual Lectures chapter
     let singleCh = importSubj.chapters.find(
       (ch) => ch.id === "ch-import-single-videos" || ch.title.toLowerCase().includes("individual lectures")
     );
@@ -582,7 +713,6 @@ export const Storage = {
       importSubj.chapters.unshift(singleCh);
     }
 
-    // Check if this video is already in single lectures
     const existingIndex = singleCh.lectures.findIndex(
       (l) => l.youtubeVideoId === video.id || l.id === `lec-single-${video.id}`
     );
@@ -593,9 +723,7 @@ export const Storage = {
 
     if (existingIndex > -1) {
       const existingLec = singleCh.lectures[existingIndex];
-      if (cleanTitle) {
-        existingLec.title = cleanTitle;
-      }
+      if (cleanTitle) existingLec.title = cleanTitle;
       if (video.duration && video.duration !== "0:00" && video.duration !== "10:00") {
         existingLec.duration = video.duration;
       }
@@ -613,10 +741,8 @@ export const Storage = {
       singleCh.lectures.push(newLec);
     }
 
-    // Update chapter description with count
     singleCh.description = `Standalone video lectures imported from the Home page • ${singleCh.lectures.length} lecture${singleCh.lectures.length === 1 ? "" : "s"}`;
 
-    // Ensure all chapter numbers are sequential
     importSubj.chapters.forEach((ch, idx) => {
       ch.chapterNumber = idx + 1;
       if (/^Chapter \d+:/i.test(ch.title)) {
@@ -628,14 +754,25 @@ export const Storage = {
     return importSubj;
   },
 
-  // Favorites (list of favorites, can be playlist ID or video ID)
+  // Favorites
   getFavorites(): { playlists: string[]; videos: string[] } {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getFavorites();
+    }
     try {
-      const data = localStorage.getItem("studytube_favorites");
+      const data = localStorage.getItem("studytube_guest_favorites");
       return data ? JSON.parse(data) : { playlists: [], videos: [] };
     } catch {
       return { playlists: [], videos: [] };
     }
+  },
+
+  saveFavorites(favs: { playlists: string[]; videos: string[] }) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveFavorites(favs);
+      return;
+    }
+    localStorage.setItem("studytube_guest_favorites", JSON.stringify(favs));
   },
 
   toggleFavorite(type: "playlist" | "video", id: string): boolean {
@@ -658,7 +795,7 @@ export const Storage = {
       }
     }
     
-    localStorage.setItem("studytube_favorites", JSON.stringify(favs));
+    this.saveFavorites(favs);
     
     // Also update target's internal state
     if (type === "playlist") {
@@ -681,7 +818,7 @@ export const Storage = {
   },
 
   clearFavorites(): void {
-    localStorage.setItem("studytube_favorites", JSON.stringify({ playlists: [], videos: [] }));
+    this.saveFavorites({ playlists: [], videos: [] });
     const playlists = this.getPlaylists().map(p => ({ ...p, isFavorite: false }));
     this.savePlaylists(playlists);
     const vids = this.getSingleVideos().map(v => ({ ...v, isFavorite: false }));
@@ -709,7 +846,6 @@ export const Storage = {
       dateSums[l.date] = (dateSums[l.date] || 0) + (l.secondsStudied || 0);
     });
 
-    // Dates with study logs or planner tasks
     const candidateDates = Array.from(new Set([
       ...Object.keys(dateSums),
       ...plans.map(p => p.dueDate)
@@ -717,18 +853,14 @@ export const Storage = {
 
     const studyDates = candidateDates.filter((date) => {
       const secondsLogged = dateSums[date] || 0;
-      // 1. Reached time goal threshold (at least 60s minimum if goal set low)
       if (secondsLogged >= Math.min(60, targetSeconds) && secondsLogged >= targetSeconds) return true;
 
-      // 2. OR completed all target tasks scheduled for that day in Planner
       const tasksForDate = plans.filter(p => p.dueDate === date && !p.skipped);
       if (tasksForDate.length > 0 && tasksForDate.every(p => p.completed)) {
         return true;
       }
 
-      // 3. Fallback: if at least 1 min studied and no specific tasks broke it
       if (secondsLogged >= 60 && targetMins <= 1) return true;
-
       return false;
     }).sort() as string[];
 
@@ -743,7 +875,6 @@ export const Storage = {
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = yesterday.toLocaleDateString("en-CA");
 
-    // Calculate streaks by walking the sorted unique dates list
     let prevDate: Date | null = null;
     for (const dStr of studyDates) {
       const currDate = new Date(dStr);
@@ -763,13 +894,10 @@ export const Storage = {
     }
     if (tempStreak > longestStreak) longestStreak = tempStreak;
 
-    // Check if streak is still active today or yesterday
     const lastStudyDateStr = studyDates[studyDates.length - 1];
     if (lastStudyDateStr === todayStr || lastStudyDateStr === yesterdayStr) {
-      // Find current streak by scanning backwards from today/yesterday
       let curr = 0;
       let checkDate = new Date();
-      // If we didn't study today but did study yesterday, start checks from yesterday
       if (!studyDates.includes(todayStr) && studyDates.includes(yesterdayStr)) {
         checkDate = yesterday;
       }
@@ -795,6 +923,178 @@ export const Storage = {
     };
   },
 
+  // Dashboard Customization
+  getDashboardPreferences() {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getDashboardPreferences();
+    }
+    try {
+      const data = localStorage.getItem("studytube_guest_dashboard");
+      return data ? JSON.parse(data) : {
+        layout: "default",
+        pinnedItemIds: [],
+        widgetOrder: ["continue-learning", "stats", "today-tasks", "quick-access", "streak"],
+        hiddenWidgets: []
+      };
+    } catch {
+      return {
+        layout: "default",
+        pinnedItemIds: [],
+        widgetOrder: ["continue-learning", "stats", "today-tasks", "quick-access", "streak"],
+        hiddenWidgets: []
+      };
+    }
+  },
+
+  saveDashboardPreferences(prefs: any) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveDashboardPreferences(prefs);
+      return;
+    }
+    localStorage.setItem("studytube_guest_dashboard", JSON.stringify(prefs));
+    notifyStorageMutation();
+  },
+
+  // Quizzes
+  getQuizAttempts() {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getQuizAttempts();
+    }
+    try {
+      const data = localStorage.getItem("studytube_guest_quiz_attempts");
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  saveQuizAttempt(attempt: any) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveQuizAttempt(attempt);
+      return;
+    }
+    const current = this.getQuizAttempts();
+    current.unshift(attempt);
+    localStorage.setItem("studytube_guest_quiz_attempts", JSON.stringify(current));
+    notifyStorageMutation();
+  },
+
+  // Calendar
+  getCalendarEvents() {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getCalendarEvents();
+    }
+    try {
+      const data = localStorage.getItem("studytube_guest_calendar_events");
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  saveCalendarEvents(events: any[]) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveCalendarEvents(events);
+      return;
+    }
+    localStorage.setItem("studytube_guest_calendar_events", JSON.stringify(events));
+    notifyStorageMutation();
+  },
+
+  // Developer Profile
+  getDeveloperProfile() {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getDeveloperProfile();
+    }
+    try {
+      const data = localStorage.getItem("studytube_guest_dev_profile");
+      return data ? JSON.parse(data) : {
+        username: "",
+        bio: "Lifelong learner using LearnStudy for distraction-free deep work.",
+        githubUrl: "",
+        portfolioUrl: "",
+        skills: ["React", "TypeScript", "AI Engineering"]
+      };
+    } catch {
+      return {
+        username: "",
+        bio: "Lifelong learner using LearnStudy for distraction-free deep work.",
+        githubUrl: "",
+        portfolioUrl: "",
+        skills: ["React", "TypeScript", "AI Engineering"]
+      };
+    }
+  },
+
+  saveDeveloperProfile(profile: any) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveDeveloperProfile(profile);
+      return;
+    }
+    localStorage.setItem("studytube_guest_dev_profile", JSON.stringify(profile));
+    notifyStorageMutation();
+  },
+
+  // Feedback
+  getFeedbackSubmissions() {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.getFeedbackSubmissions();
+    }
+    try {
+      const data = localStorage.getItem("studytube_guest_feedback");
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  submitFeedback(feedback: any) {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.submitFeedback(feedback);
+    }
+    const current = this.getFeedbackSubmissions();
+    const item = {
+      id: "fb_" + Date.now(),
+      createdAt: new Date().toISOString(),
+      status: "received",
+      ...feedback
+    };
+    current.unshift(item);
+    localStorage.setItem("studytube_guest_feedback", JSON.stringify(current));
+    notifyStorageMutation();
+    return item;
+  },
+
+  // Derived Statistics Calculation
+  getDerivedStatistics() {
+    if (userAccountSync.hasActiveUser()) {
+      return userAccountSync.calculateDerivedStatistics();
+    }
+    const studyLogs = this.getStudyLogs();
+    const totalSeconds = studyLogs.reduce((acc, s) => acc + (s.secondsStudied || 0), 0);
+    const playlists = this.getPlaylists();
+    const singleVideos = this.getSingleVideos();
+    const subjects = this.getCustomSubjects();
+    let completedLectures = 0;
+    playlists.forEach(p => p.videos?.forEach(v => { if (v.completed) completedLectures++; }));
+    singleVideos.forEach(v => { if (v.completed) completedLectures++; });
+    subjects.forEach(s => s.chapters?.forEach(c => c.lectures?.forEach(l => { if (l.completed) completedLectures++; })));
+
+    return {
+      totalSecondsStudied: totalSeconds,
+      totalStudyMinutes: Math.round(totalSeconds / 60),
+      totalCompletedLectures: completedLectures,
+      quizzesCompleted: this.getQuizAttempts().length,
+      flashcardsCount: this.getFlashcards().length,
+      notesCount: Object.keys(this.getNotes()).length,
+      totalBookmarks: Object.values(this.getBookmarks()).reduce((acc: number, list: any) => acc + (Array.isArray(list) ? list.length : 0), 0),
+      currentStreak: this.getStreakStats().current,
+      longestStreak: this.getStreakStats().longest,
+      savedPlaylistsCount: playlists.length,
+      savedCoursesCount: subjects.length
+    };
+  },
+
   // Export Data as JSON
   exportData(): string {
     const data = {
@@ -813,13 +1113,17 @@ export const Storage = {
   importData(jsonString: string): boolean {
     try {
       const data = JSON.parse(jsonString);
-      if (data.playlists) localStorage.setItem("studytube_playlists", JSON.stringify(data.playlists));
-      if (data.singleVideos) localStorage.setItem("studytube_single_videos", JSON.stringify(data.singleVideos));
-      if (data.notes) localStorage.setItem("studytube_notes", JSON.stringify(data.notes));
-      if (data.bookmarks) localStorage.setItem("studytube_bookmarks", JSON.stringify(data.bookmarks));
-      if (data.studyLogs) localStorage.setItem("studytube_study_logs", JSON.stringify(data.studyLogs));
-      if (data.favorites) localStorage.setItem("studytube_favorites", JSON.stringify(data.favorites));
-      if (data.settings) localStorage.setItem("studytube_settings", JSON.stringify(data.settings));
+      if (data.playlists) this.savePlaylists(data.playlists);
+      if (data.singleVideos) this.saveSingleVideos(data.singleVideos);
+      if (data.notes) {
+        Object.entries(data.notes).forEach(([k, v]) => this.saveNoteForVideo(k, v as string));
+      }
+      if (data.bookmarks) {
+        Object.values(data.bookmarks).flat().forEach((b) => this.saveBookmark(b as Bookmark));
+      }
+      if (data.studyLogs) this.saveStudyLogs(data.studyLogs);
+      if (data.favorites) this.saveFavorites(data.favorites);
+      if (data.settings) this.saveSettings(data.settings);
       return true;
     } catch (e) {
       console.error("Failed to import data:", e);
@@ -829,17 +1133,26 @@ export const Storage = {
 
   // Reset ALL Data
   resetAllData() {
-    localStorage.removeItem("studytube_playlists");
-    localStorage.removeItem("studytube_single_videos");
-    localStorage.removeItem("studytube_notes");
-    localStorage.removeItem("studytube_bookmarks");
-    localStorage.removeItem("studytube_study_logs");
-    localStorage.removeItem("studytube_favorites");
-    localStorage.removeItem("studytube_settings");
-    localStorage.removeItem("studytube_study_plans");
-    localStorage.removeItem("studytube_flashcards");
-    localStorage.removeItem("studytube_custom_subjects");
-    localStorage.removeItem("studytube_course_folders");
-    localStorage.removeItem("studytube_target_hours");
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.savePlaylists([]);
+      userAccountSync.saveSingleVideos([]);
+      userAccountSync.saveFavorites({ playlists: [], videos: [] });
+      userAccountSync.saveStudyLogs([]);
+      userAccountSync.saveFlashcards([]);
+      userAccountSync.saveStudyPlans([]);
+      userAccountSync.saveCustomSubjects([]);
+      userAccountSync.saveSettings({ ...DEFAULT_ACCOUNT_SETTINGS });
+    }
+    localStorage.removeItem("studytube_guest_playlists");
+    localStorage.removeItem("studytube_guest_single_videos");
+    localStorage.removeItem("studytube_guest_notes");
+    localStorage.removeItem("studytube_guest_bookmarks");
+    localStorage.removeItem("studytube_guest_study_logs");
+    localStorage.removeItem("studytube_guest_favorites");
+    localStorage.removeItem("studytube_guest_settings");
+    localStorage.removeItem("studytube_guest_study_plans");
+    localStorage.removeItem("studytube_guest_flashcards");
+    localStorage.removeItem("studytube_guest_custom_subjects");
+    localStorage.removeItem("studytube_guest_course_folders");
   }
 };

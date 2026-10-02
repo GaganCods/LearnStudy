@@ -3,6 +3,7 @@ import {
   googleProvider, 
   signInWithPopup, 
   signInWithRedirect, 
+  getRedirectResult,
   signOut,
   rtdb,
   ref,
@@ -30,28 +31,60 @@ export interface UserDatabaseProfile {
 /**
  * Format user-friendly error messages from Firebase Authentication error codes.
  */
-export function getFriendlyAuthErrorMessage(errorCode: string, defaultMessage?: string): string {
+export function getFriendlyAuthErrorMessage(errorCode: string, defaultMessage?: string): { message: string; actionableHint?: string } {
+  const currentHost = typeof window !== "undefined" ? window.location.hostname : "your current domain";
+
   switch (errorCode) {
     case "auth/popup-closed-by-user":
-      return "Sign-in cancelled. The Google sign-in window was closed.";
+      return { 
+        message: "Sign-in cancelled. The Google sign-in window was closed.",
+        actionableHint: "Click Continue with Google to try again."
+      };
     case "auth/popup-blocked":
-      return "The Google sign-in pop-up was blocked by your browser. Please enable pop-ups for this site and try again.";
+      return { 
+        message: "The Google sign-in pop-up was blocked by your browser.",
+        actionableHint: "Please allow pop-ups for this website in your browser's address bar settings and click sign-in again."
+      };
     case "auth/cancelled-popup-request":
-      return "The previous sign-in attempt was replaced by a new one.";
+      return { 
+        message: "A sign-in request is already in progress.",
+        actionableHint: "Please complete the open sign-in window or wait a few seconds."
+      };
     case "auth/network-request-failed":
-      return "Network connection error. Please check your internet connection and try again.";
+      return { 
+        message: "Network connection error. Could not reach Google Authentication servers.",
+        actionableHint: "Please check your internet connection and try again."
+      };
     case "auth/unauthorized-domain":
-      return "This domain is not authorized in your Firebase Authentication Console. Please add this domain to Authorized Domains in Firebase.";
+      return { 
+        message: `The domain "${currentHost}" is not yet listed in your Firebase Authorized Domains.`,
+        actionableHint: `To authorize: Open Firebase Console > Authentication > Settings tab > Authorized domains > Add domain: ${currentHost}`
+      };
     case "auth/account-exists-with-different-credential":
-      return "An account already exists with the same email address using a different sign-in method.";
+      return { 
+        message: "An account already exists with this email address using another sign-in method.",
+        actionableHint: "Sign in using the original method you used to register."
+      };
     case "auth/operation-not-allowed":
-      return "Google Sign-In is not enabled in Firebase Authentication. Please enable Google provider in the Firebase Console under Sign-in method.";
+      return { 
+        message: "Google Sign-In is not enabled in Firebase Authentication.",
+        actionableHint: "Enable Google as a Sign-in provider in Firebase Console > Build > Authentication > Sign-in method."
+      };
     case "auth/user-disabled":
-      return "This user account has been disabled by an administrator.";
+      return { 
+        message: "This user account has been disabled.",
+        actionableHint: "Contact support or use a different Google account."
+      };
     case "auth/invalid-api-key":
-      return "Firebase configuration error: Invalid API key.";
+      return { 
+        message: "Invalid Firebase API key in configuration.",
+        actionableHint: "Verify your Firebase Web App credentials in firebase-applet-config.json."
+      };
     default:
-      return defaultMessage || "Failed to sign in with Google. Please try again.";
+      return { 
+        message: defaultMessage || "Failed to sign in with Google. Please try again.",
+        actionableHint: "Make sure pop-ups are allowed and try again."
+      };
   }
 }
 
@@ -103,7 +136,7 @@ export async function syncUserProfileToDatabase(user: User): Promise<UserDatabas
         await set(userRef, fallbackProfile);
       }
     } catch (rtdbErr) {
-      console.warn("Realtime Database sync notice (check database rules or URL):", rtdbErr);
+      console.warn("Realtime Database sync notice:", rtdbErr);
     }
   }
 
@@ -157,10 +190,18 @@ export async function loginWithGoogle(): Promise<{ user: User; profile: UserData
     const profile = await syncUserProfileToDatabase(user);
     return { user, profile };
   } catch (error: any) {
-    // If popup was blocked or mobile iframe requires redirect
-    if (error?.code === "auth/popup-blocked" && typeof window !== "undefined" && window.innerWidth < 768) {
-      console.info("Popup blocked on mobile device, attempting redirect flow...");
-      await signInWithRedirect(auth, googleProvider);
+    console.warn("signInWithPopup error code:", error?.code, error?.message);
+    // If popup was blocked or mobile device environment requires redirect
+    if (
+      (error?.code === "auth/popup-blocked" || error?.code === "auth/cancelled-popup-request") &&
+      typeof window !== "undefined"
+    ) {
+      console.info("Attempting signInWithRedirect fallback...");
+      try {
+        await signInWithRedirect(auth, googleProvider);
+      } catch (redirectErr) {
+        console.error("signInWithRedirect failed:", redirectErr);
+      }
     }
     throw error;
   }

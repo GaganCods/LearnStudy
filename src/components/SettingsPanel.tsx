@@ -109,7 +109,8 @@ export function SettingsPanel({
   toast,
   onNavigateTab,
 }: SettingsPanelProps) {
-  const { currentUser, userProfile, signOutUser } = useAuth();
+  const { currentUser, userProfile, signOutUser, syncStatus, lastSyncedAt, syncNow } = useAuth();
+  const [isManualSyncing, setIsManualSyncing] = useState(false);
 
   // Local edit state for sticky save bar
   const [localSettings, setLocalSettings] = useState<StudySettings>({ ...settings });
@@ -392,19 +393,21 @@ export function SettingsPanel({
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     <h3 className="text-base font-extrabold text-slate-900 dark:text-zinc-100">
-                      Google Account & Cloud Sync
+                      Google Account & Multi-Device Cloud Sync
                     </h3>
                   </div>
                   <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
-                    Authenticate securely with Google to synchronize study playlists, notes, bookmarks, and streaks to Firebase Realtime Database.
+                    Sign in with your Google account to automatically synchronize playlists, lecture progress, notes, timestamp bookmarks, and flashcards across all your phones, tablets, and computers.
                   </p>
                 </div>
 
                 {currentUser ? (
-                  <span className="px-3 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-black rounded-full border border-emerald-500/20 flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    Authenticated with Google
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="px-3 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-black rounded-full border border-emerald-500/20 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      {syncStatus === "syncing" ? "Syncing..." : "Cloud Synced"}
+                    </span>
+                  </div>
                 ) : (
                   <span className="px-3 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-bold rounded-full border border-amber-500/20">
                     Not Signed In
@@ -413,59 +416,105 @@ export function SettingsPanel({
               </div>
 
               {currentUser ? (
-                <div className="p-4 sm:p-5 bg-slate-50 dark:bg-zinc-950/60 border border-slate-200/70 dark:border-zinc-800 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    {currentUser.photoURL ? (
-                      <img
-                        src={currentUser.photoURL}
-                        alt={currentUser.displayName || "Google User"}
-                        className="w-12 h-12 rounded-full object-cover border-2 border-white dark:border-zinc-800 shadow-sm shrink-0"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-black text-base flex items-center justify-center shrink-0 shadow-sm">
-                        {(currentUser.displayName || currentUser.email || "G").charAt(0).toUpperCase()}
-                      </div>
-                    )}
+                <div className="space-y-4">
+                  <div className="p-4 sm:p-5 bg-slate-50 dark:bg-zinc-950/60 border border-slate-200/70 dark:border-zinc-800 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      {currentUser.photoURL ? (
+                        <img
+                          src={currentUser.photoURL}
+                          alt={currentUser.displayName || "Google User"}
+                          className="w-12 h-12 rounded-full object-cover border-2 border-white dark:border-zinc-800 shadow-sm shrink-0"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-black text-base flex items-center justify-center shrink-0 shadow-sm">
+                          {(currentUser.displayName || currentUser.email || "G").charAt(0).toUpperCase()}
+                        </div>
+                      )}
 
-                    <div className="min-w-0">
-                      <div className="text-sm font-extrabold text-slate-900 dark:text-zinc-50 truncate">
-                        {currentUser.displayName || "Google Scholar"}
+                      <div className="min-w-0">
+                        <div className="text-sm font-extrabold text-slate-900 dark:text-zinc-50 truncate">
+                          {currentUser.displayName || "Google Scholar"}
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-zinc-400 truncate">
+                          {currentUser.email}
+                        </div>
+                        <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1 mt-0.5">
+                          <CheckCircle2 className="w-3 h-3" />
+                          <span>Active Multi-Device Sync</span>
+                          {lastSyncedAt && (
+                            <span className="text-slate-400 dark:text-zinc-500 font-mono">
+                              • Last synced {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-500 dark:text-zinc-400 truncate">
-                        {currentUser.email}
-                      </div>
-                      <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono truncate mt-0.5">
-                        UID: {currentUser.uid} • Realtime Database: users/{currentUser.uid}
-                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        disabled={isManualSyncing}
+                        onClick={async () => {
+                          setIsManualSyncing(true);
+                          await syncNow();
+                          setIsManualSyncing(false);
+                        }}
+                        className="flex-1 sm:flex-initial px-4 py-2.5 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-xs active:scale-95"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing ? "animate-spin" : ""}`} />
+                        <span>{isManualSyncing ? "Syncing..." : "Sync Cloud Now"}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await signOutUser();
+                          toast.info("Signed Out", "You have signed out of your Google account.");
+                        }}
+                        className="px-3.5 py-2.5 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                        title="Sign Out"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span className="hidden xs:inline">Sign Out</span>
+                      </button>
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await signOutUser();
-                      toast.info("Signed Out", "You have signed out of your Google account.");
-                    }}
-                    className="w-full sm:w-auto px-4 py-2.5 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shrink-0"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    <span>Sign Out</span>
-                  </button>
+                  {/* Sync status check grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[11px]">
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200/60 dark:border-zinc-800/60 flex items-center gap-2 text-slate-700 dark:text-zinc-300">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      <span className="truncate">Playlists & Progress</span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200/60 dark:border-zinc-800/60 flex items-center gap-2 text-slate-700 dark:text-zinc-300">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      <span className="truncate">Timestamp Bookmarks</span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200/60 dark:border-zinc-800/60 flex items-center gap-2 text-slate-700 dark:text-zinc-300">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      <span className="truncate">Lecture Notes & Decks</span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-200/60 dark:border-zinc-800/60 flex items-center gap-2 text-slate-700 dark:text-zinc-300">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      <span className="truncate">Tasks & Custom Folders</span>
+                    </div>
+                  </div>
                 </div>
               ) : (
-                <div className="p-4 sm:p-5 bg-gradient-to-br from-blue-50/60 to-indigo-50/40 dark:from-blue-950/20 dark:to-indigo-950/10 border border-blue-200/60 dark:border-blue-800/30 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
-                  <div className="space-y-1 text-center sm:text-left">
-                    <div className="text-xs font-bold text-slate-800 dark:text-zinc-200">
-                      Single Sign-On with Google
+                <div className="p-5 bg-gradient-to-br from-blue-50/70 via-indigo-50/50 to-purple-50/30 dark:from-blue-950/30 dark:via-indigo-950/20 dark:to-purple-950/10 border border-blue-200/70 dark:border-blue-800/40 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-5">
+                  <div className="space-y-1.5 text-center md:text-left">
+                    <div className="text-sm font-black text-slate-900 dark:text-white flex items-center justify-center md:justify-start gap-2">
+                      <span>Enable Multi-Device Study Sync</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">Free</span>
                     </div>
-                    <p className="text-[11px] text-slate-500 dark:text-zinc-400">
-                      No password required. One-click sign-in to protect and restore your learning history.
+                    <p className="text-xs text-slate-600 dark:text-zinc-300 max-w-lg leading-relaxed">
+                      Study on your phone during the day and resume on your laptop at night without losing your exact video timestamps or lecture notes.
                     </p>
                   </div>
 
-                  <div className="w-full sm:w-auto shrink-0">
-                    <GoogleSignInButton variant="compact" label="Continue with Google" />
+                  <div className="w-full md:w-auto shrink-0">
+                    <GoogleSignInButton variant="compact" label="Sign In with Google" />
                   </div>
                 </div>
               )}

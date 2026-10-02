@@ -516,6 +516,24 @@ export function AIStudyCompanion({
       setCurrentQuestionIndex(prev => prev + 1);
     } else {
       setQuizCompleted(true);
+      try {
+        const finalScore = quizScore;
+        const total = quizQuestions.length;
+        const pct = total > 0 ? Math.round((finalScore / total) * 100) : 0;
+        Storage.saveQuizAttempt({
+          id: "qa_" + Date.now(),
+          quizId: videoId,
+          quizTitle: `${videoTitle || "Lecture"} Quiz`,
+          videoId,
+          videoTitle: videoTitle || "Lecture",
+          score: finalScore,
+          maxScore: total,
+          percentage: pct,
+          completedAt: new Date().toISOString()
+        });
+      } catch (err) {
+        console.warn("Save quiz attempt notice:", err);
+      }
     }
   };
 

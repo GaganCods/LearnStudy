@@ -4,9 +4,144 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <title>LearnStudy - Distraction-free Study Player</title>
+    
+    <!-- Primary Meta Tags -->
+    <title>LearnStudy — YouTube Lecture Study Tool & Learning Platform</title>
+    <meta name="title" content="LearnStudy — YouTube Lecture Study Tool & Learning Platform" />
+    <meta name="description" content="LearnStudy helps students study YouTube lectures and playlists with progress tracking, lecture history, notes, timestamp bookmarks and a Pomodoro study timer." />
+    <meta name="keywords" content="YouTube lecture player, study YouTube playlists, lecture notes, video progress tracking, Pomodoro timer, online study tool, JEE NEET college study tool" />
+    <meta name="author" content="LearnStudy" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://learnstudy.app/" />
+
+    <!-- Open Graph / Facebook / WhatsApp / LinkedIn -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://learnstudy.app/" />
+    <meta property="og:title" content="LearnStudy — YouTube Lecture Study Tool & Learning Platform" />
+    <meta property="og:description" content="LearnStudy helps students study YouTube lectures and playlists with progress tracking, lecture history, notes, timestamp bookmarks and a Pomodoro study timer." />
+    <meta property="og:site_name" content="LearnStudy" />
+    <meta property="og:image" content="/favicon.svg" />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://learnstudy.app/" />
+    <meta name="twitter:title" content="LearnStudy — YouTube Lecture Study Tool & Learning Platform" />
+    <meta name="twitter:description" content="LearnStudy helps students study YouTube lectures and playlists with progress tracking, lecture history, notes, timestamp bookmarks and a Pomodoro study timer." />
+    <meta name="twitter:image" content="/favicon.svg" />
+
+    <!-- Structured Data (JSON-LD): WebSite & SoftwareApplication -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebSite",
+          "@id": "https://learnstudy.app/#website",
+          "url": "https://learnstudy.app/",
+          "name": "LearnStudy",
+          "description": "Turn YouTube lectures and playlists into an organized, distraction-free study environment.",
+          "inLanguage": "en-US"
+        },
+        {
+          "@type": "WebApplication",
+          "@id": "https://learnstudy.app/#software",
+          "name": "LearnStudy",
+          "url": "https://learnstudy.app/app",
+          "applicationCategory": "EducationalApplication",
+          "operatingSystem": "All",
+          "browserRequirements": "Requires JavaScript. Requires HTML5.",
+          "description": "LearnStudy helps students study YouTube lectures and playlists with progress tracking, lecture history, notes, timestamp bookmarks and a Pomodoro study timer.",
+          "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+          },
+          "featureList": [
+            "YouTube Playlist & Lecture Video Player",
+            "Automatic Lecture Progress Tracking",
+            "Local & Cloud Lecture History",
+            "Timestamped Study Notes & Bookmarks",
+            "Integrated Pomodoro Focus Timer",
+            "Distraction-Free Study Mode",
+            "Google Account Synchronization"
+          ]
+        },
+        {
+          "@type": "FAQPage",
+          "@id": "https://learnstudy.app/#faq",
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "name": "What is LearnStudy?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "LearnStudy is a specialized, distraction-free web study platform designed for students who learn through online video lectures and YouTube playlists. It organizes full video courses, tracks completion progress, saves timestamped notes, and provides focus tools."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "How does LearnStudy work?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "You simply paste any public or unlisted YouTube playlist or video URL into LearnStudy. The platform automatically indexes all chapters and lectures, creates a structured syllabus sidebar, tracks your playback progress, and lets you take timestamped notes alongside the video."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Can I study YouTube playlists with LearnStudy?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes! LearnStudy seamlessly parses full YouTube playlists, organizing them into continuous, numbered lectures with individual completion checks, resume points, and total playlist study duration calculation."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Does LearnStudy track lecture progress?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. LearnStudy automatically remembers the exact second you paused or left off on every lecture, marks completed videos, and calculates your overall playlist completion percentage."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Does LearnStudy require an account?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "No account is required to get started. All progress, history, and notes are saved locally in your browser immediately. You can optionally sign in with Google to back up and sync your data across devices."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Can I use LearnStudy for exam preparation?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. LearnStudy is widely used by students preparing for competitive and college exams like JEE, NEET, IIT Madras online degree courses, gate preparation, coding bootcamps, and self-paced university lectures."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Does LearnStudy have a Pomodoro timer?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. LearnStudy includes a built-in Pomodoro study timer with customizable focus cycles, short and long breaks, audio alerts, and session logs to help you stay disciplined during long study sessions."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Can I take notes while studying?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. You can take markdown-formatted notes with one-click timestamp bookmarks that jump straight back to that exact second in the lecture whenever you review your notes later."
+              }
+            }
+          ]
+        }
+      ]
+    }
+    </script>
+
     <script>
-      // Safety mock for chrome.runtime and browser.runtime to prevent "Cannot read properties of undefined (reading 'onMessage')"
+      // Safety mock for chrome.runtime and browser.runtime to prevent extension script collisions
       (function() {
         try {
           var dummyEvent = {
@@ -19,48 +154,24 @@
           };
 
           if (typeof window !== 'undefined') {
-            if (!window.chrome) {
-              window.chrome = {};
-            }
-            if (!window.chrome.runtime) {
-              window.chrome.runtime = {};
-            }
-            if (!window.chrome.runtime.onMessage) {
-              window.chrome.runtime.onMessage = dummyEvent;
-            }
-            if (!window.chrome.runtime.onConnect) {
-              window.chrome.runtime.onConnect = dummyEvent;
-            }
-            if (!window.chrome.runtime.sendMessage) {
-              window.chrome.runtime.sendMessage = function() {};
-            }
+            if (!window.chrome) window.chrome = {};
+            if (!window.chrome.runtime) window.chrome.runtime = {};
+            if (!window.chrome.runtime.onMessage) window.chrome.runtime.onMessage = dummyEvent;
+            if (!window.chrome.runtime.onConnect) window.chrome.runtime.onConnect = dummyEvent;
+            if (!window.chrome.runtime.sendMessage) window.chrome.runtime.sendMessage = function() {};
             if (!window.chrome.runtime.connect) {
               window.chrome.runtime.connect = function() {
-                return {
-                  onMessage: dummyEvent,
-                  onDisconnect: dummyEvent,
-                  postMessage: function() {}
-                };
+                return { onMessage: dummyEvent, onDisconnect: dummyEvent, postMessage: function() {} };
               };
             }
 
-            // Support Firefox/Edge browser API as well
-            if (!window.browser) {
-              window.browser = {};
-            }
-            if (!window.browser.runtime) {
-              window.browser.runtime = {};
-            }
-            if (!window.browser.runtime.onMessage) {
-              window.browser.runtime.onMessage = dummyEvent;
-            }
+            if (!window.browser) window.browser = {};
+            if (!window.browser.runtime) window.browser.runtime = {};
+            if (!window.browser.runtime.onMessage) window.browser.runtime.onMessage = dummyEvent;
           }
-        } catch (err) {
-          // Silent fallback
-        }
+        } catch (err) {}
       })();
 
-      // Gracefully silence third-party browser extension or iframe container sandbox script errors
       window.addEventListener('error', function(e) {
         var msg = e.message || (e.error && e.error.message) || '';
         if (msg && (
@@ -73,22 +184,37 @@
           e.stopPropagation();
         }
       }, true);
-      window.addEventListener('unhandledrejection', function(e) {
-        var reasonMsg = (e.reason && (e.reason.message || e.reason)) || '';
-        if (typeof reasonMsg === 'string' && (
-          reasonMsg.indexOf('onMessage') !== -1 || 
-          reasonMsg.indexOf('chrome.runtime') !== -1 ||
-          reasonMsg.indexOf('setPlaybackSpeed') !== -1
-        )) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-      }, true);
     </script>
   </head>
-  <body>
-    <div id="root"></div>
+  <body class="bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 antialiased selection:bg-blue-600 selection:text-white">
+    <div id="root">
+      <!-- Pre-rendered Crawlable Fallback Content for Search Engine Crawlers -->
+      <noscript>
+        <div style="max-width: 800px; margin: 0 auto; padding: 40px 20px; font-family: system-ui, -apple-system, sans-serif;">
+          <h1>LearnStudy — Study Smarter With YouTube Lectures</h1>
+          <p>Turn YouTube lectures and playlists into an organized study experience. Track your progress, continue where you left off, take notes, bookmark important timestamps, and stay focused with built-in study tools.</p>
+          <a href="/app" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 16px;">Open LearnStudy Application</a>
+          
+          <h2>Key Features</h2>
+          <ul>
+            <li><strong>YouTube Lecture Player:</strong> Distraction-free, focused lecture learning environment.</li>
+            <li><strong>Playlist Learning:</strong> Import full playlists with structured lecture ordering.</li>
+            <li><strong>Lecture Progress Tracking:</strong> Auto-save exact timestamps and mark finished lectures.</li>
+            <li><strong>Lecture History:</strong> Instant resume for recent playlists and topics.</li>
+            <li><strong>Notes & Timestamp Bookmarks:</strong> Take notes linked directly to video timestamps.</li>
+            <li><strong>Pomodoro Focus Timer:</strong> Stay productive with custom intervals and breaks.</li>
+          </ul>
+
+          <h2>How It Works</h2>
+          <ol>
+            <li>Open LearnStudy</li>
+            <li>Add a YouTube lecture or playlist</li>
+            <li>Study and track your progress</li>
+            <li>Continue learning whenever you return</li>
+          </ol>
+        </div>
+      </noscript>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

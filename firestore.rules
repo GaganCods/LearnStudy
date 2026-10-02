@@ -10,10 +10,19 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Users collection
+    // Users collection and subcollections
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow create, update, delete: if isOwner(userId);
+      
+      match /{document=**} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // User Data Root Document for synced device study state
+    match /userData/{userId} {
+      allow read, write: if isOwner(userId);
     }
 
     // Courses collection

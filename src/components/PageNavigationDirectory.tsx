@@ -273,7 +273,7 @@ export const PageNavigationDirectory: React.FC<PageNavigationDirectoryProps> = (
                           {page.category}
                         </span>
                         <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/50">
-                          /{page.tabParam}
+                          /app/{page.tabParam}
                         </span>
                       </div>
                     </div>
