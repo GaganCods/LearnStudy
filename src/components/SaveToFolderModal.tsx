@@ -117,12 +117,6 @@ export const SaveToFolderModal: React.FC<SaveToFolderModalProps> = ({
     }
   };
 
-  // Quick Watch Later toggle
-  const handleToggleWatchLater = () => {
-    const wl = Storage.getOrCreateWatchLaterSubject();
-    handleToggleFolder(wl);
-  };
-
   // Create & Save
   const handleCreateAndSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,7 +176,7 @@ export const SaveToFolderModal: React.FC<SaveToFolderModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-black text-slate-900 dark:text-zinc-50 leading-tight">
-                Save to Folders & Categories
+                Save to Folder
               </h3>
               <p className="text-xs text-slate-500 dark:text-zinc-400">
                 Organize this {target.type === "playlist" ? "playlist" : "lecture"} into your custom library
@@ -226,44 +220,6 @@ export const SaveToFolderModal: React.FC<SaveToFolderModalProps> = ({
         {/* Modal Body / Scrollable Content */}
         <div className="p-5 overflow-y-auto space-y-4 flex-1 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-zinc-800">
           
-          {/* Quick Action: Watch Later Toggle */}
-          <div className="bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/25 rounded-2xl p-3.5 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-xl bg-amber-500 text-white shadow-sm">
-                <Clock className="w-4 h-4" />
-              </div>
-              <div>
-                <span className="text-xs font-black text-amber-900 dark:text-amber-300 block">
-                  Watch Later
-                </span>
-                <span className="text-[11px] text-amber-800/80 dark:text-amber-400/80">
-                  Quick access bookmark for study later
-                </span>
-              </div>
-            </div>
-
-            <button
-              onClick={handleToggleWatchLater}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition shrink-0 cursor-pointer ${
-                isWatchLaterSaved
-                  ? "bg-amber-500 text-white shadow-sm"
-                  : "bg-white dark:bg-zinc-800 border border-amber-300 dark:border-amber-700/50 text-amber-900 dark:text-amber-300 hover:bg-amber-100/50"
-              }`}
-            >
-              {isWatchLaterSaved ? (
-                <>
-                  <Check className="w-3.5 h-3.5 stroke-[3]" />
-                  <span>Saved</span>
-                </>
-              ) : (
-                <>
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Save to Watch Later</span>
-                </>
-              )}
-            </button>
-          </div>
-
           {/* Search & Category Filter */}
           <div className="space-y-2">
             <div className="relative">
@@ -504,7 +460,7 @@ export const SaveToFolderModal: React.FC<SaveToFolderModalProps> = ({
                     className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-extrabold text-xs py-2.5 rounded-xl shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
-                    <span>Create & Save to Folder</span>
+                    <span>Create & Save</span>
                   </button>
                 </div>
               </form>
@@ -521,7 +477,7 @@ export const SaveToFolderModal: React.FC<SaveToFolderModalProps> = ({
                 Saved in {savedFolderIds.length} folder{savedFolderIds.length === 1 ? "" : "s"}
               </span>
             ) : (
-              <span>Select folders above or click Watch Later</span>
+              <span>Select folders above</span>
             )}
           </span>
 

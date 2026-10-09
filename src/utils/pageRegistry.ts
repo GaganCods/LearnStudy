@@ -387,6 +387,9 @@ export function parseInitialUrlState(): {
   playlistId?: string;
   searchQuery?: string;
   timestamp?: number;
+  shareFolder?: string;
+  shareChapter?: string;
+  shareData?: string;
 } {
   if (typeof window === "undefined") {
     return { tab: null };
@@ -479,9 +482,12 @@ export function parseInitialUrlState(): {
     const searchQuery = params.get("q") || params.get("search") || undefined;
     const tParam = params.get("t") || params.get("time");
     const timestamp = tParam ? parseInt(tParam, 10) : undefined;
+    const shareFolder = params.get("shareFolder") || params.get("folderId") || undefined;
+    const shareChapter = params.get("shareChapter") || params.get("chapterId") || undefined;
+    const shareData = params.get("d") || params.get("data") || undefined;
 
     // If a lecture slug is present in /app/lectures/:subject/:lecture, route to study tab!
-    let finalTab: ActiveTab | null = tabParam || tabFromPath || tabFromHash || (videoId || playlistId ? "study" : (searchQuery ? "search" : null));
+    let finalTab: ActiveTab | null = tabParam || tabFromPath || tabFromHash || (videoId || playlistId ? "study" : (searchQuery ? "search" : (shareFolder || shareChapter ? "library" : null)));
     if (subjectSlugFromPath && lectureSlugFromPath) {
       finalTab = "study";
     }
@@ -494,7 +500,10 @@ export function parseInitialUrlState(): {
       videoTitle: titleSlug ? titleSlug.replace(/-/g, " ") : undefined,
       playlistId,
       searchQuery,
-      timestamp: isNaN(timestamp as any) ? undefined : timestamp
+      timestamp: isNaN(timestamp as any) ? undefined : timestamp,
+      shareFolder,
+      shareChapter,
+      shareData
     };
   } catch (e) {
     console.error("Failed to parse URL state", e);
@@ -564,14 +573,17 @@ export function navigateTo(
   }
 
   const currentUrl = `${window.location.pathname}${window.location.search}`;
-  if (currentUrl !== targetUrl) {
-    if (params?.replace) {
-      window.history.replaceState({ tab, ...params }, "", targetUrl);
-    } else {
-      window.history.pushState({ tab, ...params }, "", targetUrl);
-    }
+  if (currentUrl === targetUrl) {
+    // Already on the target URL, no-op to avoid history pollution and redundant popstate events
+    return;
   }
 
-  // Dispatch popstate event so all listeners immediately update without full page reload
+  if (params?.replace) {
+    window.history.replaceState({ tab, ...params }, "", targetUrl);
+  } else {
+    window.history.pushState({ tab, ...params }, "", targetUrl);
+  }
+
+  // Dispatch popstate event only when URL actually changed
   window.dispatchEvent(new PopStateEvent("popstate", { state: { tab, ...params } }));
 }

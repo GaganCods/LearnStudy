@@ -4,16 +4,20 @@ import App from './App.tsx';
 import { PomodoroProvider } from './components/PomodoroContext.tsx';
 import { ToastProvider } from './components/ToastContext.tsx';
 import { AuthProvider } from './context/AuthContext.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ToastProvider>
-      <AuthProvider>
-        <PomodoroProvider>
-          <App />
-        </PomodoroProvider>
-      </AuthProvider>
-    </ToastProvider>
+    <ErrorBoundary fallbackTitle="LearnStudy Application">
+      <ToastProvider>
+        <AuthProvider>
+          <PomodoroProvider>
+            <App />
+          </PomodoroProvider>
+        </AuthProvider>
+      </ToastProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );
+

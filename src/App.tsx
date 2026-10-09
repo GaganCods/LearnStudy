@@ -20,7 +20,7 @@ import { StudyStats } from "./components/StudyStats";
 import { InteractiveNotes } from "./components/InteractiveNotes";
 import { 
   PlaylistInfo, SingleVideoInfo, Bookmark as BookmarkType, 
-  StudySettings, ActiveTab, VideoItem 
+  StudySettings, ActiveTab, VideoItem, CustomSubjectFolder 
 } from "./types";
 import { usePomodoro } from "./components/PomodoroContext";
 import { PomodoroTimer } from "./components/PomodoroTimer";
@@ -28,6 +28,7 @@ import { PomodoroTimer } from "./components/PomodoroTimer";
 import { CompactStudyTimer } from "./components/CompactStudyTimer";
 import { FullScreenTimer } from "./components/FullScreenTimer";
 import { parseYoutubeUrl, fetchPlaylistWithFallback } from "./utils/youtubeParser";
+import { parseShareInput, generateFolderId, generateChapterId } from "./utils/shareUtils";
 import { PlaylistDb } from "./utils/playlistDb";
 import { hasGeminiKey, getGeminiKey, removeGeminiKey, fetchVideoMetadataWithGemini, maskApiKey } from "./utils/gemini";
 import { GeminiOnboardingModal } from "./components/GeminiOnboardingModal";
@@ -53,6 +54,7 @@ import { useAuth } from "./context/AuthContext";
 import { auth } from "./lib/firebase";
 import { AuthModal } from "./components/auth/AuthModal";
 import { NotesHub } from "./components/NotesHub";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { 
   APP_PAGES, 
   searchPages, 
@@ -307,6 +309,13 @@ async function fetchVideoFromYouTubeClient(id: string): Promise<any> {
   };
 }
 
+function formatChapterTitle(rawTitle: string, chapterNumber: number): string {
+  if (!rawTitle) return `Chapter ${chapterNumber}`;
+  const cleaned = rawTitle.replace(/^(chapter|ch\.?)\s*\d+[:\-\s]*/i, "").trim();
+  if (!cleaned) return `Chapter ${chapterNumber}`;
+  return `Chapter ${chapterNumber}: ${cleaned}`;
+}
+
 export default function App() {
   const { toast, soundEnabled, setSoundEnabled } = useToast();
   const { currentUser, userProfile, signOutUser, syncStatus, lastSyncedAt, syncNow, isLoading: isAuthLoading } = useAuth();
@@ -342,7 +351,15 @@ export default function App() {
     if (options?.videoTitle) setActiveVideoTitle(options.videoTitle);
     if (options?.searchQuery !== undefined) setSearchQuery(options.searchQuery);
 
-    navigateTo(targetTab, options);
+    // If navigating to the same tab without deep slugs, replace instead of pushing to avoid history traps
+    const isRedundantClick = activeTab === targetTab && !options?.subjectSlug && !options?.lectureSlug;
+    const shouldReplace = options?.replace ?? isRedundantClick;
+
+    navigateTo(targetTab, { ...options, replace: shouldReplace });
+    
+    if (mainScrollRef.current) {
+      mainScrollRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -369,7 +386,13 @@ export default function App() {
   const [showPauseSuggestion, setShowPauseSuggestion] = useState(false);
 
   // Navigation & Theme
-  const [activeTab, setActiveTab] = useState<ActiveTab>("home");
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    if (typeof window !== "undefined") {
+      const parsed = parseInitialUrlState();
+      if (parsed.tab) return parsed.tab;
+    }
+    return "home";
+  });
   const [historyFilter, setHistoryFilter] = useState<"all" | "playlist" | "video">("all");
   const [settings, setSettings] = useState<StudySettings>(Storage.getSettings());
   const [searchQuery, setSearchQuery] = useState("");
@@ -850,19 +873,25 @@ export default function App() {
 
       // If URL is /app/lectures/:subject/:lecture, find and load that lecture
       if (state.subjectSlug && state.lectureSlug) {
-        const subjects = Storage.getCustomSubjects();
-        const foundSub = subjects.find(s => slugify(s.subjectName) === state.subjectSlug || s.id === state.subjectSlug);
-        if (foundSub) {
-          for (const ch of foundSub.chapters) {
-            const foundLec = ch.lectures.find(l => slugify(l.title) === state.lectureSlug || l.id === state.lectureSlug);
-            if (foundLec && foundLec.youtubeVideoId) {
-              setActiveVideoId(foundLec.youtubeVideoId);
-              setActiveVideoTitle(foundLec.title);
-              setActiveVideoChannel(foundSub.subjectName);
-              setActiveSession({ id: foundSub.id, type: "playlist" });
-              break;
+        try {
+          const subjects = Storage.getCustomSubjects() || [];
+          const foundSub = subjects.find(s => slugify(s.subjectName) === state.subjectSlug || s.id === state.subjectSlug);
+          if (foundSub && Array.isArray(foundSub.chapters)) {
+            for (const ch of foundSub.chapters) {
+              if (ch && Array.isArray(ch.lectures)) {
+                const foundLec = ch.lectures.find(l => slugify(l.title) === state.lectureSlug || l.id === state.lectureSlug);
+                if (foundLec && foundLec.youtubeVideoId) {
+                  setActiveVideoId(foundLec.youtubeVideoId);
+                  setActiveVideoTitle(foundLec.title);
+                  setActiveVideoChannel(foundSub.subjectName);
+                  setActiveSession({ id: foundSub.id, type: "playlist" });
+                  break;
+                }
+              }
             }
           }
+        } catch (e) {
+          console.warn("Popstate lecture resolution error:", e);
         }
       }
     };
@@ -1728,9 +1757,53 @@ export default function App() {
     setBackgroundPlaylistData(null);
 
     try {
+      // Check if input is a LearnStudy share link, ID, or encoded payload
+      const shareParsed = parseShareInput(urlInput, Storage.getCustomSubjects());
+      if (shareParsed) {
+        if (shareParsed.type === "folder" && shareParsed.folder) {
+          const folderToAdd = shareParsed.folder;
+          Storage.saveCustomSubject(folderToAdd);
+          toast.success("Course Folder Imported!", `Added "${folderToAdd.subjectName}" with ${(folderToAdd.chapters || []).length} chapters to your Library.`);
+          setIsLoading(false);
+          setUrlInput("");
+          navigateToApp("library", { subjectSlug: slugify(folderToAdd.subjectName) });
+          return;
+        } else if (shareParsed.type === "chapter" && shareParsed.chapter) {
+          const chapter = shareParsed.chapter;
+          const subjects = Storage.getCustomSubjects();
+          if (subjects.length > 0) {
+            const targetSubj = subjects[0];
+            const nextNum = (targetSubj.chapters || []).length + 1;
+            chapter.chapterNumber = nextNum;
+            chapter.title = formatChapterTitle(chapter.title, nextNum);
+            const updatedChapters = [...(targetSubj.chapters || []), chapter];
+            const updatedSubj = { ...targetSubj, chapters: updatedChapters };
+            Storage.saveCustomSubject(updatedSubj);
+            toast.success("Chapter Added!", `Added "${chapter.title}" to "${targetSubj.subjectName}".`);
+          } else {
+            const folderName = shareParsed.subjectName || "Imported Course";
+            const newSubj: CustomSubjectFolder = {
+              id: generateFolderId(),
+              subjectName: folderName,
+              category: "Imported Courses",
+              color: "blue",
+              description: `Imported chapter "${chapter.title}"`,
+              createdAt: new Date().toISOString(),
+              chapters: [{ ...chapter, chapterNumber: 1, title: formatChapterTitle(chapter.title, 1) }]
+            };
+            Storage.saveCustomSubject(newSubj);
+            toast.success("New Folder Created!", `Created "${folderName}" with imported chapter!`);
+          }
+          setIsLoading(false);
+          setUrlInput("");
+          navigateToApp("library");
+          return;
+        }
+      }
+
       const parsed = parseYoutubeUrl(urlInput);
       if (!parsed) {
-        throw new Error("Invalid YouTube URL. Please enter a valid video, shorts, live, or playlist link.");
+        throw new Error("Invalid URL. Please enter a valid YouTube video/playlist link or LearnStudy share link/ID.");
       }
 
       const { type, id, videoId: maybeVideoId } = parsed;
@@ -5940,7 +6013,7 @@ export default function App() {
                                   title="Save lecture to folder or Watch Later"
                                 >
                                   <Bookmark className="w-3.5 h-3.5 fill-current" />
-                                  <span>Save to Folder / Watch Later</span>
+                                  <span>Save to Folder</span>
                                 </button>
 
                                 <button
@@ -6789,66 +6862,75 @@ export default function App() {
               {/* COURSE LIBRARY TAB */}
               {activeTab === "library" && (
                 <div className="max-w-7xl mx-auto py-2">
-                  <CourseLibrary 
-                    initialSubjectSlug={activeSubjectSlug}
-                    onSelectSubject={(subj) => {
-                      const sSlug = subj ? slugify(subj.subjectName) : undefined;
-                      setActiveSubjectSlug(sSlug);
+                  <ErrorBoundary 
+                    fallbackTitle="Course Library"
+                    onReset={() => {
+                      setActiveSubjectSlug(undefined);
                       setActiveLectureSlug(undefined);
-                      navigateToApp("library", { subjectSlug: sSlug });
+                      navigateToApp("library", { replace: true });
                     }}
-                    onSelectLecture={(videoId, title, channel, playlistInfo, switchToStudyTab, subjectSlug) => {
-                      if (playlistInfo && playlistInfo.videos && playlistInfo.videos.length > 0) {
-                        const existingIndex = playlists.findIndex(p => p.id === playlistInfo.id);
-                        let updatedPlaylists = [...playlists];
-                        const playlistObj: any = {
-                          id: playlistInfo.id,
-                          title: playlistInfo.title,
-                          channelName: channel || "Course Library",
-                          thumbnail: playlistInfo.videos[0]?.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-                          videos: playlistInfo.videos,
-                          totalVideos: playlistInfo.videos.length,
-                          completedVideos: playlistInfo.videos.filter(v => v.completed).length,
-                          progress: Math.round((playlistInfo.videos.filter(v => v.completed).length / playlistInfo.videos.length) * 100) || 0
-                        };
-
-                        if (existingIndex >= 0) {
-                          updatedPlaylists[existingIndex] = playlistObj;
-                        } else {
-                          updatedPlaylists.unshift(playlistObj);
-                        }
-                        setPlaylists(updatedPlaylists);
-                        Storage.savePlaylist(playlistObj);
-
-                        setActiveVideoId(videoId);
-                        setActiveVideoTitle(title || "Lecture");
-                        setActiveVideoChannel(channel || "Course Library");
-                        setActiveSession({ id: playlistInfo.id, type: "playlist" });
-                      } else {
-                        setActiveVideoId(videoId);
-                        setActiveVideoTitle(title || "Lecture");
-                        setActiveVideoChannel(channel || "Custom Course");
-                        setActiveSession({ id: videoId, type: "video" });
-                      }
-
-                      if (switchToStudyTab !== false) {
-                        const sSlug = subjectSlug || activeSubjectSlug;
-                        const lSlug = slugify(title || "lecture");
+                  >
+                    <CourseLibrary 
+                      initialSubjectSlug={activeSubjectSlug}
+                      onSelectSubject={(subj) => {
+                        const sSlug = subj ? slugify(subj.subjectName) : undefined;
                         setActiveSubjectSlug(sSlug);
-                        setActiveLectureSlug(lSlug);
-                        navigateToApp("study", {
-                          subjectSlug: sSlug,
-                          lectureSlug: lSlug,
-                          videoId,
-                          videoTitle: title,
-                          playlistId: playlistInfo?.id
-                        });
-                      }
-                    }} 
-                    onOpenImportUrl={() => {
-                      navigateToApp("home");
-                    }}
-                  />
+                        setActiveLectureSlug(undefined);
+                        navigateToApp("library", { subjectSlug: sSlug });
+                      }}
+                      onSelectLecture={(videoId, title, channel, playlistInfo, switchToStudyTab, subjectSlug) => {
+                        if (playlistInfo && playlistInfo.videos && playlistInfo.videos.length > 0) {
+                          const existingIndex = playlists.findIndex(p => p.id === playlistInfo.id);
+                          let updatedPlaylists = [...playlists];
+                          const playlistObj: any = {
+                            id: playlistInfo.id,
+                            title: playlistInfo.title,
+                            channelName: channel || "Course Library",
+                            thumbnail: playlistInfo.videos[0]?.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                            videos: playlistInfo.videos,
+                            totalVideos: playlistInfo.videos.length,
+                            completedVideos: playlistInfo.videos.filter(v => v.completed).length,
+                            progress: Math.round((playlistInfo.videos.filter(v => v.completed).length / playlistInfo.videos.length) * 100) || 0
+                          };
+
+                          if (existingIndex >= 0) {
+                            updatedPlaylists[existingIndex] = playlistObj;
+                          } else {
+                            updatedPlaylists.unshift(playlistObj);
+                          }
+                          setPlaylists(updatedPlaylists);
+                          Storage.savePlaylist(playlistObj);
+
+                          setActiveVideoId(videoId);
+                          setActiveVideoTitle(title || "Lecture");
+                          setActiveVideoChannel(channel || "Course Library");
+                          setActiveSession({ id: playlistInfo.id, type: "playlist" });
+                        } else {
+                          setActiveVideoId(videoId);
+                          setActiveVideoTitle(title || "Lecture");
+                          setActiveVideoChannel(channel || "Custom Course");
+                          setActiveSession({ id: videoId, type: "video" });
+                        }
+
+                        if (switchToStudyTab !== false) {
+                          const sSlug = subjectSlug || activeSubjectSlug;
+                          const lSlug = slugify(title || "lecture");
+                          setActiveSubjectSlug(sSlug);
+                          setActiveLectureSlug(lSlug);
+                          navigateToApp("study", {
+                            subjectSlug: sSlug,
+                            lectureSlug: lSlug,
+                            videoId,
+                            videoTitle: title,
+                            playlistId: playlistInfo?.id
+                          });
+                        }
+                      }} 
+                      onOpenImportUrl={() => {
+                        navigateToApp("home");
+                      }}
+                    />
+                  </ErrorBoundary>
                 </div>
               )}
 
@@ -6901,9 +6983,18 @@ export default function App() {
       {/* 4. Mobile Bottom Navigation bar - Hidden during Focus Mode */}
       {!focusMode && (
         <nav className="sticky bottom-0 z-40 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border-t border-slate-200 dark:border-zinc-900 py-1.5 px-2 flex md:hidden items-center justify-around select-none shadow-xl">
-          <a
-            href="/app/dashboard"
-            onClick={(e) => { e.preventDefault(); navigateToApp("home"); setSearchQuery(""); }}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setSearchQuery("");
+              if (activeTab === "home") {
+                mainScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+              } else {
+                navigateToApp("home");
+              }
+            }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "home" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
@@ -6912,11 +7003,20 @@ export default function App() {
           >
             <Home className="w-5 h-5 stroke-[2.25]" />
             <span className="text-[10px] mt-0.5">Home</span>
-          </a>
+          </button>
 
-          <a
-            href="/app/study"
-            onClick={(e) => { e.preventDefault(); navigateToApp("study"); setSearchQuery(""); }}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setSearchQuery("");
+              if (activeTab === "study") {
+                mainScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+              } else {
+                navigateToApp("study");
+              }
+            }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "study" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
@@ -6925,11 +7025,24 @@ export default function App() {
           >
             <Tv className="w-5 h-5 stroke-[2.25]" />
             <span className="text-[10px] mt-0.5">Study</span>
-          </a>
+          </button>
 
-          <a
-            href="/app/lectures"
-            onClick={(e) => { e.preventDefault(); navigateToApp("library"); setSearchQuery(""); }}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setSearchQuery("");
+              if (activeTab === "library") {
+                // If already on library, reset any active subject/lecture and scroll to top smoothly
+                setActiveSubjectSlug(undefined);
+                setActiveLectureSlug(undefined);
+                navigateToApp("library", { replace: true });
+                mainScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+              } else {
+                navigateToApp("library");
+              }
+            }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "library" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
@@ -6938,11 +7051,20 @@ export default function App() {
           >
             <Folder className="w-5 h-5 stroke-[2.25]" />
             <span className="text-[10px] mt-0.5">Lectures</span>
-          </a>
+          </button>
 
-          <a
-            href="/app/planner"
-            onClick={(e) => { e.preventDefault(); navigateToApp("planner"); setSearchQuery(""); }}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setSearchQuery("");
+              if (activeTab === "planner") {
+                mainScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+              } else {
+                navigateToApp("planner");
+              }
+            }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "planner" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
@@ -6951,14 +7073,19 @@ export default function App() {
           >
             <Calendar className="w-5 h-5 stroke-[2.25]" />
             <span className="text-[10px] mt-0.5">Planner</span>
-          </a>
+          </button>
 
-          <a
-            href="/app/settings"
+          <button
+            type="button"
             onClick={(e) => { 
               e.preventDefault(); 
-              navigateToApp("settings"); 
+              e.stopPropagation();
               setSearchQuery(""); 
+              if (activeTab === "settings") {
+                mainScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+              } else {
+                navigateToApp("settings"); 
+              }
             }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "settings" && !searchQuery 
@@ -6984,7 +7111,7 @@ export default function App() {
               <User className="w-5 h-5 stroke-[2.25]" />
             )}
             <span className="text-[10px] mt-0.5">Profile</span>
-          </a>
+          </button>
         </nav>
       )}
 

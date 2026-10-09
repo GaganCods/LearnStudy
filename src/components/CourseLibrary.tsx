@@ -1,17 +1,23 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   Folder, Plus, Search, BookOpen, CheckCircle2, 
   Trash2, Edit2, Play, FolderPlus, X, AlertTriangle,
   ChevronRight, ChevronDown, ListVideo, Sparkles, Check, ArrowLeft,
   ArrowUpDown, FileText, ExternalLink, Layers, GraduationCap, Video,
   Loader2, RefreshCw, ArrowUp, ArrowDown, ArrowRight, Palette, Film, Download, Link2,
-  Scissors, CheckSquare, Square, MoreVertical
+  Scissors, CheckSquare, Square, MoreVertical, Share2, Copy
 } from "lucide-react";
 import { Storage } from "../utils/storage";
 import { CustomSubjectFolder, CourseChapter, ChapterLecture } from "../types";
 import { useToast } from "./ToastContext";
 import { parseYoutubeUrl, fetchPlaylistWithFallback } from "../utils/youtubeParser";
 import { slugify } from "../utils/pageRegistry";
+import { 
+  generateFolderId, 
+  generateChapterId, 
+  generateLectureId 
+} from "../utils/shareUtils";
+import { ShareModal, ImportShareModal } from "./ShareImportModal";
 
 const YoutubeBrandIcon = ({ className = "w-4 h-4 shrink-0" }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
@@ -65,6 +71,7 @@ interface CourseLibraryProps {
   onOpenImportUrl?: () => void;
   initialSubjectSlug?: string;
   onSelectSubject?: (subject: CustomSubjectFolder | null) => void;
+  resetSignal?: number;
 }
 
 // Sample starter subject for first-time user experience if library is completely empty
@@ -139,7 +146,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
   onSelectLecture, 
   onOpenImportUrl,
   initialSubjectSlug,
-  onSelectSubject 
+  onSelectSubject,
+  resetSignal
 }) => {
   const { toast } = useToast();
   const [subjects, setSubjects] = useState<CustomSubjectFolder[]>([]);
@@ -165,6 +173,52 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
   const [playlistPlayerSubject, setPlaylistPlayerSubject] = useState<CustomSubjectFolder | null>(null);
   const [activeLecture, setActiveLecture] = useState<ChapterLecture | null>(null);
   const [activeChapterIdFilter, setActiveChapterIdFilter] = useState<string | "ALL">("ALL");
+
+  // Share & Import Modals State
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareModalConfig, setShareModalConfig] = useState<{
+    type: "folder" | "chapter";
+    folder?: CustomSubjectFolder | null;
+    chapter?: CourseChapter | null;
+    subjectName?: string;
+  }>({ type: "folder" });
+
+  const [showImportShareModal, setShowImportShareModal] = useState(false);
+  const [initialShareImportInput, setInitialShareImportInput] = useState<string>("");
+
+  // Reset internal detail views back to top-level grid when resetSignal fires (e.g. tapping Lectures in bottom nav)
+  useEffect(() => {
+    if (resetSignal) {
+      setSelectedSubject(null);
+      setPlaylistPlayerSubject(null);
+      setActiveLecture(null);
+      setSearchQuery("");
+      setShowSubjectModal(false);
+      setShowImportPlaylistModal(false);
+      setShowEditSubjectModal(false);
+      setShowChapterModal(false);
+      setShowShareModal(false);
+      setShowImportShareModal(false);
+      setShowSubjectHeaderMenu(false);
+      setOpenChapterMenuId(null);
+      setOpenSubjectCardMenuId(null);
+      onSelectSubject?.(null);
+    }
+  }, [resetSignal]);
+
+  // Deep Link auto-detection for shareFolder / shareChapter query params on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const shareFolder = params.get("shareFolder") || params.get("folderId");
+      const shareChapter = params.get("shareChapter") || params.get("chapterId");
+      const d = params.get("d") || params.get("data");
+      if (shareFolder || shareChapter || d) {
+        setInitialShareImportInput(window.location.href);
+        setShowImportShareModal(true);
+      }
+    }
+  }, []);
 
   // Subject Creation Modal State
   const [showSubjectModal, setShowSubjectModal] = useState(false);
@@ -639,12 +693,52 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
     const stored = Storage.getCustomSubjects() || [];
     // Remove the dummy starter subject if present
     const filtered = stored.filter(s => s.id !== "subject-sample-101");
-    if (filtered.length !== stored.length) {
-      Storage.saveCustomSubjects(filtered);
+    
+    // Ensure every subject, chapter, and lecture has a clean unique ID
+    let hasMissingIds = false;
+    const sanitized = filtered.map(s => {
+      let subjModified = false;
+      let folderId = s.id;
+      if (!folderId) {
+        folderId = generateFolderId();
+        subjModified = true;
+      }
+      const fixedChapters = (s.chapters || []).map((ch, idx) => {
+        let chModified = false;
+        let chapId = ch.id;
+        if (!chapId) {
+          chapId = generateChapterId();
+          chModified = true;
+        }
+        const fixedLectures = (ch.lectures || []).map((lec, lIdx) => {
+          if (!lec.id) {
+            chModified = true;
+            return { ...lec, id: generateLectureId(), lectureNumber: lec.lectureNumber || lIdx + 1 };
+          }
+          return lec;
+        });
+        if (chModified || chapId !== ch.id) subjModified = true;
+        return {
+          ...ch,
+          id: chapId,
+          chapterNumber: ch.chapterNumber || idx + 1,
+          lectures: fixedLectures
+        };
+      });
+      if (subjModified) hasMissingIds = true;
+      return {
+        ...s,
+        id: folderId,
+        chapters: fixedChapters
+      };
+    });
+
+    if (sanitized.length !== stored.length || hasMissingIds) {
+      Storage.saveCustomSubjects(sanitized);
     }
     
     // Sync completion status with singleVideos and playlists on load
-    const synced = syncCompletedStatusWithStoredVideos(filtered);
+    const synced = syncCompletedStatusWithStoredVideos(sanitized);
 
     setSubjects(synced);
     setSelectedSubject((prev) => (prev ? synced.find((s) => s.id === prev.id) || null : null));
@@ -669,6 +763,99 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
     const mergedCats = Array.from(new Set([...catsList, ...actualCats]));
     setCustomCategories(mergedCats);
     localStorage.setItem("studyai_custom_categories", JSON.stringify(mergedCats));
+  };
+
+  // Handlers for Sharing and Importing Folders & Chapters
+  const handleOpenShareFolder = (folder: CustomSubjectFolder, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    setShareModalConfig({
+      type: "folder",
+      folder,
+      subjectName: folder.subjectName
+    });
+    setShowShareModal(true);
+  };
+
+  const handleOpenShareChapter = (chapter: CourseChapter, subjectName?: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    setShareModalConfig({
+      type: "chapter",
+      chapter,
+      subjectName: subjectName || selectedSubject?.subjectName
+    });
+    setShowShareModal(true);
+  };
+
+  const handleImportFolder = (folder: CustomSubjectFolder) => {
+    const freshFolder: CustomSubjectFolder = {
+      ...folder,
+      id: generateFolderId(),
+      createdAt: new Date().toISOString(),
+      chapters: (folder.chapters || []).map((ch, idx) => ({
+        ...ch,
+        id: generateChapterId(),
+        chapterNumber: ch.chapterNumber || idx + 1,
+        lectures: (ch.lectures || []).map((lec, lIdx) => ({
+          ...lec,
+          id: generateLectureId(),
+          lectureNumber: lec.lectureNumber || lIdx + 1
+        }))
+      }))
+    };
+    Storage.saveCustomSubject(freshFolder);
+    setSubjects(prev => [freshFolder, ...prev.filter(s => s.id !== freshFolder.id)]);
+    setSelectedSubject(freshFolder);
+    onSelectSubject?.(freshFolder);
+    toast.success("Folder Added!", `"${freshFolder.subjectName}" imported with Unique ID: ${freshFolder.id}`);
+  };
+
+  const handleImportChapter = (chapter: CourseChapter, targetSubjectId?: string, newSubjectName?: string) => {
+    const freshChapter: CourseChapter = {
+      ...chapter,
+      id: generateChapterId(),
+      lectures: (chapter.lectures || []).map((lec, lIdx) => ({
+        ...lec,
+        id: generateLectureId(),
+        lectureNumber: lec.lectureNumber || lIdx + 1
+      }))
+    };
+
+    if (targetSubjectId) {
+      const targetSubj = subjects.find(s => s.id === targetSubjectId);
+      if (targetSubj) {
+        const nextNum = (targetSubj.chapters || []).length + 1;
+        freshChapter.chapterNumber = nextNum;
+        freshChapter.title = formatChapterTitle(freshChapter.title, nextNum);
+        const updatedChapters = [...(targetSubj.chapters || []), freshChapter];
+        const updatedSubj = { ...targetSubj, chapters: updatedChapters };
+        Storage.saveCustomSubject(updatedSubj);
+        setSubjects(subjects.map(s => s.id === updatedSubj.id ? updatedSubj : s));
+        if (selectedSubject?.id === updatedSubj.id) setSelectedSubject(updatedSubj);
+        toast.success("Chapter Added!", `Added "${freshChapter.title}" with Unique ID: ${freshChapter.id}`);
+      }
+    } else {
+      const folderName = newSubjectName || "Imported Course";
+      const newSubj: CustomSubjectFolder = {
+        id: generateFolderId(),
+        subjectName: folderName,
+        category: "Imported Courses",
+        color: "blue",
+        description: `Imported chapter "${freshChapter.title}"`,
+        createdAt: new Date().toISOString(),
+        chapters: [{ ...freshChapter, chapterNumber: 1, title: formatChapterTitle(freshChapter.title, 1) }]
+      };
+      Storage.saveCustomSubject(newSubj);
+      setSubjects(prev => [newSubj, ...prev]);
+      setSelectedSubject(newSubj);
+      onSelectSubject?.(newSubj);
+      toast.success("New Folder Created!", `Created "${folderName}" with imported chapter!`);
+    }
   };
 
   // Auto-fetch video details from YouTube endpoint as user enters URL
@@ -716,25 +903,31 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
 
   const existingCategories = categories.filter(c => c !== "All Subjects");
 
-  // Filtered Subjects list
+  // Filtered Subjects list with safe null checks
   const filteredSubjects = subjects.filter((s) => {
+    if (!s) return false;
     const matchesCat = activeCategory === "All Subjects" || s.category === activeCategory;
+    const q = (searchQuery || "").toLowerCase().trim();
+    if (!q) return matchesCat;
     const matchesSearch = 
-      s.subjectName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.chapters.some(c => 
-        c.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        c.lectures.some(l => l.title.toLowerCase().includes(searchQuery.toLowerCase()))
+      (s.subjectName || "").toLowerCase().includes(q) ||
+      (s.category || "").toLowerCase().includes(q) ||
+      (s.id || "").toLowerCase().includes(q) ||
+      (s.chapters || []).some(c => 
+        (c.title || "").toLowerCase().includes(q) ||
+        (c.id || "").toLowerCase().includes(q) ||
+        (c.lectures || []).some(l => (l.title || "").toLowerCase().includes(q) || (l.id || "").toLowerCase().includes(q))
       );
     return matchesCat && matchesSearch;
   });
 
-  // Calculate progress for a subject
+  // Calculate progress for a subject safely
   const getSubjectProgress = (subj: CustomSubjectFolder) => {
+    if (!subj) return { total: 0, completed: 0, percentage: 0 };
     let total = 0;
     let completed = 0;
-    subj.chapters.forEach((ch) => {
-      ch.lectures.forEach((lec) => {
+    (subj.chapters || []).forEach((ch) => {
+      (ch.lectures || []).forEach((lec) => {
         total++;
         if (lec.completed) completed++;
       });
@@ -743,10 +936,12 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
     return { total, completed, percentage };
   };
 
-  // Calculate progress for a single chapter
+  // Calculate progress for a single chapter safely
   const getChapterProgress = (chapter: CourseChapter) => {
-    const total = chapter.lectures.length;
-    const completed = chapter.lectures.filter(l => l.completed).length;
+    if (!chapter) return { total: 0, completed: 0, percentage: 0 };
+    const lecs = chapter.lectures || [];
+    const total = lecs.length;
+    const completed = lecs.filter(l => l.completed).length;
     const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
     return { total, completed, percentage };
   };
@@ -2139,6 +2334,27 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
     );
   };
 
+  const renderShareAndImportModals = () => (
+    <>
+      <ShareModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        type={shareModalConfig.type}
+        folder={shareModalConfig.folder}
+        chapter={shareModalConfig.chapter}
+        subjectName={shareModalConfig.subjectName}
+      />
+      <ImportShareModal
+        isOpen={showImportShareModal}
+        onClose={() => setShowImportShareModal(false)}
+        subjects={subjects}
+        onImportFolder={handleImportFolder}
+        onImportChapter={handleImportChapter}
+        initialInput={initialShareImportInput}
+      />
+    </>
+  );
+
   // Split Chapter Handlers
   const handleToggleSplitChapterMode = (chapterId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -2748,29 +2964,34 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
   // =========================================================================
   // RENDER VIEW 1: CHAPTER PLAYLIST PLAYER (When watching lectures chapter-wise)
   // =========================================================================
-  if (playlistPlayerSubject && activeLecture) {
-    const { total, completed, percentage } = getSubjectProgress(playlistPlayerSubject);
-    
-    // Determine list of chapters to render in the queue
-    const chaptersToDisplay = activeChapterIdFilter === "ALL" 
-      ? playlistPlayerSubject.chapters 
-      : playlistPlayerSubject.chapters.filter(ch => ch.id === activeChapterIdFilter);
+  if (playlistPlayerSubject) {
+    const allChapters = playlistPlayerSubject.chapters || [];
+    const allLectures = allChapters.flatMap(c => c.lectures || []);
+    const currentActiveLecture = activeLecture || allLectures[0] || null;
 
-    // Find all lectures in order for current queue scope
-    const queueLecturesInOrder: { chapter: CourseChapter; lecture: ChapterLecture }[] = [];
-    chaptersToDisplay.forEach(ch => {
-      ch.lectures.forEach(l => {
-        queueLecturesInOrder.push({ chapter: ch, lecture: l });
+    if (currentActiveLecture) {
+      const { total, completed, percentage } = getSubjectProgress(playlistPlayerSubject);
+      
+      // Determine list of chapters to render in the queue
+      const chaptersToDisplay = activeChapterIdFilter === "ALL" 
+        ? allChapters 
+        : allChapters.filter(ch => ch.id === activeChapterIdFilter);
+
+      // Find all lectures in order for current queue scope
+      const queueLecturesInOrder: { chapter: CourseChapter; lecture: ChapterLecture }[] = [];
+      chaptersToDisplay.forEach(ch => {
+        (ch.lectures || []).forEach(l => {
+          queueLecturesInOrder.push({ chapter: ch, lecture: l });
+        });
       });
-    });
 
-    const currentIdx = queueLecturesInOrder.findIndex(item => item.lecture.id === activeLecture.id);
-    const prevItem = currentIdx > 0 ? queueLecturesInOrder[currentIdx - 1] : null;
-    const nextItem = currentIdx < queueLecturesInOrder.length - 1 ? queueLecturesInOrder[currentIdx + 1] : null;
+      const currentIdx = queueLecturesInOrder.findIndex(item => item.lecture?.id === currentActiveLecture.id);
+      const prevItem = currentIdx > 0 ? queueLecturesInOrder[currentIdx - 1] : null;
+      const nextItem = currentIdx >= 0 && currentIdx < queueLecturesInOrder.length - 1 ? queueLecturesInOrder[currentIdx + 1] : null;
 
-    const currentChapter = playlistPlayerSubject.chapters.find(ch => 
-      ch.lectures.some(l => l.id === activeLecture.id)
-    );
+      const currentChapter = allChapters.find(ch => 
+        (ch.lectures || []).some(l => l.id === currentActiveLecture.id)
+      );
 
     return (
       <div className="space-y-6 animate-in fade-in duration-300">
@@ -3100,8 +3321,10 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
         </div>
         {renderDeleteModal()}
         {renderImportPlaylistModal()}
+        {renderShareAndImportModals()}
       </div>
     );
+    }
   }
 
   // =========================================================================
@@ -3117,12 +3340,10 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
           <div className="flex-1 min-w-0">
             <button
               onClick={() => {
-                if (typeof window !== "undefined" && window.history.length > 1 && window.location.pathname.includes("/lectures/")) {
-                  window.history.back();
-                } else {
-                  setSelectedSubject(null);
-                  onSelectSubject?.(null);
-                }
+                setSelectedSubject(null);
+                setPlaylistPlayerSubject(null);
+                setActiveLecture(null);
+                onSelectSubject?.(null);
               }}
               className="group text-[10px] font-black text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1.5 mb-3 cursor-pointer transition-colors uppercase tracking-widest"
             >
@@ -3135,9 +3356,9 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                 <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-[0.15em] bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
                   {selectedSubject.category}
                 </span>
-                <span className="w-1 h-1 rounded-full bg-slate-300 dark:bg-zinc-700" />
+
                 <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
-                  {selectedSubject.chapters.length} Folders
+                  {(selectedSubject.chapters || []).length} Folders
                 </span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-[900] text-slate-900 dark:text-zinc-50 tracking-tight leading-[1.15] break-words">
@@ -3162,6 +3383,29 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                 <span>Play Subject</span>
               </button>
             )}
+
+            {/* Share Folder Button */}
+            <button
+              onClick={(e) => handleOpenShareFolder(selectedSubject, e)}
+              className="bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-400 font-bold text-xs px-3.5 py-2 rounded-xl border border-indigo-200/60 dark:border-indigo-900/40 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="Share folder with copyable link and unique ID"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>Share Folder</span>
+            </button>
+
+            {/* Import Chapter into Folder */}
+            <button
+              onClick={() => {
+                setInitialShareImportInput("");
+                setShowImportShareModal(true);
+              }}
+              className="bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 font-bold text-xs px-3 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="Import a shared chapter by link or ID"
+            >
+              <Download className="w-3.5 h-3.5 text-indigo-500" />
+              <span>+ Import Chapter</span>
+            </button>
 
             <button
               onClick={() => {
@@ -3201,7 +3445,34 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                       setShowSubjectHeaderMenu(false);
                     }}
                   />
-                  <div className="absolute right-0 top-full mt-1.5 z-50 w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                  <div className="absolute right-0 top-full mt-1.5 z-50 w-56 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowSubjectHeaderMenu(false);
+                        handleOpenShareFolder(selectedSubject, e);
+                      }}
+                      className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                    >
+                      <Share2 className="w-4 h-4 text-indigo-500" />
+                      <span>Share & Copy Link</span>
+                    </button>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowSubjectHeaderMenu(false);
+                        navigator.clipboard.writeText(selectedSubject.id);
+                        toast.success("Folder ID Copied!", selectedSubject.id);
+                      }}
+                      className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                    >
+                      <Copy className="w-4 h-4 text-blue-500" />
+                      <span>Copy Unique ID</span>
+                    </button>
+
+                    <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
+
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -3299,9 +3570,11 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                         {ch.chapterNumber}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <h3 className="text-base sm:text-lg font-[900] text-slate-900 dark:text-zinc-50 tracking-tight leading-tight break-words">
-                          {formatChapterTitle(ch.title, ch.chapterNumber)}
-                        </h3>
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <h3 className="text-base sm:text-lg font-[900] text-slate-900 dark:text-zinc-50 tracking-tight leading-tight break-words">
+                            {formatChapterTitle(ch.title, ch.chapterNumber)}
+                          </h3>
+                        </div>
                         {ch.description && (
                           <p className="text-[11px] font-medium text-slate-500 dark:text-zinc-400 mt-1 line-clamp-2 break-words max-w-md">
                             {ch.description}
@@ -3326,6 +3599,16 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                           <span>Play Chapter</span>
                         </button>
                       )}
+
+                      {/* Share Chapter Button */}
+                      <button
+                        onClick={(e) => handleOpenShareChapter(ch, selectedSubject.subjectName, e)}
+                        className="bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-400 font-bold text-xs px-2.5 py-1.5 rounded-xl border border-indigo-200/60 dark:border-indigo-900/40 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        title="Share chapter with link and unique ID"
+                      >
+                        <Share2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Share</span>
+                      </button>
 
                       <button
                         onClick={() => {
@@ -3366,6 +3649,33 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                               }}
                             />
                             <div className="absolute right-0 top-full mt-1.5 z-50 w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenChapterMenuId(null);
+                                  handleOpenShareChapter(ch, selectedSubject.subjectName, e);
+                                }}
+                                className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                              >
+                                <Share2 className="w-4 h-4 text-indigo-500" />
+                                <span>Share Chapter Link</span>
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenChapterMenuId(null);
+                                  navigator.clipboard.writeText(ch.id);
+                                  toast.success("Chapter ID Copied!", ch.id);
+                                }}
+                                className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                              >
+                                <Copy className="w-4 h-4 text-blue-500" />
+                                <span>Copy Chapter ID</span>
+                              </button>
+
+                              <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
+
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -4217,6 +4527,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
         {renderDeleteModal()}
         {renderImportPlaylistModal()}
         {renderSplitChapterModal()}
+        {renderShareAndImportModals()}
       </div>
     );
   }
@@ -4242,21 +4553,34 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+          {/* Import by Link or Unique ID Button */}
+          <button
+            onClick={() => {
+              setInitialShareImportInput("");
+              setShowImportShareModal(true);
+            }}
+            className="bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-extrabold text-xs px-4 py-3 rounded-2xl shadow-md shadow-indigo-500/20 transition-all duration-150 flex items-center gap-2 cursor-pointer shrink-0 hover:scale-[1.02] active:scale-[0.98]"
+            title="Import a shared course folder or chapter by entering its link or unique ID"
+          >
+            <Download className="w-4 h-4" />
+            <span>+ Import by Link / ID</span>
+          </button>
+
           <button
             onClick={() => handleOpenImportPlaylistModal(null)}
-            className="bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-extrabold text-xs px-4.5 py-3 rounded-2xl shadow-md shadow-red-500/20 transition-all duration-150 flex items-center gap-2 cursor-pointer shrink-0 hover:scale-[1.02] active:scale-[0.98]"
+            className="bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-extrabold text-xs px-4 py-3 rounded-2xl shadow-md shadow-red-500/20 transition-all duration-150 flex items-center gap-2 cursor-pointer shrink-0 hover:scale-[1.02] active:scale-[0.98]"
             title="Import a YouTube playlist directly as a chapter into any subject"
           >
             <YoutubeBrandIcon className="w-4 h-4" />
-            <span>+ Import Playlist as Chapter</span>
+            <span>+ Import Playlist</span>
           </button>
 
           <button 
             onClick={handleOpenCreateSubject}
-            className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-xs px-5 py-3 rounded-2xl shadow-md shadow-blue-500/25 transition-all duration-150 flex items-center gap-2 cursor-pointer shrink-0 hover:scale-[1.02] active:scale-[0.98]"
+            className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-xs px-4.5 py-3 rounded-2xl shadow-md shadow-blue-500/25 transition-all duration-150 flex items-center gap-2 cursor-pointer shrink-0 hover:scale-[1.02] active:scale-[0.98]"
           >
             <FolderPlus className="w-4.5 h-4.5 text-blue-100" />
-            <span>+ Create Custom Subject</span>
+            <span>+ Create Folder</span>
           </button>
         </div>
       </div>

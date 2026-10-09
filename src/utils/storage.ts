@@ -435,15 +435,21 @@ export const Storage = {
 
   // Custom Subjects with Chapter-wise Lectures
   getCustomSubjects(): CustomSubjectFolder[] {
+    let rawList: CustomSubjectFolder[] = [];
     if (userAccountSync.hasActiveUser()) {
-      return userAccountSync.getCustomSubjects();
+      rawList = userAccountSync.getCustomSubjects();
+    } else {
+      try {
+        const data = localStorage.getItem("studytube_guest_custom_subjects");
+        rawList = data ? JSON.parse(data) : [];
+      } catch {
+        rawList = [];
+      }
     }
-    try {
-      const data = localStorage.getItem("studytube_guest_custom_subjects");
-      return data ? JSON.parse(data) : [];
-    } catch {
-      return [];
-    }
+    // Remove legacy import folder completely as requested
+    return rawList.filter(
+      (s) => s && s.id !== "subject-imported-folder" && s.category !== "Imports" && s.subjectName?.toLowerCase() !== "imported lectures"
+    );
   },
 
   saveCustomSubjects(subjects: CustomSubjectFolder[]) {

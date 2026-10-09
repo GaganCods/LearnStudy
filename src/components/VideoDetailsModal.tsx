@@ -1,7 +1,7 @@
 import React from "react";
 import { 
   X, Calendar, Clock, Eye, Play, Bookmark, Share2, 
-  ExternalLink, Check, Copy, Tag, BookOpen, User, ThumbsUp 
+  ExternalLink, Check, Copy, Tag, BookOpen, User, ThumbsUp, Folder 
 } from "lucide-react";
 import { useToast } from "./ToastContext";
 
@@ -190,10 +190,10 @@ export const VideoDetailsModal: React.FC<VideoDetailsModalProps> = ({
                   onOpenSaveModal(video);
                   onClose();
                 }}
-                className="bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 font-extrabold text-xs py-2.5 px-4 rounded-xl transition flex items-center gap-2 cursor-pointer"
+                className="bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-slate-700 dark:text-zinc-300 font-extrabold text-xs py-2.5 px-4 rounded-xl transition flex items-center gap-2 cursor-pointer"
               >
-                <Bookmark className="w-4 h-4" />
-                <span>Save to Folder / Watch Later</span>
+                <Folder className="w-4 h-4" />
+                <span>Save to Folder</span>
               </button>
             )}
 
