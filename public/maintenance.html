@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LearnStudy | Platform Maintenance</title>
+  <meta name="description" content="We are currently performing scheduled maintenance on LearnStudy to enhance system performance and security. We will be back shortly." />
+  
+  <!-- Inter Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brandNavy: '#172554',
+            brandBlue: '#2563EB',
+            accentBlue: '#3B82F6',
+            lightBg: '#F0F5FF',
+            textGray: '#64748B',
+            safetyYellow: '#FACC15',
+            borderGray: '#E2E8F0',
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    :root {
+      --color-navy: #172554;
+      --color-blue: #2563EB;
+      --color-accent: #3B82F6;
+      --color-light-bg: #F0F5FF;
+      --color-text-gray: #64748B;
+      --color-yellow: #FACC15;
+      --color-border: #E2E8F0;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #FFFFFF;
+      color: var(--color-navy);
+      overflow-x: hidden;
+    }
+
+    /* Keyframe Animations */
+    @keyframes sway {
+      0%, 100% {
+        transform: rotate(-3deg);
+        transform-origin: 325px 75px;
+      }
+      50% {
+        transform: rotate(3deg);
+        transform-origin: 325px 75px;
+      }
+    }
+
+    @keyframes float {
+      0%, 100% {
+        transform: translateY(0px);
+      }
+      50% {
+        transform: translateY(-8px);
+      }
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.4;
+        transform: scale(1.35);
+      }
+    }
+
+    @keyframes custom-spin {
+      from {
+        transform: rotate(0deg);
+      }
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .animate-sway {
+      animation: sway 5s ease-in-out infinite;
+    }
+
+    .animate-float {
+      animation: float 4s ease-in-out infinite;
+    }
+
+    .animate-pulse-dot {
+      animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    .spinning {
+      animation: custom-spin 0.8s linear infinite;
+    }
+
+    /* Sawhorse Barrier Stripe Pattern */
+    .bg-stripes {
+      background: repeating-linear-gradient(
+        -45deg,
+        #FACC15,
+        #FACC15 15px,
+        #172554 15px,
+        #172554 30px
+      );
+    }
+
+    /* Accessibility Support */
+    @media (prefers-reduced-motion: reduce) {
+      .animate-sway,
+      .animate-float,
+      .animate-pulse-dot,
+      .spinning {
+        animation: none !important;
+        transform: none !important;
+      }
+    }
+
+    a:focus-visible, button:focus-visible {
+      outline: 3px solid #3B82F6;
+      outline-offset: 3px;
+    }
+  </style>
+</head>
+
+<body class="min-h-screen flex flex-col justify-between selection:bg-brandBlue selection:text-white">
+
+  <!-- Top Navigation Header -->
+  <header class="w-full border-b border-borderGray py-4 px-6 sm:px-12 bg-white/80 backdrop-blur-md sticky top-0 z-30">
+    <div class="max-w-[1200px] mx-auto flex justify-between items-center">
+      <!-- Brand Logo / Badge -->
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-brandNavy flex items-center justify-center text-white font-black text-xl shadow-sm">
+          <svg class="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3zM5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z"/>
+          </svg>
+        </div>
+        <span class="font-bold text-brandNavy tracking-tight text-xl">LearnStudy</span>
+      </div>
+
+      <!-- Quick Status Indicator -->
+      <div class="hidden sm:flex items-center gap-2 text-xs font-semibold px-3.5 py-1.5 rounded-full bg-lightBg text-brandNavy border border-borderGray">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse-dot"></span>
+        Course Progress Saved
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="flex-grow flex items-center justify-center px-6 py-8 sm:py-16">
+    <div class="max-w-[1200px] w-full grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-8 items-center">
+      
+      <!-- LEFT COLUMN: Text Content & Actions -->
+      <div class="lg:col-span-5 flex flex-col items-start space-y-6 text-left z-10 order-1">
+        
+        <!-- Status Label Badge -->
+        <div class="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-lightBg border border-borderGray text-xs font-bold tracking-wider text-brandNavy uppercase shadow-sm">
+          <span class="relative flex h-2.5 w-2.5">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accentBlue opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-brandBlue"></span>
+          </span>
+          LEARNSTUDY MAINTENANCE
+        </div>
+
+        <!-- Main Headings -->
+        <div class="space-y-2">
+          <h1 class="text-5xl sm:text-6xl lg:text-7xl font-black text-brandNavy tracking-tight leading-tight">
+            Oops!
+          </h1>
+          <h2 class="text-2xl sm:text-3xl font-bold text-brandNavy tracking-tight">
+            We're making things better.
+          </h2>
+        </div>
+
+        <!-- Body Copy -->
+        <p class="text-textGray text-base sm:text-lg leading-relaxed max-w-[460px]">
+          We're upgrading LearnStudy to bring you a smoother, faster, and better learning experience. We're working behind the scenes and will be back soon.
+        </p>
+
+        <!-- Service Status Widget -->
+        <div class="w-full max-w-[460px] p-4 rounded-xl bg-lightBg/60 border border-borderGray space-y-2.5 text-xs">
+          <div class="flex justify-between items-center text-textGray font-medium">
+            <span>Platform Status Check</span>
+            <span class="text-brandBlue font-semibold flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Maintenance In Progress
+            </span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 pt-1">
+            <div class="bg-white p-2 rounded-lg border border-borderGray text-center">
+              <span class="block text-[10px] text-textGray uppercase font-bold">Learning Engine</span>
+              <span class="font-semibold text-brandNavy">Upgrading</span>
+            </div>
+            <div class="bg-white p-2 rounded-lg border border-borderGray text-center">
+              <span class="block text-[10px] text-textGray uppercase font-bold">Student Data</span>
+              <span class="font-semibold text-emerald-600">Secure</span>
+            </div>
+            <div class="bg-white p-2 rounded-lg border border-borderGray text-center">
+              <span class="block text-[10px] text-textGray uppercase font-bold">Video Stream</span>
+              <span class="font-semibold text-emerald-600">Active</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Controls -->
+        <div class="flex flex-wrap items-center gap-4 pt-2 w-full sm:w-auto">
+          <!-- Primary Reload Button -->
+          <button 
+            id="reloadBtn" 
+            onclick="handleCheckAgain()"
+            class="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-xl bg-brandNavy hover:bg-brandBlue text-white font-semibold text-sm transition-all duration-200 shadow-md hover:shadow-lg active:scale-98 focus:ring-4 focus:ring-accentBlue/20"
+            aria-label="Check if LearnStudy maintenance is complete and reload page"
+          >
+            <svg id="refreshIcon" class="w-4 h-4 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span id="btnText">Check Again</span>
+          </button>
+
+          <!-- Secondary Action: Support Link Trigger -->
+          <button 
+            onclick="openSupportModal()"
+            class="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3.5 rounded-xl text-brandBlue hover:text-brandNavy font-semibold text-sm hover:bg-lightBg transition-all duration-200 border border-transparent hover:border-borderGray"
+          >
+            Contact Support
+          </button>
+        </div>
+
+        <!-- Reassurance Tag -->
+        <div class="pt-2 flex items-center gap-2 text-xs font-medium text-textGray">
+          <div class="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center flex-shrink-0">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
+            </svg>
+          </div>
+          <span>Thank you for your patience. Your progress, courses, and account data are safe.</span>
+        </div>
+
+      </div>
+
+      <!-- RIGHT COLUMN: Custom Vector Illustration -->
+      <div class="lg:col-span-7 flex items-center justify-center order-2 w-full">
+        <div class="relative w-full max-w-[580px] aspect-[4/3] flex items-center justify-center p-2">
+          
+          <svg 
+            viewBox="0 0 600 480" 
+            fill="none" 
+            xmlns="http://www.w3.org/2000/svg" 
+            class="w-full h-auto drop-shadow-sm select-none"
+            aria-hidden="true"
+            role="img"
+          >
+            <defs>
+              <!-- Diagonal Yellow/Navy Stripe Pattern for Sawhorse Barrier -->
+              <pattern id="diagonalStripes" width="30" height="30" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <rect width="15" height="30" fill="#FACC15" />
+                <rect x="15" width="15" height="30" fill="#172554" />
+              </pattern>
+
+              <!-- Soft Shadows -->
+              <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
+                <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#172554" flood-opacity="0.08" />
+              </filter>
+            </defs>
+
+            <!-- Background Soft Circular Halo & Floating Educational Icons -->
+            <circle cx="300" cy="240" r="210" fill="#F0F5FF" />
+            
+            <!-- Floating Background Books & Tech Shapes -->
+            <g class="animate-float" style="animation-delay: 0s;">
+              <circle cx="100" cy="110" r="28" fill="#3B82F6" opacity="0.12" />
+              <path d="M88 110l12-6 12 6-12 6-12-6zM88 115l12 6 12-6v5l-12 6-12-6v-5z" fill="#2563EB" opacity="0.5" />
+            </g>
+
+            <g class="animate-float" style="animation-delay: 1.5s;">
+              <circle cx="510" cy="130" r="22" fill="#2563EB" opacity="0.12" />
+              <circle cx="510" cy="130" r="10" stroke="#2563EB" stroke-width="3" opacity="0.25" />
+            </g>
+
+            <!-- Ground Baseline Shadow Lines -->
+            <ellipse cx="300" cy="430" rx="230" ry="14" fill="#E2E8F0" />
+            <line x1="120" y1="430" x2="480" y2="430" stroke="#64748B" stroke-width="3" stroke-linecap="round" opacity="0.3" />
+
+            <!-- Desktop Monitor Setup -->
+            <g filter="url(#softShadow)">
+              <!-- Monitor Base Stand -->
+              <path d="M260 380 L245 422 L355 422 L340 380 Z" fill="#64748B" />
+              <rect x="220" y="420" width="160" height="10" rx="5" fill="#172554" />
+
+              <!-- Monitor Outer Frame -->
+              <rect x="90" y="90" width="420" height="290" rx="18" fill="#172554" />
+              
+              <!-- Monitor Screen Frame Inside -->
+              <rect x="100" y="100" width="400" height="270" rx="12" fill="#FFFFFF" />
+
+              <!-- Monitor Title Bar -->
+              <path d="M100 112 C100 105.373 105.373 100 112 100 L488 100 C494.627 100 500 105.373 500 112 L500 132 L100 132 Z" fill="#F0F5FF" />
+              
+              <!-- Window Dot Controls -->
+              <circle cx="122" cy="116" r="4" fill="#EF4444" />
+              <circle cx="136" cy="116" r="4" fill="#FACC15" />
+              <circle cx="150" cy="116" r="4" fill="#10B981" />
+              <rect x="180" y="112" width="140" height="8" rx="4" fill="#E2E8F0" />
+
+              <!-- LearnStudy Interactive Course Cards Simulation -->
+              <rect x="125" y="152" width="105" height="75" rx="8" fill="#F0F5FF" />
+              <!-- Video Play Icon on Card 1 -->
+              <circle cx="177" cy="189" r="14" fill="#2563EB" opacity="0.8" />
+              <path d="M174 182l10 7-10 7v-14z" fill="#FFFFFF" />
+
+              <rect x="245" y="152" width="230" height="14" rx="4" fill="#2563EB" opacity="0.8" />
+              <rect x="245" y="174" width="180" height="10" rx="4" fill="#E2E8F0" />
+              <rect x="245" y="192" width="200" height="10" rx="4" fill="#E2E8F0" />
+
+              <!-- Course Progress Bar Wireframe -->
+              <rect x="125" y="242" width="350" height="10" rx="5" fill="#E2E8F0" />
+              <rect x="125" y="242" width="210" height="10" rx="5" fill="#10B981" />
+
+              <!-- Quiz Lines -->
+              <rect x="125" y="266" width="280" height="8" rx="4" fill="#E2E8F0" />
+              <rect x="125" y="280" width="200" height="8" rx="4" fill="#E2E8F0" />
+            </g>
+
+            <!-- Construction Barrier Across Monitor -->
+            <g filter="url(#softShadow)">
+              <!-- Barrier Legs Left -->
+              <path d="M120 300 L95 428 H115 L132 300 Z" fill="#172554" />
+              <path d="M130 300 L155 428 H135 L118 300 Z" fill="#2563EB" />
+              
+              <!-- Barrier Legs Right -->
+              <path d="M470 300 L445 428 H465 L482 300 Z" fill="#172554" />
+              <path d="M480 300 L505 428 H485 L468 300 Z" fill="#2563EB" />
+
+              <!-- Horizontal Barrier Plank with Stripes -->
+              <rect x="75" y="315" width="450" height="42" rx="6" fill="url(#diagonalStripes)" stroke="#172554" stroke-width="3" />
+              
+              <!-- Barrier Mounting Bolts -->
+              <circle cx="95" cy="336" r="4" fill="#FFFFFF" stroke="#172554" stroke-width="2" />
+              <circle cx="505" cy="336" r="4" fill="#FFFFFF" stroke="#172554" stroke-width="2" />
+            </g>
+
+            <!-- Construction Crane & Swaying Warning Sign -->
+            <g>
+              <path d="M480 100 L540 40 V160 L480 180 Z" fill="#172554" opacity="0.1" />
+              <path d="M520 40 L520 280" stroke="#172554" stroke-width="6" stroke-linecap="round" />
+              <!-- Diagonal Trusses -->
+              <path d="M520 60 L500 80 M520 90 L500 110 M520 120 L500 140" stroke="#2563EB" stroke-width="3" />
+              
+              <!-- Crane Arm -->
+              <path d="M540 45 L320 45" stroke="#172554" stroke-width="7" stroke-linecap="round" />
+              <path d="M520 45 L470 15 L320 45" stroke="#2563EB" stroke-width="3" />
+              
+              <!-- Cable Wire -->
+              <line x1="325" y1="45" x2="325" y2="105" stroke="#172554" stroke-width="2" stroke-dasharray="4 2" />
+              <circle cx="325" cy="105" r="4" fill="#172554" />
+            </g>
+
+            <!-- SWAYING WARNING SIGN -->
+            <g class="animate-sway">
+              <line x1="325" y1="105" x2="305" y2="135" stroke="#172554" stroke-width="2" />
+              <line x1="325" y1="105" x2="345" y2="135" stroke="#172554" stroke-width="2" />
+
+              <g filter="url(#softShadow)">
+                <polygon points="325,125 375,205 275,205" fill="#FACC15" stroke="#172554" stroke-width="4" stroke-linejoin="round" />
+                <polygon points="325,138 362,197 288,197" fill="#FACC15" stroke="#172554" stroke-width="2" stroke-linejoin="round" />
+                <!-- Exclamation Point -->
+                <path d="M325 152 V175" stroke="#172554" stroke-width="6" stroke-linecap="round" />
+                <circle cx="325" cy="187" r="3.5" fill="#172554" />
+              </g>
+            </g>
+
+            <!-- Worker 1: Left Side -->
+            <g transform="translate(65, 290)">
+              <path d="M25 70 C25 50 35 42 45 42 C55 42 65 50 65 70 V130 H25 Z" fill="#2563EB" />
+              <path d="M33 45 L45 80 L57 45" stroke="#FACC15" stroke-width="5" stroke-linecap="round" />
+              <rect x="30" y="120" width="13" height="30" rx="4" fill="#172554" />
+              <rect x="47" y="120" width="13" height="30" rx="4" fill="#172554" />
+              <circle cx="45" cy="28" r="12" fill="#64748B" />
+              <path d="M28 26 C28 15 36 10 45 10 C54 10 62 15 62 26 Z" fill="#FACC15" />
+              <rect x="24" y="24" width="42" height="5" rx="2.5" fill="#FACC15" />
+              <path d="M60 50 L78 35" stroke="#2563EB" stroke-width="8" stroke-linecap="round" />
+              <path d="M78 32 L86 24" stroke="#172554" stroke-width="4" stroke-linecap="round" />
+              <circle cx="88" cy="22" r="4" fill="none" stroke="#172554" stroke-width="2.5" />
+            </g>
+
+            <!-- Worker 2: Right Side Inspecting Tablet -->
+            <g transform="translate(420, 300)">
+              <path d="M20 60 C20 45 30 38 40 38 C50 38 60 45 60 60 V120 H20 Z" fill="#172554" />
+              <rect x="28" y="42" width="24" height="6" fill="#FACC15" />
+              <rect x="24" y="115" width="12" height="25" rx="3" fill="#2563EB" />
+              <rect x="42" y="115" width="12" height="25" rx="3" fill="#2563EB" />
+              <circle cx="40" cy="24" r="11" fill="#64748B" />
+              <path d="M25 22 C25 12 32 8 40 8 C48 8 55 12 55 22 Z" fill="#FACC15" />
+              <rect x="21" y="20" width="38" height="4" rx="2" fill="#FACC15" />
+              <rect x="10" y="55" width="22" height="28" rx="3" fill="#3B82F6" stroke="#FFFFFF" stroke-width="2" transform="rotate(-12)" />
+            </g>
+
+            <!-- Traffic Cones -->
+            <g transform="translate(160, 395)">
+              <ellipse cx="20" cy="30" rx="22" ry="6" fill="#172554" opacity="0.2" />
+              <polygon points="20,0 34,28 6,28" fill="#FACC15" />
+              <polygon points="20,8 29,20 11,20" fill="#FFFFFF" />
+              <polygon points="20,12 27,18 13,18" fill="#172554" />
+              <rect x="2" y="26" width="36" height="5" rx="2" fill="#FACC15" />
+            </g>
+
+            <g transform="translate(390, 400)">
+              <ellipse cx="18" cy="25" rx="18" ry="5" fill="#172554" opacity="0.2" />
+              <polygon points="18,0 30,24 6,24" fill="#FACC15" />
+              <polygon points="18,7 26,17 10,17" fill="#FFFFFF" />
+              <polygon points="18,10 24,15 12,15" fill="#172554" />
+              <rect x="3" y="22" width="30" height="4" rx="2" fill="#FACC15" />
+            </g>
+
+            <!-- Floating Sparkles -->
+            <circle cx="210" cy="80" r="3" fill="#FACC15" />
+            <circle cx="430" cy="110" r="2" fill="#3B82F6" />
+            <circle cx="150" cy="210" r="2.5" fill="#2563EB" />
+          </svg>
+
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Clean Footer -->
+  <footer class="w-full border-t border-borderGray py-6 px-6 bg-white z-20">
+    <div class="max-w-[1200px] mx-auto flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-textGray">
+      
+      <!-- Copyright & Slogan -->
+      <div class="flex items-center gap-2">
+        <span class="font-semibold text-brandNavy">&copy; <span id="currentYear">2026</span> LearnStudy.</span>
+        <span>&bull;</span>
+        <span>Making learning better every day.</span>
+      </div>
+
+      <!-- Quick Support Link -->
+      <div>
+        <button onclick="openSupportModal()" class="hover:text-brandNavy transition-colors font-medium">
+          Need Urgent Student Access?
+        </button>
+      </div>
+
+    </div>
+  </footer>
+
+  <!-- SUPPORT CONTACT MODAL DIALOG -->
+  <div id="supportModal" class="fixed inset-0 bg-brandNavy/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300" role="dialog" aria-labelledby="modalTitle" aria-modal="true">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 sm:p-8 shadow-2xl transform scale-95 transition-transform duration-300 border border-borderGray" id="modalContainer">
+      
+      <div class="flex justify-between items-start mb-4">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-lightBg text-brandBlue flex items-center justify-center">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+            </svg>
+          </div>
+          <div>
+            <h3 id="modalTitle" class="text-lg font-bold text-brandNavy">Contact LearnStudy Support</h3>
+            <p class="text-xs text-textGray">Our student helpdesk is active 24/7.</p>
+          </div>
+        </div>
+        <button onclick="closeSupportModal()" class="text-textGray hover:text-brandNavy p-1 rounded-lg hover:bg-lightBg transition-colors" aria-label="Close modal">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <div class="space-y-4 text-sm text-textGray my-6">
+        <div class="p-3.5 rounded-xl bg-lightBg border border-borderGray flex items-start gap-3">
+          <svg class="w-5 h-5 text-brandBlue flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+          <p class="text-xs leading-relaxed">If you have urgent assignments, deadlines, or account issues during this scheduled maintenance window, please email our support team directly.</p>
+        </div>
+
+        <div class="space-y-2">
+          <label class="block text-xs font-bold uppercase text-brandNavy tracking-wider">Support Email</label>
+          <div class="flex items-center justify-between p-3 rounded-xl border border-borderGray bg-white font-mono text-xs">
+            <span class="text-brandNavy">support@learnstudy.com</span>
+            <button onclick="copySupportEmail(this)" class="text-brandBlue font-sans font-semibold hover:underline text-xs">
+              Copy Email
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-3 pt-2">
+        <button onclick="closeSupportModal()" class="px-5 py-2.5 rounded-xl bg-brandNavy text-white font-semibold text-xs hover:bg-brandBlue transition-colors">
+          Close Window
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Client-Side Interactive Logic -->
+  <script>
+    // Set dynamic current year
+    document.addEventListener("DOMContentLoaded", function() {
+      const yearSpan = document.getElementById("currentYear");
+      if (yearSpan) {
+        yearSpan.textContent = new Date().getFullYear();
+      }
+    });
+
+    // Handle "Check Again" button reload animation
+    function handleCheckAgain() {
+      const btn = document.getElementById("reloadBtn");
+      const icon = document.getElementById("refreshIcon");
+      const btnText = document.getElementById("btnText");
+
+      if (!btn || !icon || !btnText) return;
+
+      icon.classList.add("spinning");
+      btnText.textContent = "Checking Status...";
+      btn.disabled = true;
+      btn.classList.add("opacity-80", "cursor-wait");
+
+      setTimeout(() => {
+        window.location.reload(true);
+      }, 650);
+    }
+
+    // Support Modal Controls
+    function openSupportModal() {
+      const modal = document.getElementById("supportModal");
+      const container = document.getElementById("modalContainer");
+      if (modal && container) {
+        modal.classList.remove("opacity-0", "pointer-events-none");
+        modal.classList.add("opacity-100");
+        container.classList.remove("scale-95");
+        container.classList.add("scale-100");
+      }
+    }
+
+    function closeSupportModal() {
+      const modal = document.getElementById("supportModal");
+      const container = document.getElementById("modalContainer");
+      if (modal && container) {
+        modal.classList.remove("opacity-100");
+        modal.classList.add("opacity-0", "pointer-events-none");
+        container.classList.remove("scale-100");
+        container.classList.add("scale-95");
+      }
+    }
+
+    // Copy Support Email Helper
+    function copySupportEmail(btnElement) {
+      const email = "support@learnstudy.com";
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(email);
+      } else {
+        const tempInput = document.createElement("input");
+        tempInput.value = email;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand("copy");
+        document.body.removeChild(tempInput);
+      }
+
+      if (btnElement) {
+        const originalText = btnElement.textContent;
+        btnElement.textContent = "Copied!";
+        btnElement.classList.add("text-emerald-600");
+        setTimeout(() => {
+          btnElement.textContent = originalText;
+          btnElement.classList.remove("text-emerald-600");
+        }, 2000);
+      }
+    }
+
+    // Keyboard navigation (Escape closes support modal)
+    document.addEventListener("keydown", function(e) {
+      if (e.key === "Escape") {
+        closeSupportModal();
+      }
+    });
+  </script>
+</body>
+</html>
