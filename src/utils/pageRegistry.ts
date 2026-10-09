@@ -47,24 +47,38 @@ export const APP_PAGES: PageItem[] = [
   {
     id: "library",
     title: "Course & Subject Library",
-    shortTitle: "Library",
+    shortTitle: "Lectures & Courses",
     badge: "Courses",
     description: "Organize YouTube playlists and single lectures into custom subjects, chapters, and syllabus folders.",
-    keywords: ["library", "course", "courses", "subject", "subjects", "folder", "folders", "syllabus", "chapters", "playlist", "playlists"],
+    keywords: ["library", "lectures", "lecture", "course", "courses", "subject", "subjects", "folder", "folders", "syllabus", "chapters", "playlist", "playlists"],
     category: "Core Hub",
     accentColor: "sky",
     accentBg: "bg-sky-500/10 dark:bg-sky-500/15",
     accentText: "text-sky-600 dark:text-sky-400",
     accentBorder: "border-sky-500/30",
-    tabParam: "library"
+    tabParam: "lectures"
+  },
+  {
+    id: "notes",
+    title: "Lecture Notes Hub",
+    shortTitle: "Notes",
+    badge: "Markdown",
+    description: "Browse, edit, search, and export all your interactive lecture notes and AI summaries across all courses.",
+    keywords: ["notes", "note", "markdown", "summary", "lecture notes", "text", "draft", "export", "cheatsheet"],
+    category: "Study Tools",
+    accentColor: "emerald",
+    accentBg: "bg-emerald-500/10 dark:bg-emerald-500/15",
+    accentText: "text-emerald-600 dark:text-emerald-400",
+    accentBorder: "border-emerald-500/30",
+    tabParam: "notes"
   },
   {
     id: "flashcards",
-    title: "Flashcards & AI Quiz",
+    title: "Flashcards & Active Recall",
     shortTitle: "Flashcards",
     badge: "Active Recall",
-    description: "Spaced repetition flashcards with automated AI deck generation from your lectures and active recall quiz master.",
-    keywords: ["flashcard", "flashcards", "quiz", "test", "anki", "cards", "questions", "active recall", "spaced repetition", "mcq"],
+    description: "Spaced repetition flashcards with automated AI deck generation from your lectures and active recall practice.",
+    keywords: ["flashcard", "flashcards", "test", "anki", "cards", "questions", "active recall", "spaced repetition"],
     category: "Study Tools",
     accentColor: "purple",
     accentBg: "bg-purple-500/10 dark:bg-purple-500/15",
@@ -225,11 +239,13 @@ export function slugify(text: string): string {
 }
 
 /**
- * Returns the clean, semantic shareable link (e.g. /app/home, /app/study?v=...&title=..., /app/library)
+ * Returns the clean, semantic shareable link (e.g. /app/dashboard, /app/lectures, /app/lectures/physics, /app/notes)
  */
 export function getPageShareableUrl(
   tab: ActiveTab,
   params?: {
+    subjectSlug?: string;
+    lectureSlug?: string;
     videoId?: string;
     videoTitle?: string;
     playlistId?: string;
@@ -242,31 +258,63 @@ export function getPageShareableUrl(
   const origin = typeof window !== "undefined" ? window.location.origin : "";
 
   let pathname = `/app/${tab}`;
-
   const searchParams = new URLSearchParams();
 
-  if (tab === "search" || params?.searchQuery) {
+  if (tab === "home") {
+    pathname = "/app/dashboard";
+  } else if (tab === "library") {
+    if (params?.subjectSlug && params?.lectureSlug) {
+      pathname = `/app/lectures/${params.subjectSlug}/${params.lectureSlug}`;
+    } else if (params?.subjectSlug) {
+      pathname = `/app/lectures/${params.subjectSlug}`;
+    } else {
+      pathname = "/app/lectures";
+    }
+  } else if (tab === "notes") {
+    pathname = "/app/notes";
+  } else if (tab === "flashcards") {
+    pathname = "/app/flashcards";
+  } else if (tab === "planner") {
+    pathname = "/app/planner";
+  } else if (tab === "calendar") {
+    pathname = "/app/calendar";
+  } else if (tab === "pomodoro") {
+    pathname = "/app/pomodoro";
+  } else if (tab === "history") {
+    pathname = "/app/history";
+  } else if (tab === "favorites") {
+    pathname = "/app/favorites";
+  } else if (tab === "stats") {
+    pathname = "/app/stats";
+  } else if (tab === "settings") {
+    pathname = "/app/settings";
+  } else if (tab === "developer") {
+    pathname = "/app/developer";
+  } else if (tab === "search" || params?.searchQuery) {
     pathname = "/app/search";
     if (params?.searchQuery) {
       searchParams.set("q", params.searchQuery);
     }
   } else if (tab === "study") {
-    pathname = "/app/study";
-    if (params?.videoId) {
-      searchParams.set("v", params.videoId);
-      if (params.videoTitle) {
-        const titleSlug = slugify(params.videoTitle);
-        if (titleSlug) {
-          searchParams.set("title", titleSlug);
+    if (params?.subjectSlug && params?.lectureSlug) {
+      pathname = `/app/lectures/${params.subjectSlug}/${params.lectureSlug}`;
+    } else {
+      pathname = "/app/study";
+      if (params?.videoId) {
+        searchParams.set("v", params.videoId);
+        if (params.videoTitle) {
+          const titleSlug = slugify(params.videoTitle);
+          if (titleSlug) searchParams.set("title", titleSlug);
         }
       }
+      if (params?.playlistId) {
+        searchParams.set("list", params.playlistId);
+      }
     }
-    if (params?.playlistId) {
-      searchParams.set("list", params.playlistId);
-    }
-    if (params?.timestamp && params.timestamp > 0) {
-      searchParams.set("t", String(Math.floor(params.timestamp)));
-    }
+  }
+
+  if (params?.timestamp && params.timestamp > 0) {
+    searchParams.set("t", String(Math.floor(params.timestamp)));
   }
 
   const queryString = searchParams.toString();
@@ -280,6 +328,8 @@ export function getPageShareableUrl(
 export async function copyPageLink(
   tab: ActiveTab,
   params?: {
+    subjectSlug?: string;
+    lectureSlug?: string;
     videoId?: string;
     videoTitle?: string;
     playlistId?: string;
@@ -292,7 +342,6 @@ export async function copyPageLink(
     await navigator.clipboard.writeText(url);
     return url;
   } catch (e) {
-    // Fallback using legacy command if clipboard API is restricted
     const textArea = document.createElement("textarea");
     textArea.value = url;
     textArea.style.position = "fixed";
@@ -331,6 +380,8 @@ export function searchPages(rawQuery: string): PageItem[] {
  */
 export function parseInitialUrlState(): {
   tab: ActiveTab | null;
+  subjectSlug?: string;
+  lectureSlug?: string;
   videoId?: string;
   videoTitle?: string;
   playlistId?: string;
@@ -350,12 +401,15 @@ export function parseInitialUrlState(): {
     const pathTabMap: Record<string, ActiveTab> = {
       "": "home",
       "app": "home",
+      "dashboard": "home",
       "home": "home",
       "study": "study",
+      "lectures": "library",
       "library": "library",
       "courses": "library",
+      "notes": "notes",
+      "note": "notes",
       "flashcards": "flashcards",
-      "quiz": "flashcards",
       "planner": "planner",
       "tasks": "planner",
       "calendar": "calendar",
@@ -374,9 +428,20 @@ export function parseInitialUrlState(): {
 
     let targetSegment = firstSegment;
     let subSegment = pathParts[1] || "";
+    let subjectSlugFromPath: string | undefined = undefined;
+    let lectureSlugFromPath: string | undefined = undefined;
 
     if (firstSegment === "app") {
       targetSegment = subSegment || "home";
+      if (subSegment === "lectures" || subSegment === "library" || subSegment === "courses") {
+        subjectSlugFromPath = pathParts[2] || undefined;
+        lectureSlugFromPath = pathParts[3] || undefined;
+      }
+    } else {
+      if (firstSegment === "lectures" || firstSegment === "library" || firstSegment === "courses") {
+        subjectSlugFromPath = pathParts[1] || undefined;
+        lectureSlugFromPath = pathParts[2] || undefined;
+      }
     }
 
     let tabFromPath: ActiveTab | null = pathTabMap[targetSegment] || null;
@@ -415,10 +480,16 @@ export function parseInitialUrlState(): {
     const tParam = params.get("t") || params.get("time");
     const timestamp = tParam ? parseInt(tParam, 10) : undefined;
 
-    const finalTab: ActiveTab | null = tabParam || tabFromPath || tabFromHash || (videoId || playlistId ? "study" : (searchQuery ? "search" : null));
+    // If a lecture slug is present in /app/lectures/:subject/:lecture, route to study tab!
+    let finalTab: ActiveTab | null = tabParam || tabFromPath || tabFromHash || (videoId || playlistId ? "study" : (searchQuery ? "search" : null));
+    if (subjectSlugFromPath && lectureSlugFromPath) {
+      finalTab = "study";
+    }
 
     return {
       tab: finalTab,
+      subjectSlug: subjectSlugFromPath,
+      lectureSlug: lectureSlugFromPath,
       videoId,
       videoTitle: titleSlug ? titleSlug.replace(/-/g, " ") : undefined,
       playlistId,
@@ -437,40 +508,20 @@ export function parseInitialUrlState(): {
 export function syncStateToUrl(
   tab: ActiveTab,
   params?: {
+    subjectSlug?: string;
+    lectureSlug?: string;
     videoId?: string;
     videoTitle?: string;
     playlistId?: string;
     searchQuery?: string;
     replace?: boolean;
+    push?: boolean;
   }
 ) {
   if (typeof window === "undefined") return;
 
   try {
-    let pathname = `/app/${tab}`;
-    const searchParams = new URLSearchParams();
-
-    if (params?.searchQuery && params.searchQuery.trim()) {
-      pathname = "/app/search";
-      searchParams.set("q", params.searchQuery.trim());
-    } else if (tab === "study") {
-      pathname = "/app/study";
-      if (params?.videoId) {
-        searchParams.set("v", params.videoId);
-        if (params.videoTitle) {
-          const titleSlug = slugify(params.videoTitle);
-          if (titleSlug) {
-            searchParams.set("title", titleSlug);
-          }
-        }
-      }
-      if (params?.playlistId) {
-        searchParams.set("list", params.playlistId);
-      }
-    }
-
-    const newQuery = searchParams.toString();
-    const newRelativeUrl = newQuery ? `${pathname}?${newQuery}` : pathname;
+    const newRelativeUrl = getPageShareableUrl(tab, { ...params, absolute: false });
     const currentRelativeUrl = `${window.location.pathname}${window.location.search}`;
 
     if (currentRelativeUrl !== newRelativeUrl) {
@@ -483,4 +534,44 @@ export function syncStateToUrl(
   } catch (e) {
     console.error("Failed to sync state to URL", e);
   }
+}
+
+/**
+ * Programmatically navigate to a URL or Tab while creating a proper browser history entry.
+ */
+export function navigateTo(
+  urlOrTab: string | ActiveTab,
+  params?: {
+    subjectSlug?: string;
+    lectureSlug?: string;
+    videoId?: string;
+    videoTitle?: string;
+    playlistId?: string;
+    searchQuery?: string;
+    replace?: boolean;
+  }
+) {
+  if (typeof window === "undefined") return;
+
+  let targetUrl = "";
+  let tab: ActiveTab = "home";
+
+  if (typeof urlOrTab === "string" && (urlOrTab.startsWith("/") || urlOrTab.startsWith("http"))) {
+    targetUrl = urlOrTab;
+  } else {
+    tab = urlOrTab as ActiveTab;
+    targetUrl = getPageShareableUrl(tab, { ...params, absolute: false });
+  }
+
+  const currentUrl = `${window.location.pathname}${window.location.search}`;
+  if (currentUrl !== targetUrl) {
+    if (params?.replace) {
+      window.history.replaceState({ tab, ...params }, "", targetUrl);
+    } else {
+      window.history.pushState({ tab, ...params }, "", targetUrl);
+    }
+  }
+
+  // Dispatch popstate event so all listeners immediately update without full page reload
+  window.dispatchEvent(new PopStateEvent("popstate", { state: { tab, ...params } }));
 }

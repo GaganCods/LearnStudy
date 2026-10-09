@@ -11,6 +11,7 @@ import { Storage } from "../utils/storage";
 import { CustomSubjectFolder, CourseChapter, ChapterLecture } from "../types";
 import { useToast } from "./ToastContext";
 import { parseYoutubeUrl, fetchPlaylistWithFallback } from "../utils/youtubeParser";
+import { slugify } from "../utils/pageRegistry";
 
 const YoutubeBrandIcon = ({ className = "w-4 h-4 shrink-0" }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
@@ -58,9 +59,12 @@ interface CourseLibraryProps {
     title: string, 
     channelName?: string, 
     playlistInfo?: PlaylistInfoPackage,
-    switchToStudyTab?: boolean
+    switchToStudyTab?: boolean,
+    subjectSlug?: string
   ) => void;
   onOpenImportUrl?: () => void;
+  initialSubjectSlug?: string;
+  onSelectSubject?: (subject: CustomSubjectFolder | null) => void;
 }
 
 // Sample starter subject for first-time user experience if library is completely empty
@@ -131,7 +135,12 @@ const DEFAULT_STARTER_SUBJECT: CustomSubjectFolder = {
   ]
 };
 
-export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, onOpenImportUrl }) => {
+export const CourseLibrary: React.FC<CourseLibraryProps> = ({ 
+  onSelectLecture, 
+  onOpenImportUrl,
+  initialSubjectSlug,
+  onSelectSubject 
+}) => {
   const { toast } = useToast();
   const [subjects, setSubjects] = useState<CustomSubjectFolder[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>("All Subjects");
@@ -139,6 +148,20 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
 
   // Modals & Active Detail Views
   const [selectedSubject, setSelectedSubject] = useState<CustomSubjectFolder | null>(null);
+
+  // Sync selectedSubject with initialSubjectSlug (from browser URL / popstate events)
+  useEffect(() => {
+    if (initialSubjectSlug) {
+      const match = subjects.find(
+        (s) => slugify(s.subjectName) === initialSubjectSlug || s.id === initialSubjectSlug
+      );
+      if (match) {
+        setSelectedSubject(match);
+      }
+    } else {
+      setSelectedSubject(null);
+    }
+  }, [initialSubjectSlug, subjects]);
   const [playlistPlayerSubject, setPlaylistPlayerSubject] = useState<CustomSubjectFolder | null>(null);
   const [activeLecture, setActiveLecture] = useState<ChapterLecture | null>(null);
   const [activeChapterIdFilter, setActiveChapterIdFilter] = useState<string | "ALL">("ALL");
@@ -1852,7 +1875,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
         lec.title,
         `${subj.subjectName}${targetChapter ? ` • ${targetChapter.title}` : ""}`,
         playlistPackage,
-        switchToStudy
+        switchToStudy,
+        slugify(subj.subjectName)
       );
     }
   };
@@ -1876,7 +1900,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
         firstLec.title,
         `${subj.subjectName} • ${ch.title}`,
         playlistPackage,
-        switchToStudy
+        switchToStudy,
+        slugify(subj.subjectName)
       );
     }
   };
@@ -1907,7 +1932,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
         firstLec.title,
         `${subj.subjectName} (Full Course)`,
         playlistPackage,
-        switchToStudy
+        switchToStudy,
+        slugify(subj.subjectName)
       );
     }
   };
@@ -2807,7 +2833,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
                       activeLecture.title,
                       `${playlistPlayerSubject.subjectName}`,
                       pkg,
-                      true
+                      true,
+                      slugify(playlistPlayerSubject.subjectName)
                     );
                   }
                 }
@@ -3089,7 +3116,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
         <div className={`flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 sm:p-6 shadow-sm relative min-w-0 max-w-full ${showSubjectHeaderMenu ? "z-40" : "z-10"}`}>
           <div className="flex-1 min-w-0">
             <button
-              onClick={() => setSelectedSubject(null)}
+              onClick={() => {
+                if (typeof window !== "undefined" && window.history.length > 1 && window.location.pathname.includes("/lectures/")) {
+                  window.history.back();
+                } else {
+                  setSelectedSubject(null);
+                  onSelectSubject?.(null);
+                }
+              }}
               className="group text-[10px] font-black text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1.5 mb-3 cursor-pointer transition-colors uppercase tracking-widest"
             >
               <ArrowLeft className="w-3 h-3 group-hover:-translate-x-0.5 transition-transform" />
@@ -4312,7 +4346,10 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({ onSelectLecture, o
             return (
               <div 
                 key={subj.id}
-                onClick={() => setSelectedSubject(subj)}
+                onClick={() => {
+                  setSelectedSubject(subj);
+                  onSelectSubject?.(subj);
+                }}
                 className={`bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 shadow-sm hover:shadow-md transition cursor-pointer flex flex-col justify-between group relative ${
                   openSubjectCardMenuId === subj.id ? "z-30" : "z-1"
                 }`}

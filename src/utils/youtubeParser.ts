@@ -17,14 +17,24 @@ export function parseYoutubeUrl(urlStr: string): ParsedYoutubeUrl | null {
   try {
     const url = new URL(cleaned);
     
-    // Check for playlist parameter "list" which takes priority if we want to load the playlist
+    // Check for playlist parameter "list"
     const playlistId = url.searchParams.get("list");
+    const videoIdParam = url.searchParams.get("v") || undefined;
+
     if (playlistId) {
-      const videoId = url.searchParams.get("v") || undefined;
+      // If it's a mix/radio/watch-later playlist (RD..., WL, LL, TL) and has a video ID, prefer the video
+      const isDynamicMix = /^(RD|WL|LL|TL|FL)/.test(playlistId);
+      if (isDynamicMix && videoIdParam) {
+        return {
+          type: "video",
+          id: videoIdParam
+        };
+      }
+
       return {
         type: "playlist",
         id: playlistId,
-        videoId
+        videoId: videoIdParam
       };
     }
 

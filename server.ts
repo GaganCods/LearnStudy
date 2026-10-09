@@ -1,0 +1,1333 @@
+import express from "express";
+import path from "path";
+import { createServer as createViteServer } from "vite";
+import { GoogleGenAI, Type } from "@google/genai";
+
+// =========================================================================
+// 🔑 PASTE YOUR YOUTUBE API KEY HERE DIRECTLY:
+// If you're deploying to GitHub / Live sites and don't want to deal with .env files,
+// simply paste your API key inside the quotes below!
+// Example: const DIRECT_YOUTUBE_API_KEY = "AIzaSyA1B2C3D4...";
+// =========================================================================
+const DIRECT_YOUTUBE_API_KEY = "AIzaSyAHYW-4Q4wTBvdk1EyHFzp9EX9RBDwWr7E";
+
+const app = express();
+const PORT = 3000;
+
+app.use(express.json());
+
+// ISO 8601 Duration Parser helper
+function parseISO8601Duration(durationStr: string): string {
+  const match = durationStr.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return "10:00";
+  const hours = parseInt(match[1] || "0", 10);
+  const minutes = parseInt(match[2] || "0", 10);
+  const seconds = parseInt(match[3] || "0", 10);
+  
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  } else {
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
+}
+
+// Global Diagnostics Memory to power the real-time Debug/Diagnostics Panel
+const ytDiagnostics: any = {
+  lastChecked: null,
+  apiKeyLoaded: false,
+  apiKeySource: "NONE",
+  apiKeyMasked: "None",
+  lastRequest: null,
+  lastStatus: null,
+  lastError: null,
+  suggestedAction: null
+};
+
+// Update diagnostics state
+function updateDiagnostics(status: string, details: { apiKey?: string; error?: string; requestUrl?: string; responseStatus?: number; suggestedAction?: string }) {
+  const apiKey = details.apiKey || DIRECT_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY || "";
+  ytDiagnostics.lastChecked = new Date().toISOString();
+  ytDiagnostics.apiKeyLoaded = apiKey.trim().length > 0;
+  ytDiagnostics.apiKeySource = DIRECT_YOUTUBE_API_KEY ? "DIRECT_CODE" : (process.env.YOUTUBE_API_KEY ? "ENV_VAR" : "NONE");
+  ytDiagnostics.apiKeyMasked = apiKey.trim().length > 8 
+    ? `${apiKey.trim().substring(0, 6)}...${apiKey.trim().substring(apiKey.trim().length - 4)}` 
+    : (apiKey.trim() ? "Invalid Key Length" : "None");
+  if (details.requestUrl) ytDiagnostics.lastRequest = details.requestUrl;
+  if (details.responseStatus !== undefined) ytDiagnostics.lastStatus = details.responseStatus;
+  if (details.error) ytDiagnostics.lastError = details.error;
+  if (details.suggestedAction) ytDiagnostics.suggestedAction = details.suggestedAction;
+  console.log(`[Diagnostics Update] Status: ${status} | Result: ${details.error ? "Failed with: " + details.error : "Success"}`);
+}
+
+// Fetch helper with Exponential Backoff retry logic for temporary network issues
+async function fetchWithRetry(url: string, options: any = {}, maxRetries = 3, initialDelay = 500): Promise<Response> {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      const response = await fetch(url, options);
+      // Retry on Server Errors (5xx) or Rate Limiting (429)
+      // Do not retry on client errors (400, 401, 403, 404) unless it's a transient 429
+      if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
+        return response;
+      }
+      attempt++;
+      if (attempt < maxRetries) {
+        const backoffDelay = initialDelay * Math.pow(2, attempt);
+        console.warn(`[YouTube API Retry] HTTP ${response.status} on attempt ${attempt}. Retrying in ${backoffDelay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, backoffDelay));
+      } else {
+        return response;
+      }
+    } catch (err: any) {
+      attempt++;
+      if (attempt < maxRetries) {
+        const backoffDelay = initialDelay * Math.pow(2, attempt);
+        console.warn(`[YouTube API Retry] Network/Fetch error on attempt ${attempt}: ${err.message || err}. Retrying in ${backoffDelay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, backoffDelay));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw new Error("Maximum fetch retry attempts reached");
+}
+
+// Detailed YouTube Error Extractor and Analyzer
+async function analyzeYoutubeApiError(response: Response, actionContext: string): Promise<{ message: string; suggestedAction: string; rawError: any }> {
+  let rawError = null;
+  let message = `Failed to ${actionContext} (HTTP ${response.status})`;
+  let suggestedAction = "Check your internet connection and verify that the YouTube Playlist/Video ID is public.";
+
+  try {
+    const errorData = await response.json();
+    rawError = errorData;
+    if (errorData.error) {
+      const apiErr = errorData.error;
+      const firstError = apiErr.errors?.[0] || {};
+      const reason = firstError.reason || "";
+      const apiMsg = apiErr.message || "";
+      
+      message = `YouTube API Error (${response.status}): ${apiMsg}`;
+
+      if (reason === "keyInvalid" || apiMsg.toLowerCase().includes("key is not valid")) {
+        message = "Invalid YouTube API Key.";
+        suggestedAction = "The API key being sent is invalid or has typos. If you pasted the key directly in server.ts, verify that the quotes don't contain extra spaces. Check that you copied the complete API key from Google Cloud Console.";
+      } else if (reason === "quotaExceeded") {
+        message = "YouTube API Quota Exceeded.";
+        suggestedAction = "This API key has exceeded its daily limit (usually 10,000 units). You can request more quota in Google Cloud Console or create a new API key on a different Google Cloud project to resume immediately.";
+      } else if (reason === "ipRefererBlocked" || apiMsg.toLowerCase().includes("referer") || apiMsg.toLowerCase().includes("restriction")) {
+        message = "API Key Referrer / IP Restriction Blocked.";
+        suggestedAction = "Your Google Cloud API Key is restricted (HTTP referrers or IP addresses) and is blocking requests from this live server. GO TO Google Cloud Console -> APIs & Services -> Credentials -> Edit your API key -> Set Restrictions to 'None' (recommended for server-side endpoints), or make sure to allow the live domain: " + (process.env.APP_URL || "your live site domain");
+      } else if (reason === "playlistNotFound" || reason === "notFound") {
+        message = "Playlist / Video Not Found or Private.";
+        suggestedAction = "The requested YouTube item could not be found. Please double check that the Playlist/Video ID is correct, and that its visibility is set to 'Public' or 'Unlisted' rather than 'Private'.";
+      } else if (reason === "accessNotConfigured" || apiMsg.toLowerCase().includes("not enabled")) {
+        message = "YouTube Data API v3 is not enabled.";
+        suggestedAction = "You must enable the 'YouTube Data API v3' in your Google Cloud Console project. Go to APIs & Services -> Library -> Search for 'YouTube Data API v3' -> Click 'Enable'.";
+      }
+    }
+  } catch (e) {
+    // If not JSON, use default status text
+    message = `HTTP Error ${response.status}: ${response.statusText || "Forbidden"}`;
+  }
+
+  return { message, suggestedAction, rawError };
+}
+
+// Helper to scrape accurate video duration directly from YouTube watch page HTML
+async function fetchYoutubeVideoDurationScraped(videoId: string): Promise<string> {
+  if (!videoId || videoId.length !== 11) return "";
+  try {
+    const watchUrl = `https://www.youtube.com/watch?v=${videoId}&hl=en`;
+    const res = await fetch(watchUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
+      }
+    });
+    if (res.ok) {
+      const html = await res.text();
+      let totalSecs = 0;
+      const mSec = html.match(/"lengthSeconds":"(\d+)"/);
+      if (mSec) totalSecs = parseInt(mSec[1], 10);
+      if (!totalSecs) {
+        const mMs = html.match(/"approxDurationMs":"(\d+)"/);
+        if (mMs) totalSecs = Math.floor(parseInt(mMs[1], 10) / 1000);
+      }
+      if (!totalSecs) {
+        const mItem = html.match(/itemprop="duration" content="PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?"/) ||
+                      html.match(/content="PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?" itemprop="duration"/) ||
+                      html.match(/"duration":"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?"/);
+        if (mItem) {
+          const h = parseInt(mItem[1] || "0", 10);
+          const m = parseInt(mItem[2] || "0", 10);
+          const s = parseInt(mItem[3] || "0", 10);
+          totalSecs = h * 3600 + m * 60 + s;
+        }
+      }
+
+      if (totalSecs > 0) {
+        const hrs = Math.floor(totalSecs / 3600);
+        const mins = Math.floor((totalSecs % 3600) / 60);
+        const secs = totalSecs % 60;
+        return hrs > 0 
+          ? `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+          : `${mins}:${secs.toString().padStart(2, "0")}`;
+      }
+    }
+  } catch (e) {
+    console.warn("[fetchYoutubeVideoDurationScraped] Failed for:", videoId, e);
+  }
+  return "";
+}
+
+// API route to proxy and parse public YouTube playlists (with optional YouTube Data API key and scraper fallback)
+app.get("/api/playlist", async (req, res) => {
+  const { id } = req.query;
+  if (!id || typeof id !== "string") {
+    return res.status(400).json({ error: "Missing or invalid playlist ID" });
+  }
+
+  let cleanId = id.trim();
+
+  // Extract list ID or video ID if URL or query parameter was supplied
+  const listMatch = cleanId.match(/[?&]list=([a-zA-Z0-9_-]+)/);
+  if (listMatch) {
+    cleanId = listMatch[1];
+  } else if (cleanId.includes("http://") || cleanId.includes("https://") || cleanId.includes("youtube.com") || cleanId.includes("youtu.be")) {
+    const vidMatch = cleanId.match(/(?:v=|\/embed\/|\/watch\?v=|\/vi\/|youtu\.be\/|shorts\/|live\/)([a-zA-Z0-9_-]{11})/);
+    if (vidMatch) {
+      cleanId = vidMatch[1];
+    }
+  }
+
+  // 1. Single video check (exact 11 character YouTube video ID, non-playlist)
+  const isPlaylistId = cleanId.length !== 11 || /^(PL|UU|FL|WL|RD|OLAK5uy_)[a-zA-Z0-9_-]+$/.test(cleanId);
+
+  if (!isPlaylistId && /^[a-zA-Z0-9_-]{11}$/.test(cleanId)) {
+    console.log(`[YouTube API] ID ${cleanId} detected as single video. Wrapping as single-video chapter.`);
+    try {
+      let title = "YouTube Video";
+      let channelName = "YouTube Channel";
+      let thumbnail = `https://i.ytimg.com/vi/${cleanId}/hqdefault.jpg`;
+
+      const [oembedRes, scrapedDuration] = await Promise.all([
+        fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${cleanId}&format=json`).catch(() => null),
+        fetchYoutubeVideoDurationScraped(cleanId)
+      ]);
+
+      if (oembedRes && oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        title = oembedData.title || title;
+        channelName = oembedData.author_name || channelName;
+        thumbnail = oembedData.thumbnail_url || thumbnail;
+      }
+
+      return res.json({
+        id: cleanId,
+        title,
+        channelName,
+        thumbnail,
+        videos: [{
+          id: cleanId,
+          title,
+          channelName,
+          duration: scrapedDuration || "10:00",
+          thumbnail,
+          progress: 0,
+          lastWatchedPosition: 0,
+          completed: false,
+          lectureNumber: 1
+        }],
+        totalVideos: 1
+      });
+    } catch (singleVidErr) {
+      console.warn("[YouTube API] Single video oEmbed fallback error:", singleVidErr);
+    }
+  }
+
+  const apiKey = DIRECT_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY;
+
+  if (apiKey && apiKey !== "MY_YOUTUBE_API_KEY" && apiKey.trim() !== "") {
+    try {
+      console.log(`[YouTube API] Fetching playlist metadata for ID: ${cleanId}`);
+      
+      let playlistTitle = "YouTube Playlist";
+      let playlistChannel = "Unknown Channel";
+      let playlistThumbnail = "";
+
+      // 1. Fetch playlist snippet
+      const plUrl = `https://youtube.googleapis.com/youtube/v3/playlists?part=snippet&id=${cleanId}&key=${apiKey}`;
+      const plRes = await fetchWithRetry(plUrl);
+      if (plRes.ok) {
+        const plData = await plRes.json();
+        if (plData.items && plData.items[0]) {
+          const item = plData.items[0];
+          playlistTitle = item.snippet?.title || playlistTitle;
+          playlistChannel = item.snippet?.channelTitle || playlistChannel;
+          playlistThumbnail = item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.default?.url || "";
+        }
+      }
+
+      // 2. Fetch all playlist items (handling pagination with nextPageToken)
+      let videos: any[] = [];
+      let nextPageToken = "";
+      let page = 0;
+
+      do {
+        const itemsUrl = `https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${cleanId}&maxResults=50&pageToken=${nextPageToken}&key=${apiKey}`;
+        const itemsRes = await fetchWithRetry(itemsUrl);
+        if (!itemsRes.ok) break;
+        
+        const itemsData = await itemsRes.json();
+        if (!itemsData.items || itemsData.items.length === 0) break;
+
+        const pageVideos = itemsData.items.map((item: any, index: number) => {
+          const vidId = item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
+          const title = item.snippet?.title || "Video";
+          const channelName = item.snippet?.videoOwnerChannelTitle || item.snippet?.channelTitle || "Unknown Channel";
+          const thumbnail = item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`;
+          
+          return {
+            id: vidId,
+            title,
+            channelName,
+            duration: "10:00",
+            thumbnail,
+            progress: 0,
+            lastWatchedPosition: 0,
+            completed: false,
+            lectureNumber: (page * 50) + index + 1
+          };
+        });
+
+        videos.push(...pageVideos);
+        nextPageToken = itemsData.nextPageToken || "";
+        page++;
+      } while (nextPageToken && page < 20);
+
+      // 3. Batch fetch durations
+      if (videos.length > 0) {
+        const batchSize = 50;
+        for (let i = 0; i < videos.length; i += batchSize) {
+          const batch = videos.slice(i, i + batchSize);
+          const ids = batch.map(v => v.id).join(",");
+          try {
+            const vidUrl = `https://youtube.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${apiKey}`;
+            const vidRes = await fetchWithRetry(vidUrl);
+            if (vidRes.ok) {
+              const vidData = await vidRes.json();
+              if (vidData.items) {
+                const durationMap = new Map<string, string>();
+                vidData.items.forEach((item: any) => {
+                  if (item.contentDetails?.duration) {
+                    durationMap.set(item.id, parseISO8601Duration(item.contentDetails.duration));
+                  }
+                });
+                
+                batch.forEach(v => {
+                  if (durationMap.has(v.id)) {
+                    v.duration = durationMap.get(v.id);
+                  }
+                });
+              }
+            }
+          } catch (batchErr) {
+            console.error("[YouTube API] Batch duration fetch failed:", batchErr);
+          }
+        }
+      }
+
+      if (videos.length > 0) {
+        if (!playlistThumbnail) {
+          playlistThumbnail = videos[0].thumbnail;
+        }
+
+        await enrichVideoMetadata(videos);
+
+        updateDiagnostics("PLAYLIST_LOAD_SUCCESS", {
+          apiKey,
+          requestUrl: `https://youtube.googleapis.com/youtube/v3/playlists?id=${cleanId}`
+        });
+
+        return res.json({
+          id: cleanId,
+          title: playlistTitle,
+          channelName: playlistChannel,
+          thumbnail: playlistThumbnail,
+          videos,
+          totalVideos: videos.length
+        });
+      }
+    } catch (apiErr: any) {
+      console.warn("[YouTube API] API key failed or quota limit hit. Trying RSS fallback:", apiErr.message || apiErr);
+    }
+  }
+
+  // --- RSS FEED FALLBACK (Fast, robust, zero API key required) ---
+  try {
+    console.log(`[YouTube API] Attempting RSS Feed parsing for playlist: ${cleanId}`);
+    const rssUrl = `https://www.youtube.com/feeds/videos.xml?playlist_id=${cleanId}`;
+    const rssRes = await fetch(rssUrl);
+    if (rssRes.ok) {
+      const xml = await rssRes.text();
+      const titleMatch = xml.match(/<title>([^<]+)<\/title>/);
+      const playlistTitle = titleMatch ? titleMatch[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"') : "YouTube Playlist";
+
+      const authorMatch = xml.match(/<author>\s*<name>([^<]+)<\/name>/);
+      const channelName = authorMatch ? authorMatch[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">") : "YouTube Channel";
+
+      const entries = xml.split("<entry>").slice(1);
+      const videos = entries.map((entry, idx) => {
+        const vIdMatch = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+        const vTitleMatch = entry.match(/<title>([^<]+)<\/title>/);
+        const vId = vIdMatch ? vIdMatch[1] : "";
+        const title = vTitleMatch ? vTitleMatch[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"') : `Video ${idx + 1}`;
+        
+        return {
+          id: vId,
+          title,
+          channelName,
+          duration: "10:00",
+          thumbnail: `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`,
+          progress: 0,
+          lastWatchedPosition: 0,
+          completed: false,
+          lectureNumber: idx + 1
+        };
+      }).filter(v => v.id && v.id.length === 11);
+
+      if (videos.length > 0) {
+        console.log(`[YouTube RSS] Successfully fetched ${videos.length} videos for playlist ${cleanId}. Enriching durations...`);
+        await enrichVideoMetadata(videos);
+
+        return res.json({
+          id: cleanId,
+          title: playlistTitle,
+          channelName,
+          thumbnail: videos[0]?.thumbnail || `https://i.ytimg.com/vi/${videos[0]?.id}/hqdefault.jpg`,
+          videos,
+          totalVideos: videos.length
+        });
+      }
+    }
+  } catch (rssErr: any) {
+    console.warn("[YouTube API] RSS Feed fallback failed:", rssErr.message || rssErr);
+  }
+
+  // --- PIPED PUBLIC API FALLBACK ---
+  try {
+    console.log(`[YouTube API] Attempting Piped API fallback for playlist: ${cleanId}`);
+    const pipedRes = await fetch(`https://pipedapi.kavin.rocks/playlists/${cleanId}`);
+    if (pipedRes.ok) {
+      const pipedData = await pipedRes.json();
+      if (pipedData && pipedData.relatedStreams && pipedData.relatedStreams.length > 0) {
+        const videos = pipedData.relatedStreams.map((item: any, idx: number) => {
+          const vidId = item.url ? item.url.replace("/watch?v=", "") : "";
+          return {
+            id: vidId,
+            title: item.title || `Video ${idx + 1}`,
+            channelName: item.uploaderName || pipedData.uploader || "YouTube Channel",
+            duration: item.duration ? `${Math.floor(item.duration / 60)}:${(item.duration % 60).toString().padStart(2, "0")}` : "10:00",
+            thumbnail: item.thumbnail || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
+            progress: 0,
+            lastWatchedPosition: 0,
+            completed: false,
+            lectureNumber: idx + 1
+          };
+        }).filter((v: any) => v.id);
+
+        if (videos.length > 0) {
+          await enrichVideoMetadata(videos);
+
+          return res.json({
+            id: cleanId,
+            title: pipedData.title || "YouTube Playlist",
+            channelName: pipedData.uploader || "YouTube Channel",
+            thumbnail: pipedData.thumbnailUrl || videos[0].thumbnail,
+            videos,
+            totalVideos: videos.length
+          });
+        }
+      }
+    }
+  } catch (pipedErr: any) {
+    console.warn("[YouTube API] Piped fallback failed:", pipedErr.message || pipedErr);
+  }
+
+  // Fallback: If all playlist methods fail, check if we have any fallback video ID to rescue the session
+  const fallbackVidId = (typeof req.query.v === "string" ? req.query.v : "") ||
+    (typeof req.query.videoId === "string" ? req.query.videoId : "") ||
+    (typeof req.query.id === "string" && req.query.id.match(/[?&]v=([a-zA-Z0-9_-]{11})/) ? req.query.id.match(/[?&]v=([a-zA-Z0-9_-]{11})/)![1] : "") ||
+    (cleanId.length === 11 ? cleanId : "");
+
+  if (fallbackVidId && fallbackVidId.length === 11) {
+    try {
+      console.log(`[YouTube API] Playlist failed, resolving single video fallback for ID: ${fallbackVidId}`);
+      let title = "YouTube Video";
+      let channelName = "YouTube Creator";
+      let thumbnail = `https://i.ytimg.com/vi/${fallbackVidId}/hqdefault.jpg`;
+      const [oembedRes, scrapedDuration] = await Promise.all([
+        fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${fallbackVidId}&format=json`).catch(() => null),
+        fetchYoutubeVideoDurationScraped(fallbackVidId)
+      ]);
+      if (oembedRes && oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        title = oembedData.title || title;
+        channelName = oembedData.author_name || channelName;
+        thumbnail = oembedData.thumbnail_url || thumbnail;
+      }
+      return res.json({
+        id: cleanId,
+        title,
+        channelName,
+        thumbnail,
+        videos: [{
+          id: fallbackVidId,
+          title,
+          channelName,
+          duration: scrapedDuration || "10:00",
+          thumbnail,
+          progress: 0,
+          lastWatchedPosition: 0,
+          completed: false,
+          lectureNumber: 1
+        }],
+        totalVideos: 1
+      });
+    } catch (e) {
+      console.warn("Fallback video wrap error:", e);
+    }
+  }
+
+  return res.status(404).json({
+    error: "Could not fetch playlist from YouTube. Please verify that the link is correct and the playlist is set to Public or Unlisted on YouTube."
+  });
+});
+
+// API route to proxy and parse single YouTube video metadata
+app.get("/api/video-metadata", async (req, res) => {
+  const { id, key } = req.query;
+  if (!id || typeof id !== "string") {
+    return res.status(400).json({ error: "Missing video ID" });
+  }
+
+  const userPassedKey = typeof key === "string" && key.trim() !== "" ? key.trim() : null;
+  const apiKey = userPassedKey || DIRECT_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY;
+
+  if (apiKey && apiKey !== "MY_YOUTUBE_API_KEY" && apiKey.trim() !== "") {
+    try {
+      console.log(`[YouTube API] Fetching video details for ID: ${id}`);
+      const url = `https://youtube.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=${id}&key=${apiKey}`;
+      const apiRes = await fetchWithRetry(url);
+      if (!apiRes.ok) {
+        const errDetails = await analyzeYoutubeApiError(apiRes, "fetch video details");
+        updateDiagnostics("VIDEO_METADATA_API_ERROR", {
+          apiKey,
+          error: errDetails.message,
+          requestUrl: url,
+          responseStatus: apiRes.status,
+          suggestedAction: errDetails.suggestedAction
+        });
+        throw new Error(errDetails.message);
+      }
+      
+      const data = await apiRes.json();
+      if (data.items && data.items[0]) {
+        const item = data.items[0];
+        const snippet = item.snippet || {};
+        const contentDetails = item.contentDetails || {};
+        const statistics = item.statistics || {};
+
+        const title = snippet.title || "YouTube Video";
+        const channelName = snippet.channelTitle || "Unknown Channel";
+        const duration = contentDetails.duration ? parseISO8601Duration(contentDetails.duration) : "10:00";
+        const description = snippet.description || `Educational lecture: "${title}" by ${channelName}. Complete syllabus and interactive notes guide.`;
+        let publishDate = "Unknown date";
+        if (snippet.publishedAt) {
+          try {
+            publishDate = new Date(snippet.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+          } catch (e) {
+            publishDate = snippet.publishedAt;
+          }
+        }
+        const thumbnail = snippet.thumbnails?.maxres?.url || snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+        // Format view count nicely
+        let viewCount = "";
+        if (statistics.viewCount) {
+          const num = parseInt(statistics.viewCount, 10);
+          if (num >= 1_000_000) {
+            viewCount = `${(num / 1_000_000).toFixed(1)}M views`;
+          } else if (num >= 1_000) {
+            viewCount = `${(num / 1_000).toFixed(1)}K views`;
+          } else {
+            viewCount = `${num.toLocaleString()} views`;
+          }
+        }
+
+        const tags = snippet.tags || [];
+
+        updateDiagnostics("VIDEO_LOAD_SUCCESS", {
+          apiKey,
+          requestUrl: url
+        });
+
+        return res.json({
+          id,
+          title,
+          channelName,
+          duration,
+          description,
+          publishDate,
+          viewCount,
+          likeCount: statistics.likeCount || "",
+          tags,
+          thumbnail
+        });
+      }
+    } catch (apiErr: any) {
+      console.warn("[YouTube API] Single video details API call failed. Falling back to oEmbed/scraper:", apiErr.message || apiErr);
+      const errMsg = apiErr.message || String(apiErr);
+      if (!ytDiagnostics.lastError) {
+        updateDiagnostics("API_FALLBACK_TRIGGERED", {
+          apiKey,
+          error: errMsg
+        });
+      }
+    }
+  }
+
+  // --- MULTI-TIER SCRAPER & OEMBED RESOLUTION ---
+  try {
+    const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`;
+    const watchUrl = `https://www.youtube.com/watch?v=${id}&hl=en`;
+
+    const [oembedRes, htmlRes, scrapedDuration] = await Promise.all([
+      fetch(oembedUrl, { signal: AbortSignal.timeout(3500) }).catch(() => null),
+      fetch(watchUrl, {
+        signal: AbortSignal.timeout(4000),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Cookie": "SOCS=CAESEwgDEgk2MTU3OTM4MjQaAmVuIAEaBgiA_LyaBg; CONSENT=YES+cb;"
+        }
+      }).catch(() => null),
+      fetchYoutubeVideoDurationScraped(id as string)
+    ]);
+
+    let oembedData: any = null;
+    if (oembedRes && oembedRes.ok) {
+      oembedData = await oembedRes.json().catch(() => null);
+    }
+
+    let html = "";
+    if (htmlRes && htmlRes.ok) {
+      html = await htmlRes.text().catch(() => "");
+    }
+
+    // 1. Title Resolution
+    let title = oembedData?.title || "";
+    if (!title && html) {
+      const titleMatch = html.match(/<meta name="title" content="([^"]+)"/) || 
+                         html.match(/<meta property="og:title" content="([^"]+)"/) ||
+                         html.match(/"title":"((?:\\.|[^"\\])*)"/);
+      if (titleMatch) {
+        title = titleMatch[1].replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+      }
+    }
+
+    // 2. Channel Resolution
+    let channelName = oembedData?.author_name || "";
+    if (!channelName && html) {
+      const channelMatch = html.match(/<link itemprop="name" content="([^"]+)"/) || 
+                           html.match(/"author":"([^"]+)"/) ||
+                           html.match(/"ownerChannelName":"([^"]+)"/);
+      if (channelMatch) {
+        channelName = channelMatch[1].replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+      }
+    }
+
+    // 3. Description Resolution
+    let description = "";
+    if (html) {
+      const descMatch = html.match(/"shortDescription":"((?:\\.|[^"\\])*)"/) ||
+                        html.match(/<meta name="description" content="([^"]+)"/) || 
+                        html.match(/<meta property="og:description" content="([^"]+)"/);
+      if (descMatch) {
+        try {
+          description = JSON.parse(`"${descMatch[1]}"`);
+        } catch {
+          description = descMatch[1].replace(/\\n/g, "\n").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+        }
+      }
+    }
+
+    // If description is still empty, synthesize an informative lecture summary
+    if (!description && title) {
+      description = `Educational lecture: "${title}" by ${channelName || "YouTube Creator"}. Complete video lecture module and syllabus guide for study and review.`;
+    }
+
+    // 4. Duration Resolution
+    let duration = scrapedDuration || "10:00";
+    if (duration === "10:00" && html) {
+      const durationMatch = html.match(/"lengthSeconds":"(\d+)"/) || html.match(/"approxDurationMs":"(\d+)"/);
+      if (durationMatch && durationMatch[1]) {
+        const totalSecs = durationMatch[0].includes("approx") ? Math.floor(parseInt(durationMatch[1], 10) / 1000) : parseInt(durationMatch[1], 10);
+        if (totalSecs > 0) {
+          const hrs = Math.floor(totalSecs / 3600);
+          const mins = Math.floor((totalSecs % 3600) / 60);
+          const secs = totalSecs % 60;
+          duration = hrs > 0 
+            ? `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+            : `${mins}:${secs.toString().padStart(2, "0")}`;
+        }
+      }
+    }
+
+    // 5. Publish Date Resolution
+    let publishDate = "";
+    if (html) {
+      const dateMatch = html.match(/"publishDate":"([^"]+)"/) || 
+                        html.match(/"uploadDate":"([^"]+)"/) ||
+                        html.match(/itemprop="datePublished" content="([^"]+)"/);
+      if (dateMatch && dateMatch[1]) {
+        try {
+          publishDate = new Date(dateMatch[1]).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+        } catch (e) {
+          publishDate = dateMatch[1];
+        }
+      }
+    }
+    if (!publishDate) {
+      publishDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    }
+
+    // 6. View Count Resolution
+    let viewCount = "";
+    if (html) {
+      const viewMatch = html.match(/"viewCount":"(\d+)"/);
+      if (viewMatch && viewMatch[1]) {
+        const num = parseInt(viewMatch[1], 10);
+        if (num > 0) {
+          viewCount = num >= 1_000_000 
+            ? `${(num / 1_000_000).toFixed(1)}M views` 
+            : num >= 1_000 
+              ? `${(num / 1_000).toFixed(1)}K views` 
+              : `${num.toLocaleString()} views`;
+        }
+      }
+    }
+
+    let tags: string[] = [];
+    if (html) {
+      const keywordsMatch = html.match(/<meta name="keywords" content="([^"]+)"/);
+      if (keywordsMatch && keywordsMatch[1]) {
+        tags = keywordsMatch[1].split(",").map(t => t.trim()).filter(t => t && t.length < 30).slice(0, 8);
+      }
+    }
+    if (tags.length === 0) {
+      tags = ["Education", "Lecture", "Study Notes"];
+    }
+
+    const finalResult = {
+      id,
+      title: title || "YouTube Video",
+      channelName: channelName || "YouTube Channel",
+      duration,
+      description: description || `Educational lecture: "${title || id}" by ${channelName || "YouTube Creator"}. Complete syllabus topics and interactive learning notes.`,
+      publishDate,
+      viewCount,
+      tags,
+      thumbnail: oembedData?.thumbnail_url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+    };
+
+    console.log(`[YouTube API] Video details successfully resolved for: ${id} ("${finalResult.title}")`);
+    return res.json(finalResult);
+
+  } catch (err: any) {
+    console.error("Error in multi-tier video details resolver:", err);
+    return res.json({
+      id,
+      title: "YouTube Video",
+      channelName: "YouTube Channel",
+      duration: "10:00",
+      description: "Complete educational lecture module ready for study.",
+      publishDate: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+      viewCount: "",
+      tags: ["Education", "Study", "Lecture"],
+      thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+    });
+  }
+});
+
+// API route to get real-time YouTube Data API diagnostic info
+app.get("/api/youtube-diagnostics", (req, res) => {
+  res.json({
+    ...ytDiagnostics,
+    nodeEnv: process.env.NODE_ENV || "development",
+    appUrl: process.env.APP_URL || "Not Configured"
+  });
+});
+
+// =========================================================================
+// 🧠 SERVER-SIDE GEMINI API PROXY ENDPOINTS (Secure, scalable, and compliant)
+// =========================================================================
+
+function getGeminiClient(req: express.Request): GoogleGenAI {
+  const headers = req.headers;
+  let userKey = (headers["x-gemini-key"] as string)
+    || (headers["authorization"]?.replace(/^Bearer\s+/i, ""))
+    || req.body?.apiKey
+    || req.body?.key
+    || req.query?.apiKey as string
+    || req.query?.key as string;
+
+  if (userKey) {
+    userKey = userKey.trim().replace(/^["']|["']$/g, "").replace(/[\r\n\t]/g, "").replace(/[\u200B-\u200D\uFEFF]/g, "");
+  }
+
+  // System key safety check
+  const systemKey = process.env.GEMINI_API_KEY;
+  const isSystemKeyValid = systemKey && systemKey.length >= 10 && systemKey !== "undefined" && systemKey !== "null";
+
+  // Priority: 1. User provided key 2. Valid system environment key
+  const apiKey = (userKey && userKey.length >= 10) ? userKey : (isSystemKeyValid ? systemKey : null);
+
+  if (!apiKey) {
+    throw new Error("No Gemini API key detected. Please connect your API key in the settings to enable AI features.");
+  }
+
+  return new GoogleGenAI({
+    apiKey: apiKey.trim(),
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
+    }
+  });
+}
+
+// Helper to enrich video metadata (durations and titles) for any videos missing them
+async function enrichVideoMetadata(videos: Array<{ id: string; title: string; duration: string; channelName?: string; thumbnail?: string }>): Promise<void> {
+  if (!videos || videos.length === 0) return;
+
+  const needsEnrichment = videos.filter(v => 
+    !v.duration || v.duration === "10:00" || v.duration === "15:00" || v.duration === "0:00" ||
+    !v.title || v.title === "Video" || v.title.startsWith("Video ") || v.title.startsWith("Lecture ")
+  );
+
+  if (needsEnrichment.length === 0) return;
+
+  // 1. Try YouTube Data API batch if API key is available
+  const apiKey = DIRECT_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY;
+  if (apiKey && apiKey.trim()) {
+    try {
+      const batchSize = 50;
+      for (let i = 0; i < needsEnrichment.length; i += batchSize) {
+        const batch = needsEnrichment.slice(i, i + batchSize);
+        const batchIds = batch.map(v => v.id).join(",");
+        const vidUrl = `https://youtube.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${batchIds}&key=${apiKey}`;
+        const res = await fetchWithRetry(vidUrl);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.items) {
+            const map = new Map<string, { duration?: string; title?: string; channelName?: string }>();
+            data.items.forEach((item: any) => {
+              const dur = item.contentDetails?.duration ? parseISO8601Duration(item.contentDetails.duration) : null;
+              const title = item.snippet?.title;
+              const channelName = item.snippet?.channelTitle;
+              map.set(item.id, { duration: dur || undefined, title, channelName });
+            });
+            batch.forEach(v => {
+              const info = map.get(v.id);
+              if (info) {
+                if (info.duration) v.duration = info.duration;
+                if (info.title) v.title = info.title;
+                if (info.channelName && (!v.channelName || v.channelName === "Unknown Channel")) v.channelName = info.channelName;
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[enrichVideoMetadata] YouTube API batch fetch failed:", e);
+    }
+  }
+
+  // 2. For remaining videos with default/missing duration or title, scrape watch page in parallel
+  const remaining = needsEnrichment.filter(v => 
+    !v.duration || v.duration === "10:00" || v.duration === "15:00" || v.duration === "0:00" ||
+    !v.title || v.title === "Video" || v.title.startsWith("Video ")
+  );
+
+  if (remaining.length > 0) {
+    const promises = remaining.slice(0, 30).map(async (v) => {
+      try {
+        const watchUrl = `https://www.youtube.com/watch?v=${v.id}&hl=en`;
+        const res = await fetch(watchUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9"
+          }
+        });
+        if (res.ok) {
+          const html = await res.text();
+          let totalSecs = 0;
+          const mSec = html.match(/"lengthSeconds":"(\d+)"/);
+          if (mSec) totalSecs = parseInt(mSec[1], 10);
+          if (!totalSecs) {
+            const mMs = html.match(/"approxDurationMs":"(\d+)"/);
+            if (mMs) totalSecs = Math.floor(parseInt(mMs[1], 10) / 1000);
+          }
+          if (!totalSecs) {
+            const mItem = html.match(/itemprop="duration" content="PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?"/);
+            if (mItem) {
+              const h = parseInt(mItem[1] || "0", 10);
+              const m = parseInt(mItem[2] || "0", 10);
+              const s = parseInt(mItem[3] || "0", 10);
+              totalSecs = h * 3600 + m * 60 + s;
+            }
+          }
+
+          if (totalSecs > 0) {
+            const hrs = Math.floor(totalSecs / 3600);
+            const mins = Math.floor((totalSecs % 3600) / 60);
+            const secs = totalSecs % 60;
+            v.duration = hrs > 0 
+              ? `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+              : `${mins}:${secs.toString().padStart(2, "0")}`;
+          }
+
+          if (!v.title || v.title === "Video" || v.title.startsWith("Video ")) {
+            const mTitle = html.match(/<meta name="title" content="([^"]+)"/) || html.match(/<meta property="og:title" content="([^"]+)"/);
+            if (mTitle) {
+              v.title = mTitle[1]
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/&amp;/g, "&")
+                .replace(/&lt;/g, "<")
+                .replace(/&gt;/g, ">");
+            }
+          }
+        }
+      } catch (e) {}
+    });
+    await Promise.all(promises);
+  }
+}
+
+// Resilient Gemini generator wrapper with exponential backoff and fallback model
+async function generateContentWithFallback(ai: GoogleGenAI, params: any) {
+  // Use currently supported models on Google AI Studio
+  const modelsToTry = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"];
+
+  let lastError: any = null;
+
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const model = modelsToTry[i];
+    let attempts = 0;
+    const maxAttemptsPerModel = 2;
+    let delay = 1000;
+
+    while (attempts < maxAttemptsPerModel) {
+      try {
+        const response = await ai.models.generateContent({
+          ...params,
+          model,
+        });
+        return response;
+      } catch (err: any) {
+        lastError = err;
+        attempts++;
+        const errMsg = String(err?.message || err);
+        const isTransient = err?.status === 503 || err?.code === 503 || 
+                            err?.status === 429 || err?.code === 429 ||
+                            errMsg.includes("503") || errMsg.includes("high demand") || 
+                            errMsg.includes("UNAVAILABLE") || errMsg.includes("RESOURCE_EXHAUSTED") ||
+                            errMsg.includes("Quota exceeded");
+
+        console.warn(`[Gemini API Attempt model=${model} attempt=${attempts}/${maxAttemptsPerModel}] Warning: ${errMsg}`);
+
+        if (isTransient && attempts < maxAttemptsPerModel) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          delay *= 1.5;
+        } else {
+          break; // move to next model
+        }
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+// Format human-friendly error messages from raw API exceptions
+function formatGeminiError(err: any): string {
+  const rawMsg = err?.message || String(err);
+  if (rawMsg.includes("503") || rawMsg.includes("UNAVAILABLE") || rawMsg.includes("high demand")) {
+    return "The AI study model is currently experiencing high demand. Please try again in a few moments.";
+  }
+  if (rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED") || rawMsg.includes("Quota exceeded")) {
+    return "Rate limit reached on free tier. Please wait a few seconds before trying again, or connect your custom Gemini API key in Settings for higher limits.";
+  }
+  if (rawMsg.includes("API_KEY_INVALID") || rawMsg.toLowerCase().includes("api key not valid") || rawMsg.includes("401") || rawMsg.includes("UNAUTHENTICATED")) {
+    return "Invalid or inactive Gemini API key. Please verify your key from Google AI Studio (aistudio.google.com/api-keys).";
+  }
+  return rawMsg;
+}
+
+function handleAiError(res: express.Response, err: any, contextName: string) {
+  console.warn(`[${contextName} Failed]:`, err?.message || err);
+  const rawMsg = err?.message || String(err);
+  const isRateLimit = err?.status === 429 || err?.code === 429 || rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED") || rawMsg.includes("Quota exceeded");
+  const statusCode = isRateLimit ? 429 : (err?.status === 503 ? 503 : 500);
+  return res.status(statusCode).json({ error: formatGeminiError(err) });
+}
+
+// 1. API key validation
+app.post("/api/ai/validate-key", async (req, res) => {
+  try {
+    const ai = getGeminiClient(req);
+    const response = await generateContentWithFallback(ai, {
+      contents: "Respond with OK.",
+    });
+    if (response && response.text) {
+      return res.json({ 
+        valid: true, 
+        message: "API key verified. Your Gemini AI features are ready." 
+      });
+    }
+    return res.json({ valid: true, message: "API key verified and registered successfully." });
+  } catch (err: any) {
+    console.warn("[Gemini Validation Warning]:", err?.message || err);
+    const rawMsg = (err?.message || String(err)).toLowerCase();
+    
+    const isExplicitlyBadKey = rawMsg.includes("api_key_invalid") || 
+                               rawMsg.includes("api key not valid") || 
+                               rawMsg.includes("401") || 
+                               rawMsg.includes("unauthenticated") ||
+                               rawMsg.includes("invalid api key");
+    if (isExplicitlyBadKey) {
+      return res.status(400).json({ 
+        valid: false,
+        errorType: "invalid",
+        error: "The API key appears to be invalid. Please create a new key in Google AI Studio." 
+      });
+    }
+
+    const isQuota = rawMsg.includes("429") || 
+                    rawMsg.includes("resource_exhausted") || 
+                    rawMsg.includes("quota exceeded") || 
+                    rawMsg.includes("rate limit");
+    if (isQuota) {
+      return res.status(429).json({
+        valid: false,
+        errorType: "quota",
+        error: "This API key has reached its available quota. Try another key or check your Google AI Studio usage."
+      });
+    }
+
+    const isModelUnavailable = rawMsg.includes("503") || 
+                               rawMsg.includes("unavailable") || 
+                               rawMsg.includes("high demand") || 
+                               rawMsg.includes("not found");
+    if (isModelUnavailable) {
+      return res.status(503).json({
+        valid: false,
+        errorType: "model",
+        error: "This Gemini model isn't available for this API key. Try another supported model or wait a moment."
+      });
+    }
+
+    // Network / generic fallback error
+    return res.status(500).json({ 
+      valid: false, 
+      errorType: "network",
+      error: "LearnStudy couldn't connect to Gemini. Check your internet connection and try again." 
+    });
+  }
+});
+
+// 2. Multi-format AI study material generator
+app.post("/api/ai/generate-notes", async (req, res) => {
+  const { videoTitle, channelName, type, studentNotes, imageBase64, imageMime } = req.body;
+  if (!videoTitle) {
+    return res.status(400).json({ error: "Missing video title parameter." });
+  }
+
+  try {
+    const ai = getGeminiClient(req);
+    let prompt = "";
+    let systemInstruction = "You are LearnStudy AI, an elite educational summarizer and study tutor. Your materials are deeply structured, clean, comprehensive, and beautifully formatted in markdown.";
+
+    if (type === "complete") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate comprehensive, highly detailed, and complete study notes in markdown format.
+Structure the notes precisely as follows:
+- **Executive Outline**: An in-depth overview of the lecture's core goals and themes.
+- **Detailed Core Concepts**: Multiple bulleted sections breaking down every major concept with clear definitions, real-world examples, and academic context.
+- **Key Equations & Formulas**: Detail any equations, derivations, and variables mentioned, or practical uses.
+- **Academic Comparison Grid**: A structured markdown table summarizing milestones, figures, or comparison parameters.
+- **Comprehensive Glossary**: Definitions of all technical and industry terms.
+- **In-Depth Study Guide**: Specific practice problems or study tracks for the student to follow.
+
+Write in a formal, engaging, academic tone using bold highlights and spacious layout. Avoid meta-commentary.`;
+    } else if (type === "short") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate highly condensed, high-yield Short Notes (or an executive summary) in markdown format.
+Keep it strictly under 500 words but dense with information.
+Include:
+- **The Core Thesis**: One paragraph summarizing the video.
+- **High-Yield Concepts**: 4-5 bullet points of the most critical take-aways.
+- **Instant Glossary**: 3 brief term definitions.`;
+    } else if (type === "revision") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate an elegant, highly structured Revision Cheat Sheet in markdown format.
+Focus on memory-retention hacks, clear visual analogies, key bullet-point summaries, and mnemonic devices to help a student revise the topic 10 minutes before an exam. Use lists, warning notes, and highlight markers.`;
+    } else if (type === "flashcards") {
+      systemInstruction = "You are LearnStudy Flashcard Maker. You return lists of highly effective academic flashcards.";
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate 6 to 10 high-value study flashcards.
+Each flashcard should test a core concept, definition, formula, or relationship.
+Format the output as a beautiful, easy-to-read markdown table or list:
+| Card ID | Front (Question/Concept) | Back (Answer/Explanation) |
+| --- | --- | --- |`;
+    } else if (type === "questions") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate a list of 5 to 8 Important Practice Questions with comprehensive, step-by-step academic answers.
+Each question should mimic a university exam question and provide a flawless model answer.`;
+    } else if (type === "mindmap") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Generate a beautiful visual Markdown Mind Map.
+Use hierarchical bullet points, indentation levels, and branch emojis (e.g. 🌲, 🌿, 📍, 🔑) to represent how all the subtopics branch off from the main lecture topic. Make it highly structural and easy to scan at a glance.`;
+    } else if (type === "formulas") {
+      prompt = `Analyze the video lecture "${videoTitle}" by creator "${channelName}".
+Extract and generate a Formula and Definition Cheat Sheet in markdown format.
+Create a clear markdown table listing every formula, variable definition, SI unit, and key definition mentioned in the topic, with brief examples of how to apply them.`;
+    } else if (type === "improve") {
+      prompt = `The student has taken the following draft notes during the lecture "${videoTitle}" by creator "${channelName}":
+---
+${studentNotes || ""}
+---
+
+Your task is to improve, structure, and expand these notes. 
+Keep all of the student's original facts and thoughts, but:
+1. Fix any grammar, typos, and formatting issues.
+2. Structure them with clear markdown headings, bullet points, and code blocks.
+3. Enhance them by adding detailed conceptual explanations, real-world examples, and necessary academic context for the terms mentioned by the student.
+4. Highlight key terms and equations.
+Format the output as clean, production-ready study notes in markdown.`;
+    } else if (type === "image") {
+      if (!imageBase64) {
+        return res.status(400).json({ error: "Missing image data" });
+      }
+      prompt = `Analyze this lecture slide, diagram, or textbook page.
+Extract all key concepts, formulas, bullet points, and visual data shown in the image.
+Provide a clear, highly structured markdown explanation:
+1. **Slide Summary**: What is the slide/diagram illustrating?
+2. **Extracted Content**: Detailed breakdown of text, lists, and formulas.
+3. **Conceptual Deep-Dive**: In-depth explanation of the principles shown, adding context that may not be directly written but is highly relevant to the topic.
+4. **Integration Hint**: Briefly suggest where this fits in the student's notes.`;
+    } else {
+      return res.status(400).json({ error: "Invalid study material type requested" });
+    }
+
+    if (studentNotes && type !== "improve" && studentNotes.trim()) {
+      prompt += `\n\nIncorporate the student's current draft notes to personalize and detail the material:\nSTUDENT DRAFT NOTES:\n${studentNotes}`;
+    }
+
+    if (type === "image" && imageBase64) {
+      const imagePart = {
+        inlineData: {
+          mimeType: imageMime || "image/png",
+          data: imageBase64,
+        },
+      };
+      const textPart = { text: prompt };
+      const response = await generateContentWithFallback(ai, {
+        contents: { parts: [imagePart, textPart] },
+        config: { systemInstruction },
+      });
+      return res.json({ result: response.text });
+    } else {
+      const response = await generateContentWithFallback(ai, {
+        contents: prompt,
+        config: { systemInstruction },
+      });
+      return res.json({ result: response.text });
+    }
+  } catch (err: any) {
+    return handleAiError(res, err, "Gemini Study Materials Generation");
+  }
+});
+
+// 3. Interactive MCQ Quiz Generator
+app.post("/api/ai/generate-quiz", async (req, res) => {
+  const { videoTitle, channelName, studentNotes } = req.body;
+  try {
+    const ai = getGeminiClient(req);
+    let prompt = `Create a multiple-choice quiz consisting of 3 to 5 premium conceptual questions testing a student's deep comprehension of the video lecture: "${videoTitle}" by "${channelName}".`;
+    if (studentNotes && studentNotes.trim()) {
+      prompt += `\n\nBase your questions on the core content of the lecture and integrate facts/details from these student study notes:\n${studentNotes}`;
+    }
+    prompt += `\n\nEnsure that each question is unique, mathematically/conceptually rigorous, and has 4 options. Make sure the explanation is comprehensive and explains why the correct option is correct, and why other options are incorrect.`;
+
+    const response = await generateContentWithFallback(ai, {
+      contents: prompt,
+      config: {
+        systemInstruction: "You are LearnStudy QuizMaster. You generate balanced, challenging, multiple-choice quizzes that test actual learning and conceptual mastery.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          description: "A list of multiple choice questions.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              question: { type: Type.STRING, description: "The conceptual multiple-choice question." },
+              options: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of exactly 4 plausible options." },
+              correctIndex: { type: Type.INTEGER, description: "The 0-based index of the correct option (0 to 3)." },
+              explanation: { type: Type.STRING, description: "Thorough explanation of the correct answer and conceptual reasoning." }
+            },
+            required: ["question", "options", "correctIndex", "explanation"]
+          }
+        }
+      }
+    });
+
+    const jsonText = response.text?.trim() || "[]";
+    return res.json(JSON.parse(jsonText));
+  } catch (err: any) {
+    return handleAiError(res, err, "Gemini Quiz Generation");
+  }
+});
+
+// 4. Tutor doubt solver
+app.post("/api/ai/solve-doubt", async (req, res) => {
+  const { videoTitle, channelName, studentNotes, chatHistory, newQuestion } = req.body;
+  try {
+    const ai = getGeminiClient(req);
+    const formattedHistory = (chatHistory || []).map((msg: any) => ({
+      role: msg.role === "user" ? "user" : "model",
+      parts: [{ text: msg.text }]
+    }));
+
+    const systemInstruction = `You are LearnStudy Doubt Solver, an award-winning personalized academic tutor. 
+The student is currently watching the lecture: "${videoTitle}" by creator "${channelName}".
+The student's study notes for this lecture are:
+---
+${studentNotes || "(No study notes yet)"}
+---
+
+Your role is to resolve the student's doubts about this lecture topic with incredible clarity, patience, and visual descriptions. 
+Break down complex formulas step-by-step. Use Markdown formatting like headers, bullet points, code blocks, bold key terms, and italic formulas for a gorgeous educational layout. Keep explanations highly educational and engaging.`;
+
+    const contents = [
+      ...formattedHistory,
+      { role: "user", parts: [{ text: newQuestion }] }
+    ];
+
+    const response = await generateContentWithFallback(ai, {
+      contents,
+      config: { systemInstruction }
+    });
+
+    return res.json({ result: response.text });
+  } catch (err: any) {
+    return handleAiError(res, err, "Gemini Doubt Solver");
+  }
+});
+
+// 5. Predict educational metadata for a video
+app.get("/api/ai/video-metadata", async (req, res) => {
+  const { id } = req.query;
+  if (!id || typeof id !== "string") {
+    return res.status(400).json({ error: "Missing video ID parameter." });
+  }
+
+  try {
+    const ai = getGeminiClient(req);
+    const prompt = `Identify or estimate highly accurate educational metadata for the YouTube video with ID: "${id}".
+If you have exact pre-trained memory of this video ID, return the exact info. Otherwise, return a highly realistic, academically-focused title, channel name, duration, publish date, concise and engaging 2-3 sentence description, and 3-5 relevant educational tags matching typical video topics for this ID.
+Ensure the duration is in MM:SS format or H:MM:SS format (e.g. "12:34" or "1:05:22").`;
+
+    const response = await generateContentWithFallback(ai, {
+      contents: prompt,
+      config: {
+        systemInstruction: "You are LearnStudy Video Indexer. You return structured metadata for educational and informational video lectures.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING, description: "The educational/academic video title" },
+            channelName: { type: Type.STRING, description: "Name of the YouTube channel or creator" },
+            duration: { type: Type.STRING, description: "Video duration formatted as MM:SS or H:MM:SS" },
+            publishDate: { type: Type.STRING, description: "Realistic publish date, e.g. 'Oct 14, 2022'" },
+            description: { type: Type.STRING, description: "Concise 2-3 sentence summary of the educational content covered" },
+            tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "3 to 5 academic tags or keywords" }
+          },
+          required: ["title", "channelName", "duration", "publishDate", "description", "tags"]
+        }
+      }
+    });
+
+    const jsonText = response.text?.trim() || "{}";
+    return res.json(JSON.parse(jsonText));
+  } catch (err: any) {
+    console.warn("[Gemini Video Metadata Predictor Failed]:", err?.message || err);
+    
+    // Fallback: Try YouTube oEmbed or return fallback metadata structure so video metadata indexing never fails
+    try {
+      const [oembedRes, scrapedDuration] = await Promise.all([
+        fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`).catch(() => null),
+        fetchYoutubeVideoDurationScraped(id as string)
+      ]);
+      if (oembedRes && oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        return res.json({
+          title: oembedData.title || `Lecture Video (${id})`,
+          channelName: oembedData.author_name || "Academic Channel",
+          duration: scrapedDuration || "10:00",
+          publishDate: "Recent Lecture",
+          description: `Educational lecture video and study notes chapter for "${oembedData.title || id}".`,
+          tags: ["Education", "Lecture", "Study", "Academic"]
+        });
+      }
+    } catch (oembedErr) {
+      console.warn("[Video Metadata oEmbed Fallback Failed]:", oembedErr);
+    }
+
+    // Default structured response so app flow remains seamless
+    return res.json({
+      title: `Lecture (${id})`,
+      channelName: "Educational Creator",
+      duration: "10:00",
+      publishDate: "Recent Lecture",
+      description: "Educational video lecture and study notes resource.",
+      tags: ["Study", "Lecture", "Course", "Learn"]
+    });
+  }
+});
+
+// Serve static assets in production or run Vite dev server
+async function setupServer() {
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[StudyTube Server] Listening on http://0.0.0.0:${PORT}`);
+  });
+}
+
+setupServer();

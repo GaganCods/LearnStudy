@@ -1,0 +1,13 @@
+{
+  "projectId": "learnstudy",
+  "appId": "1:360285972093:web:34542ed574be9d86097314",
+  "apiKey": "AIzaSyACSaHB7-1TslgOEegLQZW5Xvjw1GXhW3c",
+  "authDomain": "learnstudy.firebaseapp.com",
+  "databaseURL": "https://learnstudy-default-rtdb.firebaseio.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "learnstudy.firebasestorage.app",
+  "messagingSenderId": "360285972093",
+  "measurementId": "G-WQFE55G17G",
+  "oAuthClientId": "",
+  "recaptchaSiteKey": ""
+}

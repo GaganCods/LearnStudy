@@ -55,7 +55,7 @@ export function DeveloperProfile({ onBackToHome, soundEnabled, setSoundEnabled }
       badgeColor: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-450",
       changes: [
         "Interactive Study Player with Notes, Bookmarks & Custom playback state",
-        "Deep Gemini AI integrations: Summarization, Quiz generation & Flashcards",
+        "Deep Gemini AI integrations: Summarization, Doubt Solving & Flashcards",
         "Durable browser local cache database utilizing local storage",
         "Pomodoro Timer with study metrics, interactive graphs & daily logs",
         "YouTube live diagnostic & retry mechanism for robust offline resilience"

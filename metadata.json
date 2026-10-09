@@ -1,0 +1,8 @@
+{
+  "name": "LearnStudy ai",
+  "description": "A distraction-free YouTube study player for focused learning. Organizes lectures, saves interactive notes, tracks bookmarks, and logs study progress locally.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -24,16 +24,18 @@ interface FlashcardsManagerProps {
   currentVideoTitle?: string;
   currentTimestamp?: number;
   onJumpToTimestamp?: (seconds: number) => void;
+  initialMode?: "list" | "review" | "create";
 }
 
 export function FlashcardsManager({
   currentVideoId,
   currentVideoTitle,
   currentTimestamp,
-  onJumpToTimestamp
+  onJumpToTimestamp,
+  initialMode
 }: FlashcardsManagerProps) {
   const [cards, setCards] = useState<Flashcard[]>(Storage.getFlashcards());
-  const [activeMode, setActiveMode] = useState<"list" | "review" | "create">("list");
+  const [activeMode, setActiveMode] = useState<"list" | "review" | "create">(initialMode || "list");
   
   // Review Mode state
   const [reviewIndex, setReviewIndex] = useState(0);

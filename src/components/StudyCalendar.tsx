@@ -683,7 +683,6 @@ export const StudyCalendar: React.FC = () => {
                     >
                       <option value="video">Lecture Video</option>
                       <option value="revision">Revision Notes</option>
-                      <option value="quiz">Quiz Practice</option>
                       <option value="assignment">Assignment</option>
                       <option value="other">General Study</option>
                     </select>

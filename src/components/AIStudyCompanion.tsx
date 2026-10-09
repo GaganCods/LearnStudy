@@ -8,9 +8,7 @@ import {
 import { 
   hasGeminiKey, 
   generateStudyMaterial, 
-  generateLectureQuiz, 
   solveLectureDoubt, 
-  StudyQuizQuestion, 
   ChatMessage 
 } from "../utils/gemini";
 import { Storage } from "../utils/storage";
@@ -22,12 +20,12 @@ interface AIStudyCompanionProps {
   channelName: string;
   onOpenKeyModal: () => void;
   onClose?: () => void; // Optional callback when closed as a side panel
-  initialTab?: "hub" | "chat" | "quiz";
+  initialTab?: "hub" | "chat";
   initialMaterialId?: string | null;
   initialChatMessage?: string;
 }
 
-type CompanionTab = "hub" | "chat" | "quiz";
+type CompanionTab = "hub" | "chat";
 
 interface MaterialOption {
   id: string;
@@ -70,15 +68,6 @@ export function AIStudyCompanion({
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [loadingChat, setLoadingChat] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
-
-  // Quiz States
-  const [quizQuestions, setQuizQuestions] = useState<StudyQuizQuestion[]>([]);
-  const [loadingQuiz, setLoadingQuiz] = useState(false);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [selectedOption, setSelectedOption] = useState<number | null>(null);
-  const [quizSubmitted, setQuizSubmitted] = useState(false);
-  const [quizScore, setQuizScore] = useState(0);
-  const [quizCompleted, setQuizCompleted] = useState(false);
 
   // Global Error banner
   const [apiError, setApiError] = useState<string | null>(null);
@@ -175,20 +164,6 @@ export function AIStudyCompanion({
       setChatHistory([]);
     }
 
-    // Load cached quiz
-    try {
-      const cachedQuiz = localStorage.getItem(`learnstudy_quiz_${videoId}`);
-      setQuizQuestions(cachedQuiz ? JSON.parse(cachedQuiz) : []);
-    } catch {
-      setQuizQuestions([]);
-    }
-
-    // Reset quiz runtime states
-    setCurrentQuestionIndex(0);
-    setSelectedOption(null);
-    setQuizSubmitted(false);
-    setQuizScore(0);
-    setQuizCompleted(false);
   }, [videoId]);
 
   // Handle deep-linking initial properties
@@ -310,6 +285,10 @@ export function AIStudyCompanion({
   // --- STUDY GENERATORS ACTIONS ---
 
   const handleGenerateMaterial = async (type: string) => {
+    if (!hasKey) {
+      onOpenKeyModal();
+      return;
+    }
     setLoadingMaterial(true);
     setApiError(null);
     const draftNotes = Storage.getNoteForVideo(videoId);
@@ -433,6 +412,10 @@ export function AIStudyCompanion({
 
   const handleSendChat = async () => {
     if (!chatInput.trim() || loadingChat) return;
+    if (!hasKey) {
+      onOpenKeyModal();
+      return;
+    }
     
     const userMessage = chatInput.trim();
     const updatedHistory: ChatMessage[] = [...chatHistory, { role: "user", text: userMessage }];
@@ -467,82 +450,6 @@ export function AIStudyCompanion({
     setChatHistory([]);
     localStorage.removeItem(`learnstudy_chat_${videoId}`);
     toast.success("Chat Cleared", "AI tutor discussion history has been cleared.");
-  };
-
-  // --- MASTERY QUIZ ACTIONS ---
-
-  const handleGenerateQuiz = async () => {
-    setLoadingQuiz(true);
-    setApiError(null);
-    const studentNotes = Storage.getNoteForVideo(videoId);
-
-    try {
-      const result = await generateLectureQuiz(videoTitle, channelName, studentNotes);
-      setQuizQuestions(result);
-      localStorage.setItem(`learnstudy_quiz_${videoId}`, JSON.stringify(result));
-      
-      setCurrentQuestionIndex(0);
-      setSelectedOption(null);
-      setQuizSubmitted(false);
-      setQuizScore(0);
-      setQuizCompleted(false);
-    } catch (err: any) {
-      setApiError(err.message || "Failed to generate concept quiz. Please check key.");
-    } finally {
-      setLoadingQuiz(false);
-    }
-  };
-
-  const handleQuizOptionSelect = (idx: number) => {
-    if (quizSubmitted) return;
-    setSelectedOption(idx);
-  };
-
-  const handleQuizSubmit = () => {
-    if (selectedOption === null || quizSubmitted) return;
-    
-    setQuizSubmitted(true);
-    const currentQuestion = quizQuestions[currentQuestionIndex];
-    if (selectedOption === currentQuestion.correctIndex) {
-      setQuizScore(prev => prev + 1);
-    }
-  };
-
-  const handleNextQuizQuestion = () => {
-    setSelectedOption(null);
-    setQuizSubmitted(false);
-
-    if (currentQuestionIndex + 1 < quizQuestions.length) {
-      setCurrentQuestionIndex(prev => prev + 1);
-    } else {
-      setQuizCompleted(true);
-      try {
-        const finalScore = quizScore;
-        const total = quizQuestions.length;
-        const pct = total > 0 ? Math.round((finalScore / total) * 100) : 0;
-        Storage.saveQuizAttempt({
-          id: "qa_" + Date.now(),
-          quizId: videoId,
-          quizTitle: `${videoTitle || "Lecture"} Quiz`,
-          videoId,
-          videoTitle: videoTitle || "Lecture",
-          score: finalScore,
-          maxScore: total,
-          percentage: pct,
-          completedAt: new Date().toISOString()
-        });
-      } catch (err) {
-        console.warn("Save quiz attempt notice:", err);
-      }
-    }
-  };
-
-  const handleResetQuiz = () => {
-    setCurrentQuestionIndex(0);
-    setSelectedOption(null);
-    setQuizSubmitted(false);
-    setQuizScore(0);
-    setQuizCompleted(false);
   };
 
   return (
@@ -580,24 +487,31 @@ export function AIStudyCompanion({
             <MessageSquare className="w-3.5 h-3.5" />
             Doubt Solver
           </button>
-          <button
-            onClick={() => setActiveTab("quiz")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${activeTab === "quiz" ? "bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 shadow-sm" : "text-slate-500 dark:text-zinc-400 hover:text-slate-800 dark:hover:text-zinc-200"}`}
-          >
-            <BrainCircuit className="w-3.5 h-3.5" />
-            Interactive Quiz
-          </button>
         </div>
 
-        {/* Close Button if requested as a drawer */}
-        {onClose && (
-          <button 
-            onClick={onClose}
-            className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300 transition"
-          >
-            <XCircle className="w-5 h-5" />
-          </button>
-        )}
+        {/* Right side controls: Connect API button when needed + Close Button if requested as drawer */}
+        <div className="flex items-center gap-2">
+          {!hasKey && (
+            <button
+              onClick={onOpenKeyModal}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition cursor-pointer"
+              title="Connect your Gemini API Key to use AI features"
+            >
+              <Key className="w-3.5 h-3.5" />
+              <span>Connect API</span>
+            </button>
+          )}
+
+          {onClose && (
+            <button 
+              onClick={onClose}
+              className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300 transition cursor-pointer"
+              title="Close Panel"
+            >
+              <XCircle className="w-5 h-5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Global Connection / API Key Warnings */}
@@ -615,8 +529,6 @@ export function AIStudyCompanion({
                     handleGenerateMaterial(selectedMaterial);
                   } else if (activeTab === "chat") {
                     handleSendChat();
-                  } else if (activeTab === "quiz") {
-                    handleGenerateQuiz();
                   }
                 }}
                 className="text-xs font-extrabold bg-red-500/20 hover:bg-red-500/30 text-red-700 dark:text-red-300 px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer"
@@ -627,7 +539,7 @@ export function AIStudyCompanion({
                 onClick={onOpenKeyModal}
                 className="text-xs font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5 cursor-pointer"
               >
-                {hasKey ? "Check API Key" : "Add Gemini API Key"} <ChevronRight className="w-3 h-3" />
+                {hasKey ? "Check API Key" : "Connect Gemini API Key"} <ChevronRight className="w-3 h-3" />
               </button>
             </div>
           </div>
@@ -637,21 +549,21 @@ export function AIStudyCompanion({
       {/* RENDER ACTIVE TAB */}
       <div className="flex-1 overflow-y-auto min-h-0">
         {!hasKey ? (
-          /* Locked State Onboarding Banner */
+          /* Locked State Onboarding Banner on Study Page */
           <div className="py-8 text-center bg-slate-50 dark:bg-zinc-950/40 rounded-2xl border border-slate-200/60 dark:border-zinc-850 p-6 flex flex-col items-center max-w-md mx-auto my-auto">
-            <div className="p-3 bg-indigo-500/5 dark:bg-indigo-500/10 rounded-full border border-indigo-500/15 mb-3">
-              <Key className="w-6 h-6 text-indigo-500" />
+            <div className="p-3 bg-indigo-500/10 dark:bg-indigo-500/15 rounded-full border border-indigo-500/20 mb-3 text-indigo-600 dark:text-indigo-400">
+              <Key className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
             </div>
-            <h3 className="text-sm font-extrabold text-slate-800 dark:text-zinc-200">No API key added</h3>
+            <h3 className="text-sm font-extrabold text-slate-800 dark:text-zinc-200">Connect API to Use AI Features</h3>
             <p className="text-xs text-slate-500 dark:text-zinc-400 mt-2 leading-relaxed">
-              Add your Google AI Studio API key to use AI-powered features in LearnStudy, including lecture summaries, personalized study notes, doubt solving, and practice quizzes.
+              Connect your free Google Gemini API key to use AI-powered features in LearnStudy, including lecture summaries, personalized study notes, and concept doubt solving.
             </p>
             <div className="flex items-center gap-3 mt-5 w-full">
               <button
                 onClick={onOpenKeyModal}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs py-2.5 rounded-xl transition shadow-md shadow-indigo-500/15 cursor-pointer"
               >
-                Add Gemini API Key
+                Connect Gemini API
               </button>
               <a
                 href="https://aistudio.google.com/app/apikey"
@@ -659,7 +571,7 @@ export function AIStudyCompanion({
                 rel="noopener noreferrer"
                 className="flex-1 border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-900 text-slate-700 dark:text-zinc-300 font-bold text-xs py-2.5 rounded-xl transition flex items-center justify-center gap-1 cursor-pointer"
               >
-                Get API Key ↗
+                Get Free Key ↗
               </a>
             </div>
           </div>
@@ -1043,168 +955,6 @@ export function AIStudyCompanion({
                   </button>
                 </div>
 
-              </div>
-            )}
-
-            {/* 3. MASTERY CONCEPT QUIZ TAB */}
-            {activeTab === "quiz" && (
-              <div className="space-y-4">
-                {quizQuestions.length === 0 ? (
-                  /* Generate Quiz Button State */
-                  <div className="text-center py-10 bg-slate-50 dark:bg-zinc-950/40 rounded-2xl border border-slate-200/50 dark:border-zinc-850 p-6 max-w-md mx-auto my-auto">
-                    <BrainCircuit className="w-10 h-10 text-slate-300 dark:text-zinc-700 mx-auto mb-3 animate-pulse" />
-                    <h3 className="text-sm font-bold text-slate-800 dark:text-zinc-200">Lecture Mastery Quiz</h3>
-                    <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1.5 leading-relaxed">
-                      Evaluate your comprehension with 3 to 5 conceptual multiple-choice questions custom-built from the lecture text and active student notes draft.
-                    </p>
-                    <button
-                      onClick={handleGenerateQuiz}
-                      disabled={loadingQuiz}
-                      className="mt-5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-200 dark:disabled:bg-zinc-850 text-white font-extrabold text-xs px-5 py-3 rounded-xl transition flex items-center justify-center gap-1.5 mx-auto cursor-pointer shadow shadow-indigo-600/10"
-                    >
-                      {loadingQuiz ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          <span>Generating Quiz...</span>
-                        </>
-                      ) : (
-                        <>
-                          <BrainCircuit className="w-4 h-4" />
-                          <span>Generate Concept Quiz</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                ) : quizCompleted ? (
-                  /* Quiz Completed Review Screen */
-                  <div className="bg-slate-50 dark:bg-zinc-950/40 rounded-2xl border border-slate-200/50 dark:border-zinc-850 p-6 max-w-md mx-auto text-center space-y-4 animate-in zoom-in-95 duration-200">
-                    <div className="w-14 h-14 bg-emerald-500/15 text-emerald-500 rounded-full flex items-center justify-center mx-auto text-xl font-bold border border-emerald-500/20">
-                      🎓
-                    </div>
-                    <div className="space-y-1">
-                      <h3 className="text-base font-black text-slate-900 dark:text-zinc-50">Syllabus Mastered!</h3>
-                      <p className="text-xs text-slate-400 dark:text-zinc-500">You completed the diagnostic concepts quiz.</p>
-                    </div>
-
-                    <div className="bg-white dark:bg-zinc-900 border border-slate-150 dark:border-zinc-850 rounded-2xl p-4 flex justify-around items-center shadow-sm">
-                      <div>
-                        <div className="text-2xl font-black text-slate-900 dark:text-zinc-50">{quizScore} / {quizQuestions.length}</div>
-                        <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Correct Answers</div>
-                      </div>
-                      <div className="w-[1px] h-8 bg-slate-200 dark:bg-zinc-800" />
-                      <div>
-                        <div className="text-2xl font-black text-indigo-500">{Math.round((quizScore / quizQuestions.length) * 100)}%</div>
-                        <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Comprehension</div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3 pt-2">
-                      <button
-                        onClick={handleResetQuiz}
-                        className="flex-1 bg-slate-900 hover:bg-slate-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-white dark:text-zinc-950 text-xs font-bold py-2.5 rounded-xl transition shadow"
-                      >
-                        Retry Quiz
-                      </button>
-                      <button
-                        onClick={handleGenerateQuiz}
-                        className="flex-1 border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-900 text-slate-700 dark:text-zinc-300 text-xs font-bold py-2.5 rounded-xl transition"
-                      >
-                        New Questions
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  /* Active Quiz Slide */
-                  <div className="bg-slate-50 dark:bg-zinc-950/40 rounded-2xl border border-slate-200 dark:border-zinc-800 p-4 sm:p-5 space-y-4 animate-in fade-in duration-200">
-                    <div className="flex items-center justify-between border-b border-slate-200/50 dark:border-zinc-850 pb-2.5">
-                      <span className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">
-                        QUESTION {currentQuestionIndex + 1} OF {quizQuestions.length}
-                      </span>
-                      <button
-                        onClick={handleGenerateQuiz}
-                        className="text-[9px] text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 font-bold flex items-center gap-1"
-                      >
-                        <RefreshCw className="w-3 h-3" />
-                        Skip / New Quiz
-                      </button>
-                    </div>
-
-                    <div className="space-y-3.5">
-                      <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-zinc-50 leading-snug">
-                        {quizQuestions[currentQuestionIndex].question}
-                      </h3>
-
-                      {/* Options Block */}
-                      <div className="space-y-2">
-                        {quizQuestions[currentQuestionIndex].options.map((opt, oIdx) => {
-                          let btnStyle = "bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-850 text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-950";
-                          if (selectedOption === oIdx && !quizSubmitted) {
-                            btnStyle = "bg-indigo-500/5 border-indigo-500 text-indigo-600 dark:text-indigo-400 ring-1 ring-indigo-500/30";
-                          } else if (quizSubmitted) {
-                            const isCorrect = oIdx === quizQuestions[currentQuestionIndex].correctIndex;
-                            const isSelected = oIdx === selectedOption;
-                            if (isCorrect) {
-                              btnStyle = "bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/30";
-                            } else if (isSelected) {
-                              btnStyle = "bg-red-500/10 border-red-500 text-red-600 dark:text-red-400 ring-1 ring-red-500/30";
-                            } else {
-                              btnStyle = "bg-white/50 dark:bg-zinc-900/50 border-slate-250/30 dark:border-zinc-900 opacity-65";
-                            }
-                          }
-
-                          return (
-                            <button
-                              key={oIdx}
-                              onClick={() => handleQuizOptionSelect(oIdx)}
-                              disabled={quizSubmitted}
-                              className={`w-full text-left p-3 rounded-xl border text-xs font-semibold flex items-center gap-3 transition-all ${btnStyle}`}
-                            >
-                              <span className="w-5 h-5 rounded-full bg-slate-150/60 dark:bg-zinc-800 text-[10px] font-black flex items-center justify-center text-slate-500 shrink-0">
-                                {String.fromCharCode(65 + oIdx)}
-                              </span>
-                              <span>{opt}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Explanations & Next Button */}
-                    <div className="pt-2.5 border-t border-slate-200/60 dark:border-zinc-850 flex flex-col gap-2.5">
-                      {!quizSubmitted ? (
-                        <button
-                          onClick={handleQuizSubmit}
-                          disabled={selectedOption === null}
-                          className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 disabled:bg-slate-150 dark:disabled:bg-zinc-800 disabled:text-slate-400 text-white dark:text-zinc-950 font-bold text-xs py-3 rounded-xl transition"
-                        >
-                          Submit Answer
-                        </button>
-                      ) : (
-                        <div className="space-y-3 animate-in fade-in duration-200">
-                          {/* Rich Explanation text */}
-                          <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-xl p-3.5 space-y-1.5">
-                            <div className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider flex items-center gap-1 select-none">
-                              <HelpCircle className="w-3.5 h-3.5" />
-                              Tutor Explanation
-                            </div>
-                            <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed font-medium">
-                              {quizQuestions[currentQuestionIndex].explanation}
-                            </p>
-                          </div>
-
-                          <button
-                            onClick={handleNextQuizQuestion}
-                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs py-3 rounded-xl transition flex items-center justify-center gap-1 shadow cursor-pointer"
-                          >
-                            <span>{currentQuestionIndex + 1 === quizQuestions.length ? "Complete Quiz" : "Next Question"}</span>
-                            <ChevronRight className="w-4 h-4" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                  </div>
-                )}
               </div>
             )}
           </>

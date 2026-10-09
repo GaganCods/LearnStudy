@@ -6,10 +6,10 @@ import {
   Sparkles, TrendingUp, Plus, Edit2, X, Clock, Flame, 
   ShieldAlert, Share2, Moon, Sun, Laptop, ChevronDown, ChevronUp, CheckCircle,
   Eye, EyeOff, Star, Calendar, Download, Upload, Info, RefreshCw, ArrowUpDown, Filter,
-  ArrowUp, AlarmClock, Quote, MessageSquarePlus,
+  ArrowUp, AlarmClock, Quote, MessageSquarePlus, ArrowLeft,
   Github, Linkedin, Twitter, Globe, Award, User, Folder, Brain, Users, Cloud, CloudOff,
   Layers, LogOut, Crown, CheckCircle2, Menu, Loader2, MoreVertical, Keyboard, AlertTriangle, Bell,
-  ExternalLink, RotateCw, Volume2, VolumeX, Link, Copy, Compass
+  ExternalLink, RotateCw, Volume2, VolumeX, Link, Copy, Compass, Gauge
 } from "lucide-react";
 import { 
   updateMediaSessionMetadata 
@@ -27,7 +27,7 @@ import { PomodoroTimer } from "./components/PomodoroTimer";
 
 import { CompactStudyTimer } from "./components/CompactStudyTimer";
 import { FullScreenTimer } from "./components/FullScreenTimer";
-import { parseYoutubeUrl } from "./utils/youtubeParser";
+import { parseYoutubeUrl, fetchPlaylistWithFallback } from "./utils/youtubeParser";
 import { PlaylistDb } from "./utils/playlistDb";
 import { hasGeminiKey, getGeminiKey, removeGeminiKey, fetchVideoMetadataWithGemini, maskApiKey } from "./utils/gemini";
 import { GeminiOnboardingModal } from "./components/GeminiOnboardingModal";
@@ -47,58 +47,25 @@ import { FeedbackModal } from "./components/feedback/FeedbackModal";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { UserAvatar } from "./components/UserAvatar";
 import { PageNavigationDirectory } from "./components/PageNavigationDirectory";
+import { SaveToFolderModal, SaveTargetItem } from "./components/SaveToFolderModal";
+import { VideoDetailsModal, VideoDetailsData } from "./components/VideoDetailsModal";
 import { useAuth } from "./context/AuthContext";
-import { GoogleSignInButton } from "./components/auth/GoogleSignInButton";
+import { auth } from "./lib/firebase";
 import { AuthModal } from "./components/auth/AuthModal";
-import { LandingPage } from "./components/LandingPage";
+import { NotesHub } from "./components/NotesHub";
 import { 
   APP_PAGES, 
   searchPages, 
   copyPageLink, 
   getPageShareableUrl, 
   parseInitialUrlState, 
-  syncStateToUrl 
+  syncStateToUrl,
+  navigateTo,
+  slugify
 } from "./utils/pageRegistry";
 
-function getInitialRoute(): "landing" | "app" {
-  if (typeof window === "undefined") return "landing";
-  const path = window.location.pathname.toLowerCase().replace(/\/+$/, "");
-  // If path is /app or subpath of /app, or direct sub-paths, load the tool
-  if (
-    path === "/app" ||
-    path.startsWith("/app/") ||
-    path === "/study" ||
-    path.startsWith("/study/") ||
-    path === "/library" ||
-    path.startsWith("/library/") ||
-    path === "/flashcards" ||
-    path.startsWith("/flashcards/") ||
-    path === "/planner" ||
-    path.startsWith("/planner/") ||
-    path === "/calendar" ||
-    path.startsWith("/calendar/") ||
-    path === "/pomodoro" ||
-    path.startsWith("/pomodoro/") ||
-    path === "/stats" ||
-    path.startsWith("/stats/") ||
-    path === "/history" ||
-    path.startsWith("/history/") ||
-    path === "/favorites" ||
-    path.startsWith("/favorites/") ||
-    path === "/search" ||
-    path.startsWith("/search/") ||
-    path === "/settings" ||
-    path.startsWith("/settings/") ||
-    path === "/developer" ||
-    path.startsWith("/developer/")
-  ) {
-    return "app";
-  }
-  const params = new URLSearchParams(window.location.search);
-  if (params.get("v") || params.get("list") || params.get("videoId") || params.get("playlistId")) {
-    return "app";
-  }
-  return "landing";
+function getInitialRoute(): "app" {
+  return "app";
 }
 
 declare global {
@@ -167,7 +134,43 @@ async function fetchPlaylistFromYouTubeClient(id: string): Promise<any> {
   const plData = await plRes.json();
   const playlistItem = plData.items?.[0];
   if (!playlistItem) {
-    throw new Error("Playlist not found on YouTube");
+    if (id.length === 11) {
+      try {
+        const vidUrl = `https://youtube.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${id}&key=${apiKey}`;
+        const vidRes = await fetch(vidUrl);
+        if (vidRes.ok) {
+          const vidData = await vidRes.json();
+          const vItem = vidData.items?.[0];
+          if (vItem) {
+            const vTitle = vItem.snippet?.title || "YouTube Video";
+            const vChannel = vItem.snippet?.channelTitle || "YouTube Creator";
+            const vThumb = vItem.snippet?.thumbnails?.high?.url || vItem.snippet?.thumbnails?.default?.url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+            const vDuration = vItem.contentDetails?.duration ? parseISO8601DurationClient(vItem.contentDetails.duration) : "10:00";
+            return {
+              id,
+              title: vTitle,
+              channelName: vChannel,
+              thumbnail: vThumb,
+              videos: [{
+                id,
+                title: vTitle,
+                channelName: vChannel,
+                duration: vDuration,
+                thumbnail: vThumb,
+                progress: 0,
+                lastWatchedPosition: 0,
+                completed: false,
+                lectureNumber: 1
+              }],
+              totalVideos: 1
+            };
+          }
+        }
+      } catch (vidErr) {
+        console.warn("Single video client fetch fallback notice:", vidErr);
+      }
+    }
+    throw new Error("Playlist not found on YouTube. Please verify that the link is correct and set to Public or Unlisted.");
   }
   const playlistTitle = playlistItem.snippet?.title || "YouTube Playlist";
   const playlistChannel = playlistItem.snippet?.channelTitle || "Unknown Channel";
@@ -306,26 +309,45 @@ async function fetchVideoFromYouTubeClient(id: string): Promise<any> {
 
 export default function App() {
   const { toast, soundEnabled, setSoundEnabled } = useToast();
-  const { currentUser, userProfile, signOutUser, syncStatus, lastSyncedAt, syncNow } = useAuth();
+  const { currentUser, userProfile, signOutUser, syncStatus, lastSyncedAt, syncNow, isLoading: isAuthLoading } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [isSyncingFromMenu, setIsSyncingFromMenu] = useState(false);
 
-  // Top-level route: Landing Page ("/") or Study Tool Application ("/app")
-  const [currentRoute, setCurrentRoute] = useState<"landing" | "app">(getInitialRoute);
+  // Top-level route: Study Tool Application (Landing page removed completely)
+  const [currentRoute, setCurrentRoute] = useState<"app">("app");
 
-  const navigateToApp = (targetTab: ActiveTab = "home") => {
-    const targetUrl = targetTab === "home" ? "/app" : `/app/${targetTab}`;
-    window.history.pushState({}, "", targetUrl);
+  // Deep routing state for subjects and lectures (e.g. /app/lectures/physics/lecture-1)
+  const [activeSubjectSlug, setActiveSubjectSlug] = useState<string | undefined>(undefined);
+  const [activeLectureSlug, setActiveLectureSlug] = useState<string | undefined>(undefined);
+  const isPopstateNavigationRef = useRef(false);
+  const isInitialMountRef = useRef(true);
+
+  const navigateToApp = (
+    targetTab: ActiveTab = "home",
+    options?: {
+      subjectSlug?: string;
+      lectureSlug?: string;
+      videoId?: string;
+      videoTitle?: string;
+      playlistId?: string;
+      searchQuery?: string;
+      replace?: boolean;
+    }
+  ) => {
     setActiveTab(targetTab);
-    setCurrentRoute("app");
+    setActiveSubjectSlug(options?.subjectSlug);
+    setActiveLectureSlug(options?.lectureSlug);
+    if (options?.videoId) setActiveVideoId(options.videoId);
+    if (options?.videoTitle) setActiveVideoTitle(options.videoTitle);
+    if (options?.searchQuery !== undefined) setSearchQuery(options.searchQuery);
+
+    navigateTo(targetTab, options);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const navigateToLanding = () => {
-    window.history.pushState({}, "", "/");
-    setCurrentRoute("landing");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    navigateToApp("home");
   };
 
   // Pomodoro Study Timer Context
@@ -381,12 +403,8 @@ export default function App() {
 
 
 
-  // Trigger Onboarding Modal on launch if no key exists
-  useEffect(() => {
-    if (!hasGeminiKey()) {
-      setOnboardingOpen(true);
-    }
-  }, []);
+  // Do NOT show API key setup popup at starting/launch.
+  // The API key connect modal is only triggered when the user needs it at the study page to connect API for AI features.
 
   // Sync key presence and playlists/videos on storage events so UI stays reactive without continuous interval polling
   useEffect(() => {
@@ -410,13 +428,31 @@ export default function App() {
   const [isNamePromptOpen, setIsNamePromptOpen] = useState(false);
   const [tempName, setTempName] = useState("");
 
-  // Trigger name prompt on launch if no name is set
+  // Determine if user is authenticated with Google / Gmail
+  const isAuthenticatedUser = Boolean(currentUser || auth.currentUser);
+
+  // If user is authenticated by Google/Gmail, DO NOT ask for name popup on dashboard page.
+  // Sync the Google name directly and ensure the popup is never shown on dashboard or on refresh.
+  // If the user wants to change their name, they can do so inside Settings.
   useEffect(() => {
-    const currentSettings = Storage.getSettings();
-    if (!currentSettings.userName) {
-      setIsNamePromptOpen(true);
+    setIsNamePromptOpen(false);
+    localStorage.setItem("learnstudy_name_prompt_dismissed", "true");
+
+    if (isAuthenticatedUser) {
+      const resolvedGoogleName = 
+        currentUser?.displayName || 
+        auth.currentUser?.displayName || 
+        currentUser?.email?.split("@")[0] || 
+        auth.currentUser?.email?.split("@")[0];
+
+      if (resolvedGoogleName) {
+        const currentSettings = Storage.getSettings();
+        if (!currentSettings.userName || currentSettings.userName === "Scholar") {
+          handleSettingChange("userName", resolvedGoogleName);
+        }
+      }
     }
-  }, []);
+  }, [currentUser, isAuthenticatedUser]);
 
   // Sync active study session
   const [activeSession, setActiveSession] = useState<{
@@ -481,8 +517,8 @@ export default function App() {
   
   // Custom interactive control states
   const [readingMode, setReadingMode] = useState(false);
-  const [scrolledPast, setScrolledPast] = useState(false);
   const [showMoreMobileMenu, setShowMoreMobileMenu] = useState(false);
+  const [speedDropdownOpen, setSpeedDropdownOpen] = useState(false);
   const [completingState, setCompletingState] = useState<'idle' | 'saving' | 'completed'>('idle');
 
   // Derived state to check if the currently playing video is completed
@@ -497,9 +533,8 @@ export default function App() {
       return !!video?.completed;
     }
   }, [activeSession, activeVideoId, playlists, singleVideos]);
-  const [activeAiDropdown, setActiveAiDropdown] = useState(false);
   const [aiCompanionProps, setAiCompanionProps] = useState<{
-    initialTab?: "hub" | "chat" | "quiz";
+    initialTab?: "hub" | "chat";
     initialMaterialId?: string | null;
     initialChatMessage?: string;
   }>({});
@@ -509,6 +544,17 @@ export default function App() {
   const [playerLoadError, setPlayerLoadError] = useState(false);
   const initAttemptsRef = useRef(0);
   const playerReadyRef = useRef(false);
+
+  // Save to Folder / Category / Watch Later Modal state
+  const [saveModalTarget, setSaveModalTarget] = useState<SaveTargetItem | null>(null);
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+
+  // Full Video Details & Syllabus Modal state
+  const [detailsModalVideo, setDetailsModalVideo] = useState<VideoDetailsData | null>(null);
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
+
+  // Preview Workspace Syllabus accordion
+  const [workspaceDetailsExpanded, setWorkspaceDetailsExpanded] = useState(false);
 
   useEffect(() => {
     initAttemptsRef.current = initAttempts;
@@ -584,24 +630,6 @@ export default function App() {
   useEffect(() => {
     playlistsRef.current = playlists;
   }, [playlists]);
-
-  // Listen for scrolls to show sticky control bar
-  useEffect(() => {
-    const container = mainScrollRef.current;
-    if (!container) return;
-
-    const handleScroll = () => {
-      setScrolledPast(container.scrollTop > 380);
-    };
-
-    container.addEventListener("scroll", handleScroll);
-    // Initial check
-    handleScroll();
-    
-    return () => {
-      container.removeEventListener("scroll", handleScroll);
-    };
-  }, [mainScrollRef.current, activeTab, activeVideoId]);
 
   // Sync active lecture title to Pomodoro logs
   const currentPlaylist = useMemo(() => {
@@ -694,6 +722,31 @@ export default function App() {
       hasLoadedFromUrl = true;
     }
 
+    if (initialUrl.subjectSlug) {
+      setActiveSubjectSlug(initialUrl.subjectSlug);
+    }
+    if (initialUrl.lectureSlug) {
+      setActiveLectureSlug(initialUrl.lectureSlug);
+    }
+
+    if (initialUrl.subjectSlug && initialUrl.lectureSlug) {
+      const subjects = Storage.getCustomSubjects();
+      const foundSub = subjects.find(s => slugify(s.subjectName) === initialUrl.subjectSlug || s.id === initialUrl.subjectSlug);
+      if (foundSub) {
+        for (const ch of foundSub.chapters) {
+          const foundLec = ch.lectures.find(l => slugify(l.title) === initialUrl.lectureSlug || l.id === initialUrl.lectureSlug);
+          if (foundLec && foundLec.youtubeVideoId) {
+            setActiveVideoId(foundLec.youtubeVideoId);
+            setActiveVideoTitle(foundLec.title);
+            setActiveVideoChannel(foundSub.subjectName);
+            setActiveSession({ id: foundSub.id, type: "playlist" });
+            hasLoadedFromUrl = true;
+            break;
+          }
+        }
+      }
+    }
+
     if (initialUrl.searchQuery) {
       setSearchQuery(initialUrl.searchQuery);
       setActiveTab("search");
@@ -777,21 +830,39 @@ export default function App() {
   // Listen for browser Back and Forward navigation events
   useEffect(() => {
     const handlePopState = () => {
-      const route = getInitialRoute();
-      setCurrentRoute(route);
-      if (route === "app") {
-        const state = parseInitialUrlState();
-        if (state.tab) {
-          setActiveTab(state.tab);
-        }
-        if (state.searchQuery !== undefined) {
-          setSearchQuery(state.searchQuery);
-        }
-        if (state.videoId) {
-          setActiveVideoId(state.videoId);
-        }
-        if (state.timestamp !== undefined) {
-          setPendingSeekSeconds(state.timestamp);
+      isPopstateNavigationRef.current = true;
+      const state = parseInitialUrlState();
+      if (state.tab) {
+        setActiveTab(state.tab);
+      }
+      setActiveSubjectSlug(state.subjectSlug);
+      setActiveLectureSlug(state.lectureSlug);
+
+      if (state.searchQuery !== undefined) {
+        setSearchQuery(state.searchQuery);
+      }
+      if (state.videoId) {
+        setActiveVideoId(state.videoId);
+      }
+      if (state.timestamp !== undefined) {
+        setPendingSeekSeconds(state.timestamp);
+      }
+
+      // If URL is /app/lectures/:subject/:lecture, find and load that lecture
+      if (state.subjectSlug && state.lectureSlug) {
+        const subjects = Storage.getCustomSubjects();
+        const foundSub = subjects.find(s => slugify(s.subjectName) === state.subjectSlug || s.id === state.subjectSlug);
+        if (foundSub) {
+          for (const ch of foundSub.chapters) {
+            const foundLec = ch.lectures.find(l => slugify(l.title) === state.lectureSlug || l.id === state.lectureSlug);
+            if (foundLec && foundLec.youtubeVideoId) {
+              setActiveVideoId(foundLec.youtubeVideoId);
+              setActiveVideoTitle(foundLec.title);
+              setActiveVideoChannel(foundSub.subjectName);
+              setActiveSession({ id: foundSub.id, type: "playlist" });
+              break;
+            }
+          }
         }
       }
     };
@@ -799,18 +870,37 @@ export default function App() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
-  // Sync state changes to browser address bar URL only when inside the app
+  // Sync state changes to browser address bar URL with canonical semantic paths
   useEffect(() => {
-    if (currentRoute === "app") {
+    if (isPopstateNavigationRef.current) {
+      isPopstateNavigationRef.current = false;
+      return;
+    }
+
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
       syncStateToUrl(activeTab, {
+        subjectSlug: activeSubjectSlug,
+        lectureSlug: activeLectureSlug,
         videoId: activeTab === "study" ? activeVideoId : undefined,
         videoTitle: activeTab === "study" ? activeVideoTitle : undefined,
         playlistId: activeTab === "study" && activeSession?.type === "playlist" ? activeSession.id : undefined,
         searchQuery: searchQuery || undefined,
         replace: true
       });
+      return;
     }
-  }, [currentRoute, activeTab, activeVideoId, activeVideoTitle, activeSession, searchQuery]);
+
+    syncStateToUrl(activeTab, {
+      subjectSlug: activeSubjectSlug,
+      lectureSlug: activeLectureSlug,
+      videoId: activeTab === "study" ? activeVideoId : undefined,
+      videoTitle: activeTab === "study" ? activeVideoTitle : undefined,
+      playlistId: activeTab === "study" && activeSession?.type === "playlist" ? activeSession.id : undefined,
+      searchQuery: searchQuery || undefined,
+      replace: false
+    });
+  }, [activeTab, activeSubjectSlug, activeLectureSlug, activeVideoId, activeVideoTitle, activeSession, searchQuery]);
 
   // Sync Theme with smooth transition
   useEffect(() => {
@@ -856,14 +946,39 @@ export default function App() {
   useEffect(() => {
     if (!activeVideoId) return;
     
-    // If metadata matches active video, skip redundant fetches
-    if (singleVideoMetadata && singleVideoMetadata.id === activeVideoId) {
+    // Check if we already have complete metadata in memory for this video
+    if (singleVideoMetadata && singleVideoMetadata.id === activeVideoId && singleVideoMetadata.title && singleVideoMetadata.title !== "YouTube Video" && !singleVideoMetadata.title.startsWith("Loading")) {
+      setIsSingleVideoDetailsLoading(false);
       return;
     }
 
+    const cacheKey = `learnstudy_video_meta_${activeVideoId}`;
+    
+    // 1. Instant cache check from localStorage so UI is populated with zero delay
+    try {
+      const cachedStr = localStorage.getItem(cacheKey);
+      if (cachedStr) {
+        const cached = JSON.parse(cachedStr);
+        if (cached && cached.id === activeVideoId) {
+          setSingleVideoMetadata(cached);
+          if (cached.title && cached.title !== "YouTube Video" && !cached.title.startsWith("Loading")) {
+            setActiveVideoTitle(cached.title);
+          }
+          if (cached.channelName && cached.channelName !== "Unknown Channel" && !cached.channelName.startsWith("Connecting")) {
+            setActiveVideoChannel(cached.channelName);
+          }
+          setIsSingleVideoDetailsLoading(false);
+        }
+      }
+    } catch (e) {}
+
     setIsSingleVideoDetailsLoading(true);
 
-    const scrapePromise = fetch(`/api/video-metadata?id=${activeVideoId}`)
+    const userKey = Storage.getSettings().youtubeApiKey;
+    const keyQuery = userKey ? `&key=${encodeURIComponent(userKey)}` : "";
+
+    // 2. Fetch fresh, accurate metadata from server resolver
+    fetch(`/api/video-metadata?id=${activeVideoId}${keyQuery}`)
       .then(async (r) => {
         if (r.ok) {
           return r.json();
@@ -873,67 +988,126 @@ export default function App() {
       })
       .catch(async () => {
         return fetchVideoFromYouTubeClient(activeVideoId).catch(() => null);
-      });
+      })
+      .then((scraped) => {
+        const fallbackTitle = (activeVideoTitle && !activeVideoTitle.startsWith("Loading")) ? activeVideoTitle : "Lecture Video";
+        const fallbackChannel = (activeVideoChannel && !activeVideoChannel.startsWith("Connecting")) ? activeVideoChannel : "YouTube Creator";
 
-    const geminiPromise = hasGeminiKey()
-      ? fetchVideoMetadataWithGemini(activeVideoId).catch((err) => {
-          console.warn("Gemini metadata failed, falling back to basic scraping:", err);
-          return null;
-        })
-      : Promise.resolve(null);
+        const mergedTitle = (scraped?.title && scraped.title !== "YouTube Video" && !scraped.title.startsWith("Loading"))
+          ? scraped.title
+          : fallbackTitle;
 
-    Promise.all([scrapePromise, geminiPromise]).then(([scraped, gemini]) => {
-      const mergedTitle = gemini?.title || scraped?.title || activeVideoTitle || "YouTube Lecture";
-      const mergedChannel = gemini?.channelName || scraped?.channelName || activeVideoChannel || "Unknown Creator";
-      const mergedDuration = scraped?.duration || "10:00";
-      const mergedDesc = gemini?.description || scraped?.description || "";
-      const mergedPublishDate = scraped?.publishDate || "";
-      const mergedTags = gemini?.tags || [];
+        const mergedChannel = (scraped?.channelName && scraped.channelName !== "Unknown Channel" && !scraped.channelName.startsWith("Connecting"))
+          ? scraped.channelName
+          : fallbackChannel;
 
-      // Save to Single Videos storage if active session is a video
-      if (activeSession?.type === "video") {
-        const existing = Storage.getSingleVideos().find(v => v.id === activeVideoId);
-        const videoToSave: SingleVideoInfo = {
+        const mergedDuration = (scraped?.duration && scraped.duration !== "10:00") 
+          ? scraped.duration 
+          : (singleVideoMetadata?.duration && singleVideoMetadata.duration !== "10:00" ? singleVideoMetadata.duration : "10:00");
+
+        const mergedDesc = (scraped?.description && scraped.description !== "No description available." && !scraped.description.startsWith("Metadata fetched via oEmbed"))
+          ? scraped.description
+          : `Educational lecture: "${mergedTitle}" by ${mergedChannel}. Interactive study notes, chapters, and curriculum guide.`;
+
+        const mergedPublishDate = (scraped?.publishDate && scraped.publishDate !== "Unknown date") ? scraped.publishDate : "Recent Lecture";
+        const mergedViews = scraped?.viewCount || "";
+
+        setActiveVideoTitle(mergedTitle);
+        setActiveVideoChannel(mergedChannel);
+
+        const newMeta = {
           id: activeVideoId,
-          type: "video",
           title: mergedTitle,
           channelName: mergedChannel,
           duration: mergedDuration,
-          thumbnail: `https://i.ytimg.com/vi/${activeVideoId}/hqdefault.jpg`,
-          progress: existing?.progress || 0,
-          lastWatchedAt: new Date().toISOString(),
-          completed: existing?.completed || false,
-          isFavorite: existing?.isFavorite || false
+          publishDate: mergedPublishDate,
+          description: mergedDesc,
+          viewCount: mergedViews,
+          tags: (scraped?.tags && scraped.tags.length > 0) ? scraped.tags : ["Education", "Lecture", "Study"]
         };
-        Storage.saveSingleVideo(videoToSave);
-        setSingleVideos(Storage.getSingleVideos());
-      }
 
-      // Auto-update or add lecture in Course Library Import folder
-      Storage.addVideoToImportFolder({
-        id: activeVideoId,
-        title: mergedTitle,
-        channelName: mergedChannel,
-        duration: mergedDuration
+        setSingleVideoMetadata(newMeta);
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(newMeta));
+        } catch (e) {}
+        setIsSingleVideoDetailsLoading(false);
+
+        // Update single video storage
+        if (activeSession?.type === "video") {
+          const existing = Storage.getSingleVideos().find(v => v.id === activeVideoId);
+          Storage.saveSingleVideo({
+            id: activeVideoId,
+            type: "video",
+            title: mergedTitle,
+            channelName: mergedChannel,
+            duration: mergedDuration,
+            thumbnail: scraped?.thumbnail || `https://i.ytimg.com/vi/${activeVideoId}/hqdefault.jpg`,
+            progress: existing?.progress || 0,
+            lastWatchedAt: new Date().toISOString(),
+            completed: existing?.completed || false,
+            isFavorite: existing?.isFavorite || false
+          });
+          setSingleVideos(Storage.getSingleVideos());
+        } else if (activeSession?.type === "playlist") {
+          // Keep active playlist item in sync
+          const plList = Storage.getPlaylists();
+          const pl = plList.find(p => p.id === activeSession.id);
+          if (pl) {
+            const v = pl.videos.find(item => item.id === activeVideoId);
+            if (v) {
+              v.title = mergedTitle;
+              v.channelName = mergedChannel;
+              if (mergedDuration && mergedDuration !== "10:00") v.duration = mergedDuration;
+              Storage.savePlaylist(pl);
+              setPlaylists(Storage.getPlaylists());
+            }
+          }
+        }
+
+        Storage.addVideoToImportFolder({
+          id: activeVideoId,
+          title: mergedTitle,
+          channelName: mergedChannel,
+          duration: mergedDuration
+        });
+
+        // 3. Background Gemini AI tags/syllabus enrichment if API key exists
+        if (hasGeminiKey()) {
+          fetchVideoMetadataWithGemini(activeVideoId)
+            .then((gemini) => {
+              if (gemini && gemini.tags && gemini.tags.length > 0) {
+                setSingleVideoMetadata((prev) => {
+                  if (!prev || prev.id !== activeVideoId) return prev;
+                  const enriched = {
+                    ...prev,
+                    tags: gemini.tags,
+                    description: prev.description || gemini.description || ""
+                  };
+                  try {
+                    localStorage.setItem(cacheKey, JSON.stringify(enriched));
+                  } catch (e) {}
+                  return enriched;
+                });
+              }
+            })
+            .catch(() => {});
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to fetch active video metadata", err);
+        // Fallback metadata so UI is never missing details
+        setSingleVideoMetadata(prev => prev || {
+          id: activeVideoId,
+          title: activeVideoTitle || "Lecture Video",
+          channelName: activeVideoChannel || "YouTube Creator",
+          duration: "10:00",
+          publishDate: "Recent Lecture",
+          description: `Educational lecture video and study notes chapter for "${activeVideoTitle || activeVideoId}".`,
+          viewCount: "",
+          tags: ["Study", "Lecture", "Course"]
+        });
+        setIsSingleVideoDetailsLoading(false);
       });
-
-      setActiveVideoTitle(mergedTitle);
-      setActiveVideoChannel(mergedChannel);
-
-      setSingleVideoMetadata({
-        id: activeVideoId,
-        title: mergedTitle,
-        channelName: mergedChannel,
-        duration: mergedDuration,
-        publishDate: mergedPublishDate,
-        description: mergedDesc,
-        tags: mergedTags
-      });
-      setIsSingleVideoDetailsLoading(false);
-    }).catch(err => {
-      console.error("Failed to fetch active video metadata", err);
-      setIsSingleVideoDetailsLoading(false);
-    });
   }, [activeVideoId, activeSession]);
 
   // 1. YouTube Iframe API Script Loader (once)
@@ -1116,7 +1290,21 @@ export default function App() {
               playerRef.current = event.target;
               currentLoadedVideoIdRef.current = activeVideoId;
               setPlayerReady(true);
-              setPlayerDuration(event.target.getDuration() || 0);
+              const realDuration = event.target.getDuration?.() || 0;
+              setPlayerDuration(realDuration);
+
+              // Auto-sync real title and author directly from YouTube iframe player instance
+              try {
+                const vData = event.target.getVideoData?.();
+                if (vData) {
+                  if (vData.title && (!activeVideoTitle || activeVideoTitle.startsWith("Loading") || activeVideoTitle === "YouTube Video" || activeVideoTitle.startsWith("Lecture "))) {
+                    setActiveVideoTitle(vData.title);
+                  }
+                  if (vData.author && (!activeVideoChannel || activeVideoChannel.startsWith("Connecting") || activeVideoChannel === "Unknown Channel")) {
+                    setActiveVideoChannel(vData.author);
+                  }
+                }
+              } catch (e) {}
 
               if (startSeconds > 0 && typeof event.target.seekTo === "function") {
                 try { event.target.seekTo(startSeconds, true); } catch (e) {}
@@ -1619,9 +1807,9 @@ export default function App() {
         try {
           let data: any = null;
           try {
-            const res = await fetch(`/api/playlist?id=${id}`);
+            const res = await fetch(`/api/playlist?id=${encodeURIComponent(id)}${initialVidId ? `&v=${encodeURIComponent(initialVidId)}` : ""}`);
             if (res.ok) {
-              data = await res.ok ? await res.json() : null;
+              data = await res.json();
             } else {
               console.warn(`Server playlist endpoint returned ${res.status}. Falling back to client-side YouTube Data API...`);
               data = await fetchPlaylistFromYouTubeClient(id);
@@ -1635,7 +1823,6 @@ export default function App() {
             const totalVids = data.totalVideos || data.videos.length;
             
             if (totalVids > 20) {
-              // progressive loading trigger! Take first 20 first
               const initialChunk = data.videos.slice(0, 20);
               playlist = {
                 id: id,
@@ -1671,8 +1858,52 @@ export default function App() {
             }
           }
         } catch (e: any) {
-          console.error("Failed to load playlist from server or client fallback:", e);
-          throw e; // Bubble up to handleUrlSubmit catch block so it shows in the UI error banner
+          console.warn("Primary playlist fetch attempt notice:", e);
+          
+          // If the link included a specific video (e.g. mix, watch later, or private playlist), gracefully switch to that video!
+          if (initialVidId && initialVidId.length === 11) {
+            toast.info("Opened Lecture", "Loaded the specific lecture from your link.");
+            let video = Storage.getSingleVideos().find(v => v.id === initialVidId);
+            Storage.addVideoToImportFolder({
+              id: initialVidId,
+              title: video?.title || "Imported Lecture",
+              channelName: video?.channelName || "YouTube",
+              duration: video?.duration || "10:00"
+            });
+
+            setIsSingleVideoDetailsLoading(true);
+            setSingleVideoMetadata(null);
+            setActiveSession({ id: initialVidId, type: "video" });
+            setActiveVideoId(initialVidId);
+            setActiveVideoTitle(video?.title || "Loading lecture details...");
+            setActiveVideoChannel(video?.channelName || "Connecting...");
+
+            scrollToWorkspace();
+            setUrlInput("");
+            setIsLoading(false);
+            return;
+          }
+
+          // Otherwise attempt universal scraper before failing
+          try {
+            const fallbackData = await fetchPlaylistWithFallback(id);
+            if (fallbackData && fallbackData.videos && fallbackData.videos.length > 0) {
+              playlist = {
+                id: id,
+                type: "playlist",
+                title: fallbackData.title || "YouTube Playlist",
+                channelName: fallbackData.channelName || "Unknown Channel",
+                totalVideos: fallbackData.totalVideos || fallbackData.videos.length,
+                videos: fallbackData.videos,
+                thumbnail: fallbackData.thumbnail,
+                progress: 0,
+                lastWatchedAt: new Date().toISOString()
+              };
+            }
+          } catch (fbErr) {
+            console.error("All playlist fetch attempts failed:", fbErr);
+            throw e;
+          }
         }
 
         // Fallback if scraping is totally down or returns empty
@@ -2679,24 +2910,34 @@ export default function App() {
     }
   };
 
-  // If user is at root "/" or landing sub-anchors, render the SEO Landing Page
-  if (currentRoute === "landing") {
-    return <LandingPage onNavigateToApp={navigateToApp} />;
-  }
 
   return (
     <div className="min-h-screen md:h-screen md:max-h-screen bg-slate-50 dark:bg-[#09090B] text-slate-900 dark:text-zinc-100 flex flex-col font-sans transition-colors duration-300 md:overflow-hidden">
       
-      {/* Username Initial Onboarding Prompt */}
-      {isNamePromptOpen && (
+      {/* Username Initial Onboarding Prompt (Only for unauthenticated first-time visitors, never for Gmail auth or on every refresh) */}
+      {isNamePromptOpen && !isAuthenticatedUser && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95 duration-300">
+          <div className="relative bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95 duration-300">
+            {/* Close 'X' Button */}
+            <button
+              onClick={() => {
+                localStorage.setItem("learnstudy_name_prompt_dismissed", "true");
+                setIsNamePromptOpen(false);
+              }}
+              className="absolute top-5 right-5 p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:text-zinc-500 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+              title="Close"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
             <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white mb-6 shadow-lg shadow-blue-500/20 mx-auto">
               <User className="w-8 h-8" />
             </div>
-            <div className="text-center mb-8">
+            <div className="text-center mb-6">
               <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Welcome to LearnStudy!</h2>
               <p className="text-slate-500 dark:text-zinc-400 text-sm mt-2">What should we call you in your study workspace?</p>
+              <p className="text-slate-400 dark:text-zinc-500 text-xs mt-1">You can customize or change this anytime inside Settings.</p>
             </div>
             
             <div className="space-y-4">
@@ -2710,6 +2951,7 @@ export default function App() {
                   onChange={(e) => setTempName(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && tempName.trim()) {
+                      localStorage.setItem("learnstudy_name_prompt_dismissed", "true");
                       handleSettingChange("userName", tempName.trim());
                       setIsNamePromptOpen(false);
                     }
@@ -2718,16 +2960,30 @@ export default function App() {
                 />
               </div>
 
-              <button
-                disabled={!tempName.trim()}
-                onClick={() => {
-                  handleSettingChange("userName", tempName.trim());
-                  setIsNamePromptOpen(false);
-                }}
-                className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-sm py-4 rounded-2xl shadow-xl shadow-blue-500/20 transition-all active:scale-[0.98] cursor-pointer"
-              >
-                Set Name & Get Started
-              </button>
+              <div className="space-y-2 pt-1">
+                <button
+                  disabled={!tempName.trim()}
+                  onClick={() => {
+                    localStorage.setItem("learnstudy_name_prompt_dismissed", "true");
+                    handleSettingChange("userName", tempName.trim());
+                    setIsNamePromptOpen(false);
+                  }}
+                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-sm py-3.5 rounded-2xl shadow-xl shadow-blue-500/20 transition-all active:scale-[0.98] cursor-pointer"
+                >
+                  Set Name & Get Started
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    localStorage.setItem("learnstudy_name_prompt_dismissed", "true");
+                    setIsNamePromptOpen(false);
+                  }}
+                  className="w-full py-2.5 text-xs font-bold text-slate-400 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300 transition cursor-pointer text-center"
+                >
+                  Skip for now (Continue as Scholar)
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2758,12 +3014,16 @@ export default function App() {
               <Menu className="w-5 h-5" />
             </button>
 
-            <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => setActiveTab("home")}>
+            <a 
+              href="/app/dashboard"
+              onClick={(e) => { e.preventDefault(); navigateToApp("home"); }}
+              className="flex items-center gap-2.5 cursor-pointer"
+            >
               <img src="/favicon.svg" alt="LearnStudy" className="w-6 h-6 object-contain shrink-0" referrerPolicy="no-referrer" />
               <span className="font-extrabold text-xl tracking-tight text-slate-900 dark:text-white flex items-center gap-1.5">
                 <span>Learn<span className="bg-gradient-to-r from-blue-500 to-indigo-500 bg-clip-text text-transparent">Study</span></span>
               </span>
-            </div>
+            </a>
           </div>
 
           {/* Global Search Input */}
@@ -2795,7 +3055,7 @@ export default function App() {
 
             {/* Pomodoro Timer top bar button */}
             <button
-              onClick={() => { setActiveTab("pomodoro"); setSearchQuery(""); }}
+              onClick={() => { navigateToApp("pomodoro"); setSearchQuery(""); }}
               className={`p-2 sm:p-2.5 rounded-xl border flex items-center gap-1.5 cursor-pointer transition-all duration-200 hover:scale-[1.04] active:scale-[0.96] shadow-sm hover:shadow-md ${
                 activeTab === "pomodoro"
                   ? "bg-orange-500/15 border-orange-500/40 text-orange-600 dark:text-orange-400 hover:bg-orange-500/25 hover:border-orange-500/60"
@@ -2816,7 +3076,7 @@ export default function App() {
 
             {/* Mobile Search Button */}
             <button
-              onClick={() => { setActiveTab("search"); setSearchQuery(""); }}
+              onClick={() => { navigateToApp("search"); setSearchQuery(""); }}
               className={`p-2 sm:p-2.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300 transition-all cursor-pointer flex items-center justify-center`}
               title="Search"
             >
@@ -2840,112 +3100,6 @@ export default function App() {
             >
               {settings.theme === "dark" ? <Moon className="w-4 h-4 sm:w-5 sm:h-5" /> : settings.theme === "system" ? <Laptop className="w-4 h-4 sm:w-5 sm:h-5" /> : <Sun className="w-4 h-4 sm:w-5 sm:h-5" />}
             </button>
-
-            {/* Google Authentication User Header Pill / Sign In */}
-            {currentUser ? (
-              <div className="relative">
-                <button
-                  onClick={() => setUserMenuOpen(prev => !prev)}
-                  className="flex items-center gap-2 p-1 pl-1.5 pr-2.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 border border-slate-200/80 dark:border-zinc-800 transition-all cursor-pointer group"
-                  title={`${currentUser.displayName || currentUser.email} (Google Account)`}
-                >
-                  {currentUser.photoURL ? (
-                    <img
-                      src={currentUser.photoURL}
-                      alt={currentUser.displayName || "Google User"}
-                      className="w-7 h-7 rounded-full object-cover border border-white dark:border-zinc-700 shadow-xs"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
-                      {(currentUser.displayName || currentUser.email || "G").charAt(0).toUpperCase()}
-                    </div>
-                  )}
-                  <span className="text-xs font-bold text-slate-800 dark:text-zinc-200 max-w-[100px] truncate hidden sm:inline">
-                    {currentUser.displayName?.split(" ")[0] || "Account"}
-                  </span>
-                  <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-zinc-300" />
-                </button>
-
-                {userMenuOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
-                    <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl z-50 p-2 py-2.5 animate-in fade-in slide-in-from-top-2 duration-150 text-left">
-                      <div className="px-3 py-2 border-b border-slate-100 dark:border-zinc-800 mb-1.5">
-                        <div className="text-xs font-extrabold text-slate-900 dark:text-zinc-50 truncate">
-                          {currentUser.displayName || "Google Scholar"}
-                        </div>
-                        <div className="text-[11px] text-slate-500 dark:text-zinc-400 truncate">
-                          {currentUser.email}
-                        </div>
-                        <div className="mt-1 flex items-center justify-between gap-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-1 rounded-md">
-                          <span className="flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                            {syncStatus === "syncing" ? "Syncing..." : "Multi-Device Synced"}
-                          </span>
-                          {lastSyncedAt && (
-                            <span className="text-slate-400 dark:text-zinc-500 font-mono">
-                              {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <button
-                        disabled={isSyncingFromMenu}
-                        onClick={async () => {
-                          setIsSyncingFromMenu(true);
-                          await syncNow();
-                          setIsSyncingFromMenu(false);
-                        }}
-                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950/40 transition flex items-center justify-between cursor-pointer"
-                      >
-                        <span className="flex items-center gap-2">
-                          <RefreshCw className={`w-4 h-4 text-blue-500 ${isSyncingFromMenu ? "animate-spin" : ""}`} />
-                          <span>Sync with Cloud</span>
-                        </span>
-                        <span className="text-[10px] bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded font-mono font-bold">Now</span>
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          setActiveTab("settings");
-                          setUserMenuOpen(false);
-                        }}
-                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-800 transition flex items-center gap-2 cursor-pointer"
-                      >
-                        <Settings className="w-4 h-4 text-slate-400" />
-                        <span>Account & Settings</span>
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          navigateToLanding();
-                        }}
-                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/30 transition flex items-center gap-2 cursor-pointer"
-                      >
-                        <Globe className="w-4 h-4" />
-                        <span>LearnStudy Landing Page</span>
-                      </button>
-
-                      <button
-                        onClick={async () => {
-                          setUserMenuOpen(false);
-                          await signOutUser();
-                        }}
-                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30 transition flex items-center gap-2 cursor-pointer"
-                      >
-                        <LogOut className="w-4 h-4" />
-                        <span>Sign Out</span>
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ) : (
-              <GoogleSignInButton variant="header" />
-            )}
           </div>
         </header>
       )}
@@ -2984,12 +3138,15 @@ export default function App() {
                 { id: "home", label: "Home Dashboard", icon: <Home className="w-[18px] h-[18px]" /> },
                 { id: "study", label: "Lecture Player", icon: <Tv className="w-[18px] h-[18px]" /> },
                 { id: "library", label: "Course Library", icon: <Folder className="w-[18px] h-[18px]" /> },
+                { id: "notes", label: "Notes Hub", icon: <FileText className="w-[18px] h-[18px]" /> },
               ].map((item) => (
-                <button
+                <a
                   key={item.id}
-                  onClick={() => {
+                  href={getPageShareableUrl(item.id as ActiveTab, { absolute: false })}
+                  onClick={(e) => {
+                    e.preventDefault();
                     if (item.id === "study" && !activeVideoId && !activeSession) return;
-                    setActiveTab(item.id as ActiveTab);
+                    navigateToApp(item.id as ActiveTab);
                     setSearchQuery("");
                     setMobileSidebarOpen(false);
                   }}
@@ -3021,21 +3178,23 @@ export default function App() {
                     </div>
                     <span>{item.label}</span>
                   </div>
-                </button>
+                </a>
               ))}
 
               <div className="pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3 opacity-80">
                 Smart Study Tools
               </div>
               {[
-                { id: "flashcards", label: "Flashcards & Quiz", icon: <Brain className="w-[18px] h-[18px]" /> },
+                { id: "flashcards", label: "Flashcards", icon: <Brain className="w-[18px] h-[18px]" /> },
                 { id: "planner", label: "Study Planner & Tasks", icon: <CheckCircle2 className="w-[18px] h-[18px]" /> },
                 { id: "calendar", label: "Study Calendar", icon: <Calendar className="w-[18px] h-[18px]" /> },
               ].map((item) => (
-                <button
+                <a
                   key={item.id}
-                  onClick={() => {
-                    setActiveTab(item.id as ActiveTab);
+                  href={getPageShareableUrl(item.id as ActiveTab, { absolute: false })}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigateToApp(item.id as ActiveTab);
                     setSearchQuery("");
                     setMobileSidebarOpen(false);
                   }}
@@ -3065,7 +3224,7 @@ export default function App() {
                     </div>
                     <span>{item.label}</span>
                   </div>
-                </button>
+                </a>
               ))}
 
               <div className="pt-4 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-zinc-500 px-3 opacity-80">
@@ -3078,10 +3237,12 @@ export default function App() {
                 { id: "stats", label: "Study Analytics", icon: <TrendingUp className="w-[18px] h-[18px]" /> },
                 { id: "developer", label: "Developer Profile", icon: <User className="w-[18px] h-[18px]" /> },
               ].map((item) => (
-                <button
+                <a
                   key={item.id}
-                  onClick={() => {
-                    setActiveTab(item.id as ActiveTab);
+                  href={getPageShareableUrl(item.id as ActiveTab, { absolute: false })}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigateToApp(item.id as ActiveTab);
                     setSearchQuery("");
                     setMobileSidebarOpen(false);
                   }}
@@ -3111,7 +3272,7 @@ export default function App() {
                     </div>
                     <span>{item.label}</span>
                   </div>
-                </button>
+                </a>
               ))}
 
               <div className="pt-2" />
@@ -3138,15 +3299,30 @@ export default function App() {
             </div>
 
             {/* Bottom Account Drawer Section */}
-            <div className="p-3.5 border-t border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-white/2 shrink-0">
+            <div className={`p-3.5 border-t border-slate-200 dark:border-white/5 transition-all shrink-0 ${
+              activeTab === "settings" && !searchQuery
+                ? "bg-blue-50/70 dark:bg-blue-950/25 border-t-blue-200 dark:border-t-blue-500/20"
+                : "bg-slate-50 dark:bg-white/2"
+            }`}>
               {currentUser ? (
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2.5 min-w-0">
+                  <button
+                    onClick={() => {
+                      setMobileSidebarOpen(false);
+                      navigateToApp("settings");
+                    }}
+                    className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer group"
+                    title="Profile & Settings"
+                  >
                     {currentUser.photoURL ? (
                       <img
                         src={currentUser.photoURL}
                         alt={currentUser.displayName || "User"}
-                        className="w-8 h-8 rounded-full object-cover border border-white dark:border-zinc-700 shrink-0 shadow-xs"
+                        className={`w-8 h-8 rounded-full object-cover border shrink-0 shadow-xs transition-all ${
+                          activeTab === "settings" && !searchQuery
+                            ? "border-blue-500 ring-2 ring-blue-500/30"
+                            : "border-white dark:border-zinc-700"
+                        }`}
                         referrerPolicy="no-referrer"
                       />
                     ) : (
@@ -3157,7 +3333,11 @@ export default function App() {
                       />
                     )}
                     <div className="truncate">
-                      <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                      <div className={`text-xs font-bold truncate transition-colors ${
+                        activeTab === "settings" && !searchQuery
+                          ? "text-blue-700 dark:text-blue-300"
+                          : "text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400"
+                      }`}>
                         {currentUser.displayName || "Google Scholar"}
                       </div>
                       <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold truncate flex items-center gap-1">
@@ -3165,41 +3345,70 @@ export default function App() {
                         Google Sync Active
                       </div>
                     </div>
-                  </div>
+                  </button>
                   <button
                     onClick={() => {
                       setMobileSidebarOpen(false);
-                      setActiveTab("settings");
+                      navigateToApp("settings");
                     }}
-                    className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-zinc-800 transition cursor-pointer"
+                    className={`p-2 rounded-xl transition cursor-pointer ${
+                      activeTab === "settings" && !searchQuery
+                        ? "bg-blue-600 text-white shadow-sm shadow-blue-500/25 dark:bg-blue-500"
+                        : "text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-zinc-800"
+                    }`}
                     title="Settings"
                   >
                     <Settings className="w-4 h-4" />
                   </button>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <div className="text-[11px] font-semibold text-slate-500 dark:text-zinc-400 text-center">
-                    Sync your modules & notes
-                  </div>
-                  <GoogleSignInButton
-                    variant="compact"
-                    onSuccess={() => setMobileSidebarOpen(false)}
-                    label="Sign In with Google"
-                  />
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => {
+                      setMobileSidebarOpen(false);
+                      navigateToApp("settings");
+                      setSearchQuery("");
+                    }}
+                    className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer group"
+                    title="Profile & Settings"
+                  >
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                      activeTab === "settings" && !searchQuery
+                        ? "bg-blue-600 text-white shadow-xs"
+                        : "bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 group-hover:bg-blue-100 dark:group-hover:bg-blue-950/50 group-hover:text-blue-600 dark:group-hover:text-blue-400"
+                    }`}>
+                      <User className="w-4 h-4" />
+                    </div>
+                    <div className="truncate">
+                      <div className={`text-xs font-bold transition-colors truncate ${
+                        activeTab === "settings" && !searchQuery
+                          ? "text-blue-700 dark:text-blue-300"
+                          : "text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400"
+                      }`}>
+                        Profile
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-zinc-400 truncate">
+                        Account & Settings
+                      </div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setMobileSidebarOpen(false);
+                      navigateToApp("settings");
+                      setSearchQuery("");
+                    }}
+                    className={`p-2 rounded-xl transition cursor-pointer ${
+                      activeTab === "settings" && !searchQuery
+                        ? "bg-blue-600 text-white shadow-sm shadow-blue-500/25 dark:bg-blue-500"
+                        : "text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-zinc-800"
+                    }`}
+                    title="Settings"
+                  >
+                    <Settings className="w-4 h-4" />
+                  </button>
                 </div>
               )}
-
-              <button
-                onClick={() => {
-                  setMobileSidebarOpen(false);
-                  navigateToLanding();
-                }}
-                className="w-full mt-2.5 py-2 px-3 rounded-xl text-xs font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 flex items-center justify-center gap-2 transition cursor-pointer border border-blue-200/60 dark:border-blue-900/40"
-              >
-                <Globe className="w-3.5 h-3.5" />
-                <span>Visit Landing Page</span>
-              </button>
             </div>
           </div>
         </div>
@@ -3207,8 +3416,9 @@ export default function App() {
         
       <div className="flex-1 flex flex-col md:flex-row relative md:overflow-hidden">
         {/* Desktop Sidebar */}
-        <aside className={`border-r border-slate-200 dark:border-white/5 bg-white dark:bg-[#0B0B10] p-4 shrink-0 transition-all duration-300 ${focusMode ? "hidden" : "hidden md:flex flex-col justify-between"} ${sidebarCollapsed ? "w-[72px]" : "w-[260px]"}`}>
-          <div className="space-y-6">
+        <aside className={`border-r border-slate-200 dark:border-white/5 bg-white dark:bg-[#0B0B10] shrink-0 transition-all duration-300 ${focusMode ? "hidden" : "hidden md:flex flex-col h-full max-h-[calc(100vh-4rem)] overflow-hidden"} ${sidebarCollapsed ? "w-[72px]" : "w-[260px]"}`}>
+          {/* Scrollable Navigation Area with Minimal Scrollbar */}
+          <div className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden sidebar-scrollbar ${sidebarCollapsed ? "p-2.5" : "p-3 sm:p-4"} space-y-5 select-none`}>
             {!sidebarCollapsed ? (
               <div className="flex items-center justify-between px-3">
                 <div className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest opacity-80">
@@ -3236,8 +3446,9 @@ export default function App() {
             
             <nav className="space-y-[5px]">
               {/* Core Learning Section */}
-              <button
-                onClick={() => { setActiveTab("home"); setSearchQuery(""); }}
+              <a
+                href="/app/dashboard"
+                onClick={(e) => { e.preventDefault(); navigateToApp("home"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "home" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3263,10 +3474,11 @@ export default function App() {
 
                 <Home className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "home" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Dashboard</span>}
-              </button>
+              </a>
 
-              <button
-                onClick={() => { setActiveTab("study"); setSearchQuery(""); }}
+              <a
+                href="/app/study"
+                onClick={(e) => { e.preventDefault(); navigateToApp("study"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "study" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3292,16 +3504,17 @@ export default function App() {
 
                 <Tv className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "study" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Lecture Player</span>}
-              </button>
+              </a>
 
-              <button
-                onClick={() => { setActiveTab("library"); setSearchQuery(""); }}
+              <a
+                href="/app/lectures"
+                onClick={(e) => { e.preventDefault(); navigateToApp("library"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "library" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
                     : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
                 } cursor-pointer group`}
-                title={sidebarCollapsed ? "Course Library" : undefined}
+                title={sidebarCollapsed ? "Lectures & Courses" : undefined}
               >
                 {/* Animated Background Highlight */}
                 {activeTab === "library" && !searchQuery && (
@@ -3320,8 +3533,38 @@ export default function App() {
                 )}
 
                 <Folder className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "library" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
-                {!sidebarCollapsed && <span className="relative z-10">Course Library</span>}
-              </button>
+                {!sidebarCollapsed && <span className="relative z-10">Lectures & Library</span>}
+              </a>
+
+              <a
+                href="/app/notes"
+                onClick={(e) => { e.preventDefault(); navigateToApp("notes"); setSearchQuery(""); }}
+                className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
+                  activeTab === "notes" && !searchQuery
+                    ? "text-blue-700 dark:text-blue-300 font-semibold" 
+                    : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
+                } cursor-pointer group`}
+                title={sidebarCollapsed ? "Notes Hub" : undefined}
+              >
+                {/* Animated Background Highlight */}
+                {activeTab === "notes" && !searchQuery && (
+                  <motion.div
+                    layoutId="sidebar-nav-active"
+                    className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                {activeTab === "notes" && !searchQuery && (
+                  <motion.div 
+                    layoutId="sidebar-active-indicator"
+                    className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+
+                <FileText className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "notes" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
+                {!sidebarCollapsed && <span className="relative z-10">Notes Hub</span>}
+              </a>
 
               {/* Study Tools Section */}
               {!sidebarCollapsed && (
@@ -3330,8 +3573,9 @@ export default function App() {
                 </div>
               )}
 
-              <button
-                onClick={() => { setActiveTab("flashcards"); setSearchQuery(""); }}
+              <a
+                href="/app/flashcards"
+                onClick={(e) => { e.preventDefault(); navigateToApp("flashcards"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "flashcards" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3356,11 +3600,12 @@ export default function App() {
                 )}
 
                 <Brain className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "flashcards" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
-                {!sidebarCollapsed && <span className="relative z-10">Flashcards & Quiz</span>}
-              </button>
+                {!sidebarCollapsed && <span className="relative z-10">Flashcards</span>}
+              </a>
 
-              <button
-                onClick={() => { setActiveTab("planner"); setSearchQuery(""); }}
+              <a
+                href="/app/planner"
+                onClick={(e) => { e.preventDefault(); navigateToApp("planner"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "planner" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3386,10 +3631,11 @@ export default function App() {
 
                 <CheckCircle2 className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "planner" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Planner & Tasks</span>}
-              </button>
+              </a>
 
-              <button
-                onClick={() => { setActiveTab("calendar"); setSearchQuery(""); }}
+              <a
+                href="/app/calendar"
+                onClick={(e) => { e.preventDefault(); navigateToApp("calendar"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "calendar" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3415,7 +3661,7 @@ export default function App() {
 
                 <Calendar className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "calendar" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Calendar & Streaks</span>}
-              </button>
+              </a>
 
               {/* General Utilities */}
               {!sidebarCollapsed && (
@@ -3424,8 +3670,9 @@ export default function App() {
                 </div>
               )}
 
-              <button
-                onClick={() => { setActiveTab("pomodoro"); setSearchQuery(""); }}
+              <a
+                href="/app/pomodoro"
+                onClick={(e) => { e.preventDefault(); navigateToApp("pomodoro"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "pomodoro" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3451,10 +3698,11 @@ export default function App() {
 
                 <AlarmClock className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "pomodoro" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Pomodoro Timer</span>}
-              </button>
+              </a>
 
-              <button
-                onClick={() => { setActiveTab("history"); setSearchQuery(""); }}
+              <a
+                href="/app/history"
+                onClick={(e) => { e.preventDefault(); navigateToApp("history"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "history" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3480,10 +3728,11 @@ export default function App() {
 
                 <History className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "history" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Watch History</span>}
-              </button>
+              </a>
 
-              <button
-                onClick={() => { setActiveTab("favorites"); setSearchQuery(""); }}
+              <a
+                href="/app/favorites"
+                onClick={(e) => { e.preventDefault(); navigateToApp("favorites"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "favorites" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3509,10 +3758,11 @@ export default function App() {
 
                 <Heart className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "favorites" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Favorites</span>}
-              </button>
+              </a>
 
-              <button
-                onClick={() => { setActiveTab("stats"); setSearchQuery(""); }}
+              <a
+                href="/app/stats"
+                onClick={(e) => { e.preventDefault(); navigateToApp("stats"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "stats" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3538,10 +3788,11 @@ export default function App() {
 
                 <TrendingUp className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "stats" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Statistics</span>}
-              </button>
+              </a>
 
-              <button
-                onClick={() => { setActiveTab("developer"); setSearchQuery(""); }}
+              <a
+                href="/app/developer"
+                onClick={(e) => { e.preventDefault(); navigateToApp("developer"); setSearchQuery(""); }}
                 className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
                   activeTab === "developer" && !searchQuery
                     ? "text-blue-700 dark:text-blue-300 font-semibold" 
@@ -3567,7 +3818,7 @@ export default function App() {
 
                 <User className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "developer" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
                 {!sidebarCollapsed && <span className="relative z-10">Developer Profile</span>}
-              </button>
+              </a>
 
               <button
                 onClick={() => setFeedbackModalOpen(true)}
@@ -3593,45 +3844,252 @@ export default function App() {
             </nav>
           </div>
 
-          {/* Settings Section at the absolute bottom */}
-          <div className="pt-4 border-t border-slate-200 dark:border-white/5 shrink-0 space-y-[5px]">
-            <button
-              onClick={() => { setActiveTab("settings"); setSearchQuery(""); }}
-              className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[42px] w-[42px] mx-auto" : "gap-3 px-4 h-[42px]"} rounded-[12px] text-xs transition-all duration-250 ${
-                activeTab === "settings" && !searchQuery
-                  ? "text-blue-700 dark:text-blue-300 font-semibold" 
-                  : "text-slate-600 dark:text-white/60 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
-              } cursor-pointer group`}
-              title={sidebarCollapsed ? "Settings" : undefined}
-            >
-              {/* Animated Background Highlight */}
-              {activeTab === "settings" && !searchQuery && (
-                <motion.div
-                  layoutId="sidebar-nav-active"
-                  className="absolute inset-0 bg-blue-50/90 border border-blue-200/80 shadow-sm shadow-blue-500/10 dark:bg-blue-600/15 dark:border-blue-500/20 dark:shadow-none rounded-[12px]"
-                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                />
-              )}
-              {activeTab === "settings" && !searchQuery && (
-                <motion.div 
-                  layoutId="sidebar-active-indicator"
-                  className={`absolute ${sidebarCollapsed ? "left-0.5" : "left-1"} top-2 bottom-2 w-1.5 rounded-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500 shadow-none z-10`}
-                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                />
-              )}
+          {/* Desktop Sidebar Footer: Fixed Setting & Authentication at bottom */}
+          <div className={`mt-auto shrink-0 border-t border-slate-200 dark:border-white/5 bg-white/95 dark:bg-[#0B0B10]/95 backdrop-blur-md ${sidebarCollapsed ? "p-2.5" : "p-3 sm:p-4"} space-y-2 z-10 shadow-[0_-4px_12px_rgba(0,0,0,0.03)] dark:shadow-[0_-4px_12px_rgba(0,0,0,0.25)]`}>
+            {/* Desktop Sidebar Footer: Fixed Setting & Authentication at bottom */}
+            {!sidebarCollapsed ? (
+              <div className="relative">
+                {currentUser ? (
+                  <div className={`relative border rounded-2xl p-2.5 space-y-2 transition-all ${
+                    activeTab === "settings" && !searchQuery
+                      ? "bg-blue-50/70 dark:bg-blue-950/30 border-blue-300/90 dark:border-blue-500/40 ring-1 ring-blue-500/20 shadow-sm shadow-blue-500/5"
+                      : "bg-slate-50 dark:bg-white/[0.03] border-slate-200/70 dark:border-white/5"
+                  }`}>
+                    {/* Active Tab Accent Bar */}
+                    {activeTab === "settings" && !searchQuery && (
+                      <div className="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500" />
+                    )}
 
-              <Settings className={`w-[18px] h-[18px] shrink-0 transition-all relative z-10 ${activeTab === "settings" && !searchQuery ? "text-blue-600 dark:text-blue-400 scale-105" : "text-slate-500 dark:text-white/60 opacity-70 group-hover:opacity-100"}`} />
-              {!sidebarCollapsed && <span className="relative z-10">Settings & Account</span>}
-            </button>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <button
+                        onClick={() => {
+                          navigateToApp("settings");
+                          setSearchQuery("");
+                        }}
+                        className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer group"
+                        title="Profile & Settings"
+                      >
+                        <div className="relative shrink-0">
+                          {currentUser.photoURL ? (
+                            <img
+                              src={currentUser.photoURL}
+                              alt={currentUser.displayName || "Google Account"}
+                              className={`w-8 h-8 rounded-full object-cover border shadow-xs transition-all ${
+                                activeTab === "settings" && !searchQuery
+                                  ? "border-blue-500 ring-2 ring-blue-500/30"
+                                  : "border-white dark:border-zinc-700"
+                              }`}
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
+                              {(currentUser.displayName || currentUser.email || "G").charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 absolute -bottom-0.5 -right-0.5 ring-2 ring-white dark:ring-zinc-900" title="Google Sync Active" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className={`text-xs font-bold truncate transition-colors ${
+                            activeTab === "settings" && !searchQuery
+                              ? "text-blue-700 dark:text-blue-300"
+                              : "text-slate-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400"
+                          }`}>
+                            {currentUser.displayName || "Profile"}
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-zinc-400 truncate font-mono">
+                            {currentUser.email}
+                          </div>
+                        </div>
+                      </button>
 
-            <button
-              onClick={navigateToLanding}
-              className={`w-full relative flex items-center ${sidebarCollapsed ? "justify-center px-0 h-[40px] w-[40px] mx-auto" : "gap-3 px-4 h-[40px]"} rounded-[12px] text-xs text-slate-500 dark:text-white/50 font-medium hover:bg-slate-100 dark:hover:bg-white/5 hover:text-blue-600 dark:hover:text-blue-400 transition-all duration-200 cursor-pointer group`}
-              title={sidebarCollapsed ? "View Landing Page" : undefined}
-            >
-              <Globe className="w-[18px] h-[18px] shrink-0 opacity-70 group-hover:opacity-100 group-hover:scale-105 transition-all text-blue-500" />
-              {!sidebarCollapsed && <span className="relative z-10">Landing Page</span>}
-            </button>
+                      <button
+                        onClick={() => {
+                          navigateToApp("settings");
+                          setSearchQuery("");
+                        }}
+                        className={`p-1.5 rounded-lg transition-all cursor-pointer shrink-0 ${
+                          activeTab === "settings" && !searchQuery
+                            ? "bg-blue-600 text-white shadow-sm shadow-blue-500/25 dark:bg-blue-500"
+                            : "text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-white/5"
+                        }`}
+                        title="Settings"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        onClick={() => setUserMenuOpen(prev => !prev)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-white/5 transition cursor-pointer shrink-0"
+                        title="Account Menu"
+                      >
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {userMenuOpen && (
+                      <div className="pt-2 border-t border-slate-200/60 dark:border-white/5 space-y-1 animate-in fade-in duration-150">
+                        <div className="flex items-center justify-between text-[9px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-1 rounded-md">
+                          <span className="flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            {syncStatus === "syncing" ? "Syncing..." : "Multi-Device Synced"}
+                          </span>
+                          {lastSyncedAt && (
+                            <span className="text-slate-400 dark:text-zinc-500 font-mono">
+                              {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
+                        </div>
+
+                        <button
+                          disabled={isSyncingFromMenu}
+                          onClick={async () => {
+                            setIsSyncingFromMenu(true);
+                            await syncNow();
+                            setIsSyncingFromMenu(false);
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950/40 transition flex items-center justify-between cursor-pointer"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <RefreshCw className={`w-3.5 h-3.5 text-blue-500 ${isSyncingFromMenu ? "animate-spin" : ""}`} />
+                            <span>Sync with Cloud</span>
+                          </span>
+                          <span className="text-[9px] bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1 py-0.2 rounded font-mono font-bold">Now</span>
+                        </button>
+
+                        <button
+                          onClick={async () => {
+                            setUserMenuOpen(false);
+                            await signOutUser();
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30 transition flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <LogOut className="w-3.5 h-3.5" />
+                          <span>Sign Out</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className={`relative border rounded-2xl p-2.5 transition-all ${
+                    activeTab === "settings" && !searchQuery
+                      ? "bg-blue-50/70 dark:bg-blue-950/30 border-blue-300/90 dark:border-blue-500/40 ring-1 ring-blue-500/20 shadow-sm shadow-blue-500/5"
+                      : "bg-slate-50 dark:bg-white/[0.03] border-slate-200/70 dark:border-white/5"
+                  }`}>
+                    {/* Active Tab Accent Bar */}
+                    {activeTab === "settings" && !searchQuery && (
+                      <div className="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-gradient-to-b from-blue-600 via-indigo-600 to-indigo-500 dark:from-blue-500 dark:to-indigo-500" />
+                    )}
+
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        onClick={() => {
+                          navigateToApp("settings");
+                          setSearchQuery("");
+                        }}
+                        className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer group"
+                        title="Profile & Settings"
+                      >
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                          activeTab === "settings" && !searchQuery
+                            ? "bg-blue-600 text-white shadow-xs"
+                            : "bg-slate-200/80 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 group-hover:bg-blue-100 dark:group-hover:bg-blue-950/50 group-hover:text-blue-600 dark:group-hover:text-blue-400"
+                        }`}>
+                          <User className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className={`text-xs font-bold transition-colors truncate ${
+                            activeTab === "settings" && !searchQuery
+                              ? "text-blue-700 dark:text-blue-300"
+                              : "text-slate-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400"
+                          }`}>
+                            Profile
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-zinc-400 truncate">
+                            Account & Settings
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => {
+                          navigateToApp("settings");
+                          setSearchQuery("");
+                        }}
+                        className={`p-1.5 rounded-lg transition-all cursor-pointer shrink-0 ${
+                          activeTab === "settings" && !searchQuery
+                            ? "bg-blue-600 text-white shadow-sm shadow-blue-500/25 dark:bg-blue-500"
+                            : "text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-white/5"
+                        }`}
+                        title="Settings"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Collapsed Sidebar Profile / Avatar & Setting */
+              <div className="flex flex-col items-center gap-2">
+                {currentUser ? (
+                  <button
+                    onClick={() => {
+                      navigateToApp("settings");
+                      setSearchQuery("");
+                    }}
+                    className={`relative p-0.5 rounded-full transition-all cursor-pointer ${
+                      activeTab === "settings" && !searchQuery
+                        ? "ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-zinc-900 scale-105"
+                        : "hover:ring-2 hover:ring-blue-500"
+                    }`}
+                    title={`${currentUser.displayName || currentUser.email} (Profile)`}
+                  >
+                    {currentUser.photoURL ? (
+                      <img
+                        src={currentUser.photoURL}
+                        alt={currentUser.displayName || "Google Scholar"}
+                        className="w-8 h-8 rounded-full object-cover border border-white dark:border-zinc-700 shadow-xs"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
+                        {(currentUser.displayName || currentUser.email || "G").charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 absolute -bottom-0.5 -right-0.5 ring-1.5 ring-white dark:ring-zinc-900" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      navigateToApp("settings");
+                      setSearchQuery("");
+                    }}
+                    className={`w-[42px] h-[42px] rounded-[12px] flex items-center justify-center transition-all cursor-pointer ${
+                      activeTab === "settings" && !searchQuery
+                        ? "bg-blue-50 dark:bg-blue-600/20 border border-blue-300 dark:border-blue-500/30 text-blue-600 dark:text-blue-400 font-semibold"
+                        : "bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 border border-slate-200 dark:border-white/10 text-slate-600 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400"
+                    }`}
+                    title="Profile"
+                  >
+                    <User className="w-4 h-4" />
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    navigateToApp("settings");
+                    setSearchQuery("");
+                  }}
+                  className={`w-[42px] h-[42px] rounded-[12px] flex items-center justify-center transition-all cursor-pointer ${
+                    activeTab === "settings" && !searchQuery
+                      ? "bg-blue-600 text-white shadow-sm shadow-blue-500/25 dark:bg-blue-500"
+                      : "text-slate-500 dark:text-white/60 hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white"
+                  }`}
+                  title="Settings"
+                >
+                  <Settings className="w-[18px] h-[18px]" />
+                </button>
+              </div>
+            )}
           </div>
         </aside>
 
@@ -3720,7 +4178,7 @@ export default function App() {
                       variant="full"
                       activeTab={activeTab}
                       onNavigate={(tab) => {
-                        setActiveTab(tab);
+                        navigateToApp(tab);
                         setSearchQuery("");
                       }}
                       onCopySuccess={(title, url) => {
@@ -3749,7 +4207,7 @@ export default function App() {
                         activeTab={activeTab}
                         filterQuery={searchQuery}
                         onNavigate={(tab) => {
-                          setActiveTab(tab);
+                          navigateToApp(tab);
                           setSearchQuery("");
                         }}
                         onCopySuccess={(title, url) => {
@@ -3997,7 +4455,7 @@ export default function App() {
                 <div className="space-y-8 max-w-6xl mx-auto py-2">
                   {/* Personal Dashboard Header & Navigation Hub */}
                   <PersonalDashboard 
-                    setActiveTab={setActiveTab}
+                    setActiveTab={(tab) => navigateToApp(tab)}
                     userName={settings.userName}
                     settings={settings}
                     onResumeSession={(session) => {
@@ -4010,8 +4468,10 @@ export default function App() {
                             setActiveVideoId(firstVid.id);
                             setActiveVideoTitle(firstVid.title);
                             setActiveVideoChannel(firstVid.channelName);
+                            navigateToApp("study", { videoId: firstVid.id, videoTitle: firstVid.title, playlistId: targetPl.id });
+                          } else {
+                            navigateToApp("study", { playlistId: targetPl.id });
                           }
-                          setActiveTab("study");
                         }
                       } else {
                         const targetVid = singleVideos.find(v => v.id === session.id);
@@ -4020,7 +4480,7 @@ export default function App() {
                           setActiveVideoId(targetVid.id);
                           setActiveVideoTitle(targetVid.title);
                           setActiveVideoChannel(targetVid.channelName);
-                          setActiveTab("study");
+                          navigateToApp("study", { videoId: targetVid.id, videoTitle: targetVid.title });
                         }
                       }
                     }}
@@ -4218,14 +4678,37 @@ export default function App() {
                     return (
                       <div id="lecture-workspace" className="relative overflow-hidden bg-gradient-to-br from-white via-slate-50/40 to-blue-50/15 dark:from-zinc-900 dark:via-zinc-950/60 dark:to-blue-950/5 border border-slate-200/80 dark:border-zinc-800/80 rounded-3xl p-6 sm:p-7 md:p-8 shadow-xl backdrop-blur-md transition-all duration-300 hover:shadow-2xl hover:border-slate-300 dark:hover:border-zinc-750 group/preview before:absolute before:-top-40 before:-right-40 before:w-80 before:h-80 before:bg-blue-500/5 dark:before:bg-blue-400/5 before:rounded-full before:blur-3xl before:pointer-events-none">
                         
-                        {/* Clear Selection Button */}
-                        <button 
-                          onClick={() => setActiveSession(null)}
-                          className="absolute top-5 right-5 p-2 rounded-full text-slate-400 hover:text-slate-600 dark:text-zinc-500 dark:hover:text-zinc-300 bg-slate-100/60 hover:bg-slate-200/80 dark:bg-zinc-800/50 dark:hover:bg-zinc-800 border border-slate-200/30 dark:border-zinc-700/30 transition-all duration-200 cursor-pointer z-10 shadow-sm"
-                          title="Clear Selection"
-                        >
-                          <X className="w-4.5 h-4.5" />
-                        </button>
+                        {/* Top-Right Quick Actions: Bookmark/Watch-Later & Clear */}
+                        <div className="absolute top-5 right-5 flex items-center gap-2 z-10">
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              setSaveModalTarget({
+                                type: isPlaylist ? "playlist" : "video",
+                                id: isPlaylist ? currentPlaylistObj?.id || activeSession.id : activeVideoId || activeSession.id,
+                                title,
+                                channelName,
+                                duration: isPlaylist ? "" : duration,
+                                thumbnail,
+                                playlist: currentPlaylistObj || undefined
+                              });
+                              setIsSaveModalOpen(true);
+                            }}
+                            className="p-2 sm:px-3 sm:py-1.5 rounded-full sm:rounded-2xl text-amber-600 dark:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all duration-200 cursor-pointer shadow-sm flex items-center gap-1.5 text-xs font-black"
+                            title="Save playlist or lecture to folders & categories, or Watch Later"
+                          >
+                            <Bookmark className="w-4 h-4 fill-current" />
+                            <span className="hidden sm:inline">Save / Watch Later</span>
+                          </button>
+
+                          <button 
+                            onClick={() => setActiveSession(null)}
+                            className="p-2 rounded-full text-slate-400 hover:text-slate-600 dark:text-zinc-500 dark:hover:text-zinc-300 bg-slate-100/60 hover:bg-slate-200/80 dark:bg-zinc-800/50 dark:hover:bg-zinc-800 border border-slate-200/30 dark:border-zinc-700/30 transition-all duration-200 cursor-pointer shadow-sm"
+                            title="Clear Selection"
+                          >
+                            <X className="w-4.5 h-4.5" />
+                          </button>
+                        </div>
 
                         <div className="flex flex-col md:flex-row items-start md:items-center gap-6 md:gap-8">
                           {/* Thumbnail Frame in Perfect 16:9 */}
@@ -4314,15 +4797,103 @@ export default function App() {
                               )}
                             </div>
 
-                            {/* Start Study Button / Main Action */}
-                            <div className="pt-2">
+                            {/* Start Study Button / Main Action Buttons */}
+                            <div className="pt-2 flex flex-wrap items-center gap-3">
                               <button
-                                onClick={() => setActiveTab("study")}
-                                className="w-full sm:w-auto bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 bg-[size:200%_auto] hover:bg-[right_center] text-white font-extrabold text-sm px-10 py-4 rounded-2xl shadow-lg hover:shadow-indigo-500/20 hover:scale-[1.01] active:scale-[0.99] transition-all duration-300 flex items-center justify-center gap-2.5 cursor-pointer"
+                                onClick={() => navigateToApp("study")}
+                                className="w-full sm:w-auto bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 bg-[size:200%_auto] hover:bg-[right_center] text-white font-extrabold text-sm px-8 py-3.5 rounded-2xl shadow-lg hover:shadow-indigo-500/20 hover:scale-[1.01] active:scale-[0.99] transition-all duration-300 flex items-center justify-center gap-2.5 cursor-pointer"
                               >
                                 <Play className="w-4.5 h-4.5 fill-current animate-pulse" />
                                 Start Study
                               </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSaveModalTarget({
+                                    type: isPlaylist ? "playlist" : "video",
+                                    id: isPlaylist ? currentPlaylistObj?.id || activeSession.id : activeVideoId || activeSession.id,
+                                    title,
+                                    channelName,
+                                    duration: isPlaylist ? "" : duration,
+                                    thumbnail,
+                                    playlist: currentPlaylistObj || undefined
+                                  });
+                                  setIsSaveModalOpen(true);
+                                }}
+                                className="w-full sm:w-auto bg-amber-500/10 hover:bg-amber-500/20 dark:bg-amber-500/15 border border-amber-500/30 text-amber-800 dark:text-amber-300 font-extrabold text-xs px-5 py-3.5 rounded-2xl transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                              >
+                                <Bookmark className="w-4 h-4 fill-current" />
+                                <span>Save to Folder / Categories</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDetailsModalVideo({
+                                    id: activeVideoId || activeSession.id,
+                                    title,
+                                    channelName,
+                                    duration: singleVideoMetadata?.duration || duration || "10:00",
+                                    description: singleVideoMetadata?.description || "Educational lecture and study syllabus.",
+                                    publishDate: singleVideoMetadata?.publishDate || "Recent Lecture",
+                                    viewCount: (singleVideoMetadata as any)?.viewCount || "",
+                                    tags: singleVideoMetadata?.tags || [],
+                                    thumbnail
+                                  });
+                                  setIsDetailsModalOpen(true);
+                                }}
+                                className="w-full sm:w-auto bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-700 font-extrabold text-xs px-5 py-3.5 rounded-2xl transition flex items-center justify-center gap-2 cursor-pointer"
+                              >
+                                <Info className="w-4 h-4 text-blue-500" />
+                                <span>View Video Details</span>
+                              </button>
+                            </div>
+
+                            {/* Video Details & Syllabus Overview in Workspace */}
+                            <div className="pt-3 border-t border-slate-200/60 dark:border-zinc-850">
+                              <div className="flex items-center justify-between">
+                                <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-700 dark:text-zinc-300">
+                                  <BookOpen className="w-4 h-4 text-blue-500" />
+                                  <span>Video Details & Lecture Syllabus</span>
+                                  {singleVideoMetadata?.publishDate && (
+                                    <span className="text-[10px] text-slate-400 font-semibold">
+                                      • 📅 {singleVideoMetadata.publishDate}
+                                    </span>
+                                  )}
+                                  {(singleVideoMetadata as any)?.viewCount && (
+                                    <span className="text-[10px] text-slate-400 font-semibold">
+                                      • 👁️ {(singleVideoMetadata as any).viewCount}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setWorkspaceDetailsExpanded(!workspaceDetailsExpanded)}
+                                  className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+                                >
+                                  <span>{workspaceDetailsExpanded ? "Hide Details" : "Show Details"}</span>
+                                  {workspaceDetailsExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+
+                              {workspaceDetailsExpanded && (
+                                <div className="mt-2.5 p-3.5 rounded-2xl bg-white/80 dark:bg-zinc-950/60 border border-slate-200/70 dark:border-zinc-800 text-xs text-slate-600 dark:text-zinc-400 space-y-2 animate-in fade-in duration-150">
+                                  {singleVideoMetadata?.tags && singleVideoMetadata.tags.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {singleVideoMetadata.tags.map((tag, idx) => (
+                                        <span key={idx} className="text-[10px] bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 font-semibold px-2 py-0.5 rounded-md">
+                                          #{tag.toLowerCase().replace(/[^a-zA-Z0-9]/g, "")}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <p className="whitespace-pre-wrap leading-relaxed max-h-36 overflow-y-auto">
+                                    {singleVideoMetadata?.description || "Educational lecture description and curriculum overview ready for study."}
+                                  </p>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -4330,18 +4901,41 @@ export default function App() {
                         {/* If it is a playlist, show its videos/lectures list below */}
                         {isPlaylist && currentPlaylistObj?.videos && currentPlaylistObj.videos.length > 0 && (
                           <div className="mt-7 pt-6 border-t border-slate-200/80 dark:border-zinc-800/80">
-                            <div className="flex items-center justify-between mb-4">
-                              <h3 className="text-sm font-extrabold text-slate-800 dark:text-zinc-200 flex items-center gap-2">
-                                <BookOpen className="w-4 h-4 text-blue-500" />
-                                Playlist Lectures 
-                                <span className="bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 text-xs px-2.5 py-0.5 rounded-full border border-slate-200/50 dark:border-zinc-700/50 font-bold ml-1.5">
-                                  {currentPlaylistObj.videos.length} total
-                                </span>
-                              </h3>
+                            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                              <div className="flex items-center gap-2">
+                                <h3 className="text-sm font-extrabold text-slate-800 dark:text-zinc-200 flex items-center gap-2">
+                                  <BookOpen className="w-4 h-4 text-blue-500" />
+                                  Playlist Lectures 
+                                  <span className="bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 text-xs px-2.5 py-0.5 rounded-full border border-slate-200/50 dark:border-zinc-700/50 font-bold ml-1.5">
+                                    {currentPlaylistObj.videos.length} total
+                                  </span>
+                                </h3>
+                              </div>
                               
-                              <span className="text-[11px] text-slate-400 dark:text-zinc-500 font-medium">
-                                Scroll to view lectures
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSaveModalTarget({
+                                      type: "playlist",
+                                      id: currentPlaylistObj.id,
+                                      title: currentPlaylistObj.title,
+                                      channelName: currentPlaylistObj.channelName,
+                                      thumbnail: currentPlaylistObj.thumbnail,
+                                      playlist: currentPlaylistObj
+                                    });
+                                    setIsSaveModalOpen(true);
+                                  }}
+                                  className="px-3 py-1.5 rounded-xl text-amber-700 dark:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                                  title="Save playlist to folders & categories, or Watch Later"
+                                >
+                                  <Bookmark className="w-3.5 h-3.5 fill-current" />
+                                  <span>Save Entire Playlist</span>
+                                </button>
+                                <span className="hidden sm:inline text-[11px] text-slate-400 dark:text-zinc-500 font-medium">
+                                  • Bookmark to save to folder
+                                </span>
+                              </div>
                             </div>
                             
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5 max-h-72 overflow-y-auto pr-1.5 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-zinc-800 scrollbar-track-transparent">
@@ -4395,6 +4989,28 @@ export default function App() {
                                         )}
                                       </div>
                                     </div>
+
+                                    {/* Bookmark/Save action for individual lecture */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSaveModalTarget({
+                                          type: "video",
+                                          id: vid.id,
+                                          title: vid.title,
+                                          channelName: vid.channelName || currentPlaylistObj.channelName || "YouTube",
+                                          duration: vid.duration,
+                                          thumbnail: vid.thumbnail || `https://i.ytimg.com/vi/${vid.id}/hqdefault.jpg`
+                                        });
+                                        setIsSaveModalOpen(true);
+                                      }}
+                                      className="p-1.5 px-2 rounded-xl text-amber-600 dark:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 transition shrink-0 self-center cursor-pointer flex items-center gap-1 text-[11px] font-bold shadow-2xs group/btn"
+                                      title="Save lecture to folder, category, or Watch Later"
+                                    >
+                                      <Bookmark className="w-3.5 h-3.5 fill-current" />
+                                      <span className="hidden xl:inline text-[10px]">Save</span>
+                                    </button>
 
                                     {/* Active border decorator */}
                                     {isSelected && (
@@ -4475,7 +5091,7 @@ export default function App() {
                         {/* Statistics Navigation Button */}
                         <div className="w-full md:w-auto shrink-0">
                           <button
-                            onClick={() => setActiveTab("stats")}
+                            onClick={() => navigateToApp("stats")}
                             className="w-full md:w-auto bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-100 border border-slate-200 dark:border-zinc-800 hover:border-blue-500 dark:hover:border-blue-500/80 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 font-bold text-xs px-5 py-3.5 rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.03] active:scale-[0.97] flex items-center justify-center gap-2 cursor-pointer"
                           >
                             <TrendingUp className="w-4 h-4 text-blue-500 animate-bounce" style={{ animationDuration: "3s" }} />
@@ -4559,13 +5175,14 @@ export default function App() {
                           </h2>
                         </div>
                       </div>
-                      <button 
-                        onClick={() => { setActiveTab("library"); setSearchQuery(""); }}
+                      <a 
+                        href="/app/lectures"
+                        onClick={(e) => { e.preventDefault(); navigateToApp("library"); setSearchQuery(""); }}
                         className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
                       >
                         <span>View all in Library</span>
                         <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
+                      </a>
                     </div>
 
                     {recentMaterialsList.length === 0 ? (
@@ -4604,15 +5221,17 @@ export default function App() {
                                     setActiveVideoId(firstVid.id);
                                     setActiveVideoTitle(firstVid.title);
                                     setActiveVideoChannel(firstVid.channelName);
+                                    navigateToApp("study", { videoId: firstVid.id, videoTitle: firstVid.title, playlistId: targetPl.id });
+                                  } else {
+                                    navigateToApp("study", { playlistId: targetPl.id });
                                   }
-                                  setActiveTab("study");
                                 }
                               } else {
                                 setActiveSession({ id: item.id, type: "video" });
                                 setActiveVideoId(item.id);
                                 setActiveVideoTitle(item.title);
                                 setActiveVideoChannel(item.channelName);
-                                setActiveTab("study");
+                                navigateToApp("study", { videoId: item.id, videoTitle: item.title });
                               }
                             }}
                             className="group p-3.5 bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 rounded-2xl cursor-pointer hover:border-blue-500/50 hover:shadow-lg transition-all duration-300 flex flex-col justify-between"
@@ -4686,24 +5305,6 @@ export default function App() {
               {activeTab === "study" && (
                 (activeVideoId || activeSession) ? (
                 <div className={`space-y-6 max-w-7xl mx-auto ${focusMode ? "pb-12" : ""}`}>
-                  
-                  {/* Focus Mode top bar */}
-                  {focusMode && (
-                    <div className="bg-slate-900 text-white px-4 py-2 rounded-2xl flex items-center justify-between shadow">
-                      <div className="flex items-center gap-2">
-                        <Flame className="w-4 h-4 text-orange-500 animate-pulse" />
-                        <span className="text-xs font-bold uppercase tracking-wider">FOCUSING ON: {activeVideoTitle}</span>
-                      </div>
-                      <button 
-                        onClick={() => setFocusMode(false)}
-                        className="bg-white/10 hover:bg-white/20 text-white font-bold text-xs px-3 py-1 rounded-lg flex items-center gap-1.5 transition"
-                      >
-                        <EyeOff className="w-3.5 h-3.5" />
-                        Exit Focus Mode
-                      </button>
-                    </div>
-                  )}
-
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                     
                     {/* Centered Large Video Player & Controls */}
@@ -4718,27 +5319,27 @@ export default function App() {
                       </div>
 
                       {/* --- UPGRADED BRAND CONTROL BAR (DESKTOP) --- */}
-                      <div className="hidden md:flex flex-col gap-4 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm select-none">
+                      <div className="hidden md:flex flex-col gap-3.5 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-3.5 px-4 shadow-sm select-none relative z-30">
                         
                         {/* Row 1: Primary Actions, Favorites, and AI Hub Dropdown */}
-                        <div className="flex items-center justify-between gap-4">
-                          {/* Left Group: Navigation + Save + Bookmark + PiP & Lock Screen Controls */}
+                        <div className="flex items-center justify-between gap-3">
+                          {/* Left Group: Navigation + Save + Bookmark */}
                           <div className="flex items-center gap-2 flex-wrap">
                             {activeSession?.type === "playlist" && (
-                              <div className="flex items-center bg-slate-100 dark:bg-zinc-800 p-1 rounded-xl border border-slate-200/40 dark:border-zinc-700/40 shrink-0">
+                              <div className="flex items-center bg-slate-100/90 dark:bg-zinc-800/90 p-1 rounded-full border border-slate-200/60 dark:border-zinc-700/60 shrink-0 shadow-xs">
                                 <button 
                                   onClick={handlePrevVideo}
-                                  className="p-1.5 rounded-lg text-slate-600 dark:text-zinc-400 hover:bg-white dark:hover:bg-zinc-900 hover:text-slate-950 dark:hover:text-white transition disabled:opacity-40"
+                                  className="w-7 h-7 rounded-full flex items-center justify-center text-slate-600 dark:text-zinc-400 hover:bg-white dark:hover:bg-zinc-900 hover:text-slate-950 dark:hover:text-white transition-all duration-200 disabled:opacity-40 active:scale-95"
                                   title="Previous Video"
                                 >
-                                  <ChevronLeft className="w-4 h-4" />
+                                  <ChevronLeft className="w-3.5 h-3.5" />
                                 </button>
                                 <button 
                                   onClick={handleNextVideo}
-                                  className="p-1.5 rounded-lg text-slate-600 dark:text-zinc-400 hover:bg-white dark:hover:bg-zinc-900 hover:text-slate-950 dark:hover:text-white transition disabled:opacity-40"
+                                  className="w-7 h-7 rounded-full flex items-center justify-center text-slate-600 dark:text-zinc-400 hover:bg-white dark:hover:bg-zinc-900 hover:text-slate-950 dark:hover:text-white transition-all duration-200 disabled:opacity-40 active:scale-95"
                                   title="Next Video"
                                 >
-                                  <ChevronRight className="w-4 h-4" />
+                                  <ChevronRight className="w-3.5 h-3.5" />
                                 </button>
                               </div>
                             )}
@@ -4746,115 +5347,55 @@ export default function App() {
                             {/* Save Lecture Pill Button */}
                             <button
                               onClick={handleToggleActiveVideoFavorite}
-                              className={`h-11 px-4 rounded-xl text-xs font-bold flex items-center gap-2 transition duration-200 ${
+                              className={`h-9 px-4 rounded-full text-xs font-semibold flex items-center gap-2 transition-all duration-200 active:scale-95 shadow-xs ${
                                 favorites.videos.includes(activeVideoId)
-                                  ? "bg-red-500 text-white shadow hover:bg-red-600"
-                                  : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700"
+                                  ? "bg-rose-500 hover:bg-rose-600 text-white shadow-rose-500/20"
+                                  : "bg-slate-50 dark:bg-zinc-800/90 border border-slate-200 dark:border-zinc-750 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700 hover:border-slate-300 dark:hover:border-zinc-650"
                               }`}
-                              title="Save Lecture"
+                              title="Favorite Lecture"
                             >
-                              <Heart className={`w-4 h-4 ${favorites.videos.includes(activeVideoId) ? "fill-current" : ""}`} />
-                              <span>{favorites.videos.includes(activeVideoId) ? "Saved" : "Save"}</span>
+                              <Heart className={`w-3.5 h-3.5 transition-transform duration-200 ${favorites.videos.includes(activeVideoId) ? "fill-current scale-110" : ""}`} />
+                              <span>{favorites.videos.includes(activeVideoId) ? "Favorited" : "Favorite"}</span>
+                            </button>
+
+                            {/* Bookmark / Folder / Watch Later Button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSaveModalTarget({
+                                  type: activeSession?.type === "playlist" ? "playlist" : "video",
+                                  id: activeVideoId,
+                                  title: activeVideoTitle || "Lecture",
+                                  channelName: activeVideoChannel || "YouTube",
+                                  thumbnail: `https://i.ytimg.com/vi/${activeVideoId}/hqdefault.jpg`
+                                });
+                                setIsSaveModalOpen(true);
+                              }}
+                              className="h-9 px-4 rounded-full text-xs font-semibold flex items-center gap-2 transition-all duration-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 dark:border-amber-500/30 text-amber-700 dark:text-amber-300 cursor-pointer shadow-xs active:scale-95"
+                              title="Save lecture or playlist to folder, category, or Watch Later"
+                            >
+                              <Bookmark className="w-3.5 h-3.5 fill-current" />
+                              <span>Save to Folder</span>
                             </button>
                           </div>
 
                           {/* Right Group: AI Notes split hub & complete lesson buttons */}
                           <div className="flex items-center gap-2.5">
-                            {/* AI Split Options Dropdown */}
-                            <div className="relative">
-                              <button 
-                                onClick={() => setActiveAiDropdown(prev => !prev)}
-                                className="relative group p-[3px] rounded-full bg-purple-200/70 dark:bg-purple-950/60 border border-purple-300/70 dark:border-purple-600/40 shadow-[0_4px_22px_rgba(147,51,234,0.3)] hover:shadow-[0_6px_28px_rgba(168,85,247,0.5)] transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.02] shrink-0"
-                                title="AI Assistant Study Hub"
-                              >
-                                <div className="relative overflow-hidden rounded-full px-5 py-2 sm:px-6 sm:py-2.5 bg-gradient-to-r from-[#601fd1] via-[#7e29ea] to-[#6d21d3] dark:from-[#6b21a8] dark:via-[#8b5cf6] dark:to-[#7c3aed] flex items-center gap-2 text-white font-bold text-xs sm:text-sm tracking-wide">
-                                  {/* Glossy top highlight */}
-                                  <span className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/25 via-white/5 to-transparent pointer-events-none rounded-t-full" />
-                                  {/* Center bottom light glow beam from image */}
-                                  <span className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 w-20 h-5 bg-white/50 dark:bg-white/60 rounded-full blur-[6px] pointer-events-none group-hover:scale-125 transition-transform duration-300" />
-                                  <span className="absolute inset-0 bg-radial from-white/15 via-transparent to-transparent opacity-60 pointer-events-none" />
-
-                                  <span className="relative z-10 font-bold drop-shadow-xs">AI Notes Hub</span>
-                                  <div className="relative z-10 flex items-center gap-1">
-                                    <Sparkles className="w-3.5 h-3.5 fill-white text-white drop-shadow-xs group-hover:rotate-12 transition-transform duration-300" />
-                                    <ChevronDown className="w-3 h-3 text-purple-200 group-hover:translate-y-0.5 transition-transform" />
-                                  </div>
-                                </div>
-                              </button>
-
-                              {activeAiDropdown && (
-                                <>
-                                  <div className="fixed inset-0 z-40" onClick={() => setActiveAiDropdown(false)} />
-                                  <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl z-50 p-2 py-2.5 animate-in fade-in slide-in-from-top-2 duration-150">
-                                    <div className="px-3 py-1.5 border-b border-slate-100 dark:border-zinc-850 mb-1.5">
-                                      <span className="text-[10px] font-black uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-1">
-                                        <Sparkles className="w-3 h-3" /> CHOOSE AI COGNITIVE MODEL
-                                      </span>
-                                    </div>
-                                    <button
-                                      onClick={() => {
-                                        setAiCompanionProps({ initialTab: "hub", initialMaterialId: "short" });
-                                        setAiPanelOpen(true);
-                                        setActiveAiDropdown(false);
-                                      }}
-                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
-                                    >
-                                      <span>⚡ Summarize Lecture</span>
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setAiCompanionProps({ initialTab: "hub", initialMaterialId: "flashcards" });
-                                        setAiPanelOpen(true);
-                                        setActiveAiDropdown(false);
-                                      }}
-                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
-                                    >
-                                      <span>🎴 Flashcards Set</span>
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setAiCompanionProps({ initialTab: "quiz" });
-                                        setAiPanelOpen(true);
-                                        setActiveAiDropdown(false);
-                                      }}
-                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
-                                    >
-                                      <span>📝 Quiz Me</span>
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setAiCompanionProps({ initialTab: "chat", initialChatMessage: "Please explain the key concepts of this lecture simply and concisely for a beginner." });
-                                        setAiPanelOpen(true);
-                                        setActiveAiDropdown(false);
-                                      }}
-                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
-                                    >
-                                      <span>🧠 Explain Simply</span>
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setAiCompanionProps({ initialTab: "hub", initialMaterialId: "revision" });
-                                        setAiPanelOpen(true);
-                                        setActiveAiDropdown(false);
-                                      }}
-                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
-                                    >
-                                      <span>📚 Generate Revision Notes</span>
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setAiCompanionProps({ initialTab: "chat", initialChatMessage: "" });
-                                        setAiPanelOpen(true);
-                                        setActiveAiDropdown(false);
-                                      }}
-                                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/30 dark:hover:text-purple-300 transition flex items-center gap-2"
-                                    >
-                                      <span>💬 Ask AI Chat Companion</span>
-                                    </button>
-                                  </div>
-                                </>
-                              )}
-                            </div>
+                            {/* AI Notes Hub Button */}
+                            <button 
+                              onClick={() => {
+                                setAiCompanionProps({});
+                                setAiPanelOpen(true);
+                              }}
+                              className="relative group p-[2px] rounded-full bg-gradient-to-r from-purple-500/40 via-indigo-500/40 to-purple-500/40 hover:from-purple-500/60 hover:to-indigo-500/60 shadow-sm hover:shadow-purple-500/20 transition-all duration-200 cursor-pointer active:scale-95 shrink-0"
+                              title="Open AI Notes Hub"
+                            >
+                              <div className="relative overflow-hidden rounded-full h-9 px-4.5 bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 dark:from-purple-600 dark:via-purple-700 dark:to-indigo-500 flex items-center gap-2 text-white font-semibold text-xs tracking-wide">
+                                <span className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/25 via-white/5 to-transparent pointer-events-none rounded-t-full" />
+                                <Sparkles className="relative z-10 w-3.5 h-3.5 text-purple-100 group-hover:rotate-12 transition-transform duration-300" />
+                                <span className="relative z-10 font-bold drop-shadow-xs">AI Notes Hub</span>
+                              </div>
+                            </button>
 
                             {/* Progress Aware Complete Button with full interactive states */}
                             <button 
@@ -4873,28 +5414,28 @@ export default function App() {
                                 }, 1200);
                               }}
                               disabled={completingState === 'saving' || isCurrentVideoCompleted}
-                              className={`font-extrabold text-xs h-11 px-4.5 rounded-xl flex items-center gap-2 transition duration-200 shrink-0 ${
+                              className={`font-semibold text-xs h-9 px-4.5 rounded-full flex items-center gap-2 transition-all duration-200 shrink-0 shadow-xs active:scale-95 ${
                                 completingState === 'saving'
-                                  ? "bg-emerald-600/25 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 cursor-wait"
+                                  ? "bg-emerald-600/20 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 cursor-wait"
                                   : (completingState === 'completed' || isCurrentVideoCompleted)
-                                    ? "bg-emerald-600 text-white shadow shadow-emerald-500/25 cursor-default"
-                                    : "bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm hover:shadow active:scale-[0.97]"
+                                    ? "bg-emerald-600 text-white shadow-emerald-500/20 cursor-default"
+                                    : "bg-emerald-600 hover:bg-emerald-700 text-white hover:shadow-sm"
                               }`}
                               title={isCurrentVideoCompleted ? "Lecture completed" : "Mark lecture as finished"}
                             >
                               {completingState === 'saving' ? (
                                 <>
-                                  <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
-                                  <span>Saving Progress...</span>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500" />
+                                  <span>Saving...</span>
                                 </>
                               ) : (completingState === 'completed' || isCurrentVideoCompleted) ? (
                                 <>
-                                  <Check className="w-4 h-4 text-white stroke-[3px] animate-pulse" />
+                                  <Check className="w-3.5 h-3.5 text-white stroke-[2.5px]" />
                                   <span>Completed</span>
                                 </>
                               ) : (
                                 <>
-                                  <Check className="w-4 h-4 text-emerald-100" />
+                                  <Check className="w-3.5 h-3.5 text-emerald-100 stroke-[2.5px]" />
                                   <span>Mark Complete</span>
                                 </>
                               )}
@@ -4905,51 +5446,110 @@ export default function App() {
                         <div className="h-[1px] bg-slate-100 dark:bg-zinc-800/80" />
 
                         {/* Row 2: Focus Controls, Speed selection, and View Modes */}
-                        <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center justify-between gap-3">
                           {/* Left Group: Focus Mode Control */}
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => setFocusMode(p => !p)}
-                              className={`h-11 px-4 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 ${
+                              className={`h-9 px-4 rounded-full border text-xs font-semibold transition-all duration-200 flex items-center gap-1.5 shadow-xs active:scale-95 ${
                                 focusMode 
-                                  ? "bg-orange-500 border-transparent text-white hover:bg-orange-600 shadow shadow-orange-500/10" 
-                                  : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700"
+                                  ? "bg-orange-500 border-transparent text-white hover:bg-orange-600 shadow-orange-500/20" 
+                                  : "bg-slate-50 dark:bg-zinc-800/90 border border-slate-200 dark:border-zinc-750 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700 hover:border-slate-300 dark:hover:border-zinc-650"
                               }`}
                             >
-                              <Flame className={`w-4 h-4 ${focusMode ? "text-orange-200 animate-pulse" : "text-orange-500"}`} />
+                              <Flame className={`w-3.5 h-3.5 ${focusMode ? "text-orange-200 animate-pulse" : "text-orange-500"}`} />
                               <span>Focus Mode</span>
                             </button>
                           </div>
 
                           {/* Right Group: Playback Speed Chips, View toggles & More Button */}
-                          <div className="flex items-center gap-3">
-                            {/* Playback speed segmented chips */}
-                            <div className="flex items-center bg-slate-100 dark:bg-zinc-850 p-1 rounded-xl border border-slate-200/40 dark:border-zinc-800/80 select-none">
-                              <span className="text-[10px] uppercase font-black px-2 text-slate-400 dark:text-zinc-500">SPEED</span>
-                              {[0.75, 1, 1.25, 1.5, 2].map((s) => (
-                                <button
-                                  key={s}
-                                  onClick={() => handleSettingChange("playbackSpeed", s)}
-                                  className={`px-2.5 py-1 rounded-lg text-xs font-extrabold transition ${
-                                    settings.playbackSpeed === s
-                                      ? "bg-white dark:bg-zinc-700 text-blue-600 dark:text-zinc-50 shadow-sm"
-                                      : "text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200"
-                                  }`}
-                                >
-                                  {s}x
-                                </button>
-                              ))}
+                          <div className="flex items-center gap-2.5">
+                            {/* Playback speed dropdown */}
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSpeedDropdownOpen(p => !p);
+                                  setShowMoreMobileMenu(false);
+                                }}
+                                className={`h-9 px-3.5 rounded-full border text-xs font-semibold flex items-center gap-1.5 transition-all duration-200 active:scale-95 shadow-xs cursor-pointer ${
+                                  speedDropdownOpen
+                                    ? "bg-blue-50 border-blue-400/80 text-blue-700 dark:bg-blue-950/50 dark:border-blue-600/80 dark:text-blue-300 shadow-blue-500/10"
+                                    : "bg-slate-50 dark:bg-zinc-800/90 border-slate-200 dark:border-zinc-750 text-slate-700 dark:text-zinc-250 hover:bg-slate-100 dark:hover:bg-zinc-700 hover:border-slate-300 dark:hover:border-zinc-650"
+                                }`}
+                                title="Change Playback Speed"
+                                aria-label="Playback Speed"
+                              >
+                                <Gauge className={`w-3.5 h-3.5 ${speedDropdownOpen ? "text-blue-600 dark:text-blue-400" : "text-blue-500 dark:text-blue-400"}`} />
+                                <span className="font-semibold text-xs tracking-tight text-slate-800 dark:text-zinc-100">{settings.playbackSpeed}x</span>
+                                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 dark:text-zinc-400 transition-transform duration-200 ${speedDropdownOpen ? "rotate-180 text-blue-600 dark:text-blue-400" : ""}`} />
+                              </button>
+
+                              {speedDropdownOpen && (
+                                <>
+                                  <div 
+                                    className="fixed inset-0 z-45" 
+                                    onClick={() => setSpeedDropdownOpen(false)} 
+                                  />
+                                  <div className="absolute right-0 bottom-full mb-2.5 w-48 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl z-50 p-1.5 text-left animate-in fade-in slide-in-from-bottom-2 duration-150 select-none">
+                                    <div className="px-3 py-1.5 border-b border-slate-100 dark:border-zinc-800/80 mb-1 flex items-center justify-between">
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">PLAYBACK SPEED</span>
+                                      <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 px-1.5 py-0.5 rounded-full border border-blue-200/50 dark:border-blue-800/50">{settings.playbackSpeed}x</span>
+                                    </div>
+                                    <div className="space-y-0.5">
+                                      {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((s) => {
+                                        const isCurrent = settings.playbackSpeed === s;
+                                        return (
+                                          <button
+                                            key={s}
+                                            type="button"
+                                            onClick={() => {
+                                              handleSettingChange("playbackSpeed", s);
+                                              setSpeedDropdownOpen(false);
+                                            }}
+                                            className={`w-full text-left px-3 py-1.5 rounded-full text-xs font-semibold transition-all duration-150 flex items-center justify-between cursor-pointer active:scale-95 ${
+                                              isCurrent
+                                                ? "bg-blue-600 text-white shadow-xs font-bold"
+                                                : "text-slate-700 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-800/80"
+                                            }`}
+                                          >
+                                            <span className="flex items-center gap-1.5">
+                                              <span>{s}x</span>
+                                              {s === 1 && (
+                                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                                                  isCurrent 
+                                                    ? "bg-white/25 text-white" 
+                                                    : "bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400"
+                                                }`}>
+                                                  Normal
+                                                </span>
+                                              )}
+                                            </span>
+                                            {isCurrent && (
+                                              <Check className="w-3.5 h-3.5 text-white stroke-[2.5px]" />
+                                            )}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                </>
+                              )}
                             </div>
 
                             {/* Standard View toggles */}
-                            <div className="flex items-center gap-1 bg-slate-50 dark:bg-zinc-850 p-1 rounded-xl border border-slate-200 dark:border-zinc-800">
+                            <div className="flex items-center gap-1 bg-slate-100/90 dark:bg-zinc-800/90 p-1 rounded-full border border-slate-200/60 dark:border-zinc-700/60 shadow-xs">
                               {/* Wide / Theatre toggle */}
                               <button
                                 onClick={() => setTheatreMode(p => !p)}
-                                className={`p-2 rounded-lg transition ${theatreMode ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400" : "text-slate-500 hover:bg-slate-150/40 dark:text-zinc-400 dark:hover:bg-zinc-800"}`}
+                                className={`h-7 w-7 rounded-full flex items-center justify-center transition-all duration-200 active:scale-95 ${
+                                  theatreMode 
+                                    ? "bg-indigo-500 text-white shadow-xs" 
+                                    : "text-slate-500 hover:bg-white dark:text-zinc-400 dark:hover:bg-zinc-700 hover:text-slate-900 dark:hover:text-white"
+                                }`}
                                 title="Toggle Wide Theatre Mode"
                               >
-                                <Maximize2 className="w-4 h-4" />
+                                <Maximize2 className="w-3.5 h-3.5" />
                               </button>
 
                               {/* True Screen Fullscreen */}
@@ -4965,31 +5565,29 @@ export default function App() {
                                     }
                                   }
                                 }}
-                                className="p-2 rounded-lg text-slate-500 hover:bg-slate-150/40 dark:text-zinc-400 dark:hover:bg-zinc-800 transition"
+                                className="h-7 w-7 rounded-full flex items-center justify-center text-slate-500 hover:bg-white dark:text-zinc-400 dark:hover:bg-zinc-700 hover:text-slate-900 dark:hover:text-white transition-all duration-200 active:scale-95"
                                 title="Lecture Fullscreen"
                               >
-                                <Tv className="w-4 h-4" />
+                                <Tv className="w-3.5 h-3.5" />
                               </button>
-
-
                             </div>
 
                             {/* More Actions Dropdown */}
                             <div className="relative">
                               <button
                                 onClick={() => setShowMoreMobileMenu(p => !p)}
-                                className="p-2 rounded-xl border border-slate-200 dark:border-zinc-800 text-slate-600 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-850 transition"
+                                className="h-9 w-9 rounded-full border border-slate-200 dark:border-zinc-750 bg-slate-50 dark:bg-zinc-800/90 flex items-center justify-center text-slate-600 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-700 hover:border-slate-300 dark:hover:border-zinc-650 transition-all duration-200 active:scale-95 shadow-xs"
                                 title="More Actions"
                               >
-                                <MoreVertical className="w-4.5 h-4.5" />
+                                <MoreVertical className="w-4 h-4" />
                               </button>
 
                               {showMoreMobileMenu && (
                                 <>
                                   <div className="fixed inset-0 z-45" onClick={() => setShowMoreMobileMenu(false)} />
-                                  <div className="absolute right-0 mt-2 w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl z-50 p-1.5 py-2 text-left">
-                                    <div className="px-2.5 py-1 border-b border-slate-100 dark:border-zinc-850 mb-1.5">
-                                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-zinc-500">UTILITY CONTROLS</span>
+                                  <div className="absolute right-0 bottom-full mb-2.5 w-52 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl z-50 p-2 text-left animate-in fade-in slide-in-from-bottom-2 duration-150">
+                                    <div className="px-3 py-1 border-b border-slate-100 dark:border-zinc-850 mb-1.5">
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">UTILITY CONTROLS</span>
                                     </div>
                                     <button
                                       onClick={() => {
@@ -4997,7 +5595,7 @@ export default function App() {
                                         toast.success("Link Copied", "Your shareable study room URL is copied.");
                                         setShowMoreMobileMenu(false);
                                       }}
-                                      className="w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-850 transition flex items-center gap-2"
+                                      className="w-full text-left px-3 py-2 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-800 transition flex items-center gap-2.5 active:scale-95"
                                     >
                                       <Share2 className="w-3.5 h-3.5 text-slate-400" />
                                       <span>Share Room</span>
@@ -5019,7 +5617,7 @@ export default function App() {
                                         }
                                         setShowMoreMobileMenu(false);
                                       }}
-                                      className="w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-850 transition flex items-center gap-2"
+                                      className="w-full text-left px-3 py-2 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-800 transition flex items-center gap-2.5 active:scale-95"
                                     >
                                       <Download className="w-3.5 h-3.5 text-slate-400" />
                                       <span>Download Notes</span>
@@ -5029,7 +5627,7 @@ export default function App() {
                                         toast.success("Hotkeys Active", "Press key '?' to view all rapid system hotkeys.");
                                         setShowMoreMobileMenu(false);
                                       }}
-                                      className="w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-850 transition flex items-center gap-2"
+                                      className="w-full text-left px-3 py-2 rounded-full text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-800 transition flex items-center gap-2.5 active:scale-95"
                                     >
                                       <Keyboard className="w-3.5 h-3.5 text-slate-400" />
                                       <span>Keyboard Shortcuts</span>
@@ -5039,7 +5637,7 @@ export default function App() {
                                         toast.success("Issue Submitted", "Player telemetry stream has been flagged.");
                                         setShowMoreMobileMenu(false);
                                       }}
-                                      className="w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/25 transition flex items-center gap-2"
+                                      className="w-full text-left px-3 py-2 rounded-full text-xs font-semibold text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/25 transition flex items-center gap-2.5 active:scale-95"
                                     >
                                       <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
                                       <span>Report Issue</span>
@@ -5053,77 +5651,33 @@ export default function App() {
                       </div>
 
                       {/* --- UPGRADED BRAND CONTROL BAR (MOBILE) --- */}
-                      <div className="md:hidden flex flex-col gap-3 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-3.5 shadow-sm select-none">
+                      <div className="md:hidden flex flex-col gap-3 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-3xl p-3 shadow-sm select-none relative z-30">
                         {/* Row 1: Save, AI Notes Hub, Complete */}
                         <div className="grid grid-cols-3 gap-2">
                           {/* Save Heart Icon */}
                           <button
                             onClick={handleToggleActiveVideoFavorite}
-                            className={`h-12 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black transition duration-200 ${
+                            className={`h-10 rounded-full flex items-center justify-center gap-1.5 text-xs font-bold transition-all duration-200 active:scale-95 shadow-xs ${
                               favorites.videos.includes(activeVideoId)
-                                ? "bg-red-500 text-white"
-                                : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-600 dark:text-zinc-300"
+                                ? "bg-rose-500 text-white shadow-rose-500/20"
+                                : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-700 dark:text-zinc-300"
                             }`}
                           >
-                            <Heart className={`w-4 h-4 ${favorites.videos.includes(activeVideoId) ? "fill-current" : ""}`} />
+                            <Heart className={`w-3.5 h-3.5 ${favorites.videos.includes(activeVideoId) ? "fill-current" : ""}`} />
                             <span>{favorites.videos.includes(activeVideoId) ? "Saved" : "Save"}</span>
                           </button>
 
-                          {/* AI Quick Menu */}
+                          {/* AI Notes Hub Button */}
                           <button
-                            onClick={() => setActiveAiDropdown(prev => !prev)}
-                            className="h-12 bg-purple-600 text-white rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black transition shadow-sm relative"
+                            onClick={() => {
+                              setAiCompanionProps({});
+                              setAiPanelOpen(true);
+                            }}
+                            className="h-10 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-full flex items-center justify-center gap-1.5 text-xs font-bold transition-all duration-200 shadow-sm cursor-pointer active:scale-95"
+                            title="Open AI Notes Hub"
                           >
-                            <Sparkles className="w-4 h-4 text-purple-200" />
+                            <Sparkles className="w-3.5 h-3.5 text-purple-200" />
                             <span>AI Notes</span>
-
-                            {activeAiDropdown && (
-                              <>
-                                <div className="fixed inset-0 z-40" onClick={() => setActiveAiDropdown(false)} />
-                                <div className="absolute left-1/2 -translate-x-1/2 bottom-14 w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-xl z-50 p-1.5 animate-in fade-in zoom-in-95 duration-150 text-left">
-                                  <button
-                                    onClick={() => {
-                                      setAiCompanionProps({ initialTab: "hub", initialMaterialId: "short" });
-                                      setAiPanelOpen(true);
-                                      setActiveAiDropdown(false);
-                                    }}
-                                    className="w-full text-left px-2.5 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/25 transition flex items-center gap-1.5"
-                                  >
-                                    <span>⚡ Summarize Lecture</span>
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setAiCompanionProps({ initialTab: "hub", initialMaterialId: "flashcards" });
-                                      setAiPanelOpen(true);
-                                      setActiveAiDropdown(false);
-                                    }}
-                                    className="w-full text-left px-2.5 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/25 transition flex items-center gap-1.5"
-                                  >
-                                    <span>🎴 Flashcards</span>
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setAiCompanionProps({ initialTab: "quiz" });
-                                      setAiPanelOpen(true);
-                                      setActiveAiDropdown(false);
-                                    }}
-                                    className="w-full text-left px-2.5 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/25 transition flex items-center gap-1.5"
-                                  >
-                                    <span>📝 Quiz Me</span>
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setAiCompanionProps({ initialTab: "chat", initialChatMessage: "Please explain the key concepts of this lecture simply and concisely for a beginner." });
-                                      setAiPanelOpen(true);
-                                      setActiveAiDropdown(false);
-                                    }}
-                                    className="w-full text-left px-2.5 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 hover:bg-purple-50 dark:text-zinc-300 dark:hover:bg-purple-950/25 transition flex items-center gap-1.5"
-                                  >
-                                    <span>🧠 Explain Simply</span>
-                                  </button>
-                                </div>
-                              </>
-                            )}
                           </button>
 
                           {/* Complete Lesson */}
@@ -5143,28 +5697,28 @@ export default function App() {
                               }, 1200);
                             }}
                             disabled={completingState === 'saving' || isCurrentVideoCompleted}
-                            className={`h-12 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black transition ${
+                            className={`h-10 rounded-full flex items-center justify-center gap-1.5 text-xs font-bold transition-all duration-200 active:scale-95 ${
                               completingState === 'saving'
                                 ? "bg-emerald-600/30 text-emerald-600"
                                 : (completingState === 'completed' || isCurrentVideoCompleted)
                                   ? "bg-emerald-600 text-white"
-                                  : "bg-emerald-500 text-white hover:bg-emerald-600"
+                                  : "bg-emerald-600 text-white hover:bg-emerald-700"
                             }`}
                           >
                             {completingState === 'saving' ? (
                               <>
-                                <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500" />
                                 <span>Saving...</span>
                               </>
                             ) : (completingState === 'completed' || isCurrentVideoCompleted) ? (
                               <>
-                                <Check className="w-4 h-4 text-white stroke-[3px] animate-pulse" />
-                                <span>Completed</span>
+                                <Check className="w-3.5 h-3.5 text-white stroke-[2.5px]" />
+                                <span>Done</span>
                               </>
                             ) : (
                               <>
-                                <Check className="w-4 h-4" />
-                                <span>Complete</span>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Done</span>
                               </>
                             )}
                           </button>
@@ -5175,13 +5729,13 @@ export default function App() {
                           {/* Focus Button */}
                           <button
                             onClick={() => setFocusMode(p => !p)}
-                            className={`h-12 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black transition ${
+                            className={`h-10 rounded-full flex items-center justify-center gap-1.5 text-xs font-bold transition-all duration-200 active:scale-95 ${
                               focusMode
                                 ? "bg-orange-500 text-white"
-                                : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-600 dark:text-zinc-300"
+                                : "bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 text-slate-700 dark:text-zinc-300"
                             }`}
                           >
-                            <Flame className={`w-4 h-4 ${focusMode ? "animate-pulse" : ""}`} />
+                            <Flame className={`w-3.5 h-3.5 ${focusMode ? "animate-pulse" : ""}`} />
                             <span>{focusMode ? "Focusing" : "Focus"}</span>
                           </button>
 
@@ -5196,19 +5750,19 @@ export default function App() {
                                 <option key={s} value={s}>{s}x Speed</option>
                               ))}
                             </select>
-                            <div className="h-12 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black text-slate-600 dark:text-zinc-300">
-                              <Clock className="w-4 h-4 text-blue-500" />
-                              <span>Speed {settings.playbackSpeed}x</span>
+                            <div className="h-10 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 rounded-full flex items-center justify-center gap-1.5 text-xs font-bold text-slate-700 dark:text-zinc-300">
+                              <Clock className="w-3.5 h-3.5 text-blue-500" />
+                              <span>{settings.playbackSpeed}x</span>
                             </div>
                           </div>
 
                           {/* Extra bottom sheet action list trigger */}
                           <button
                             onClick={() => setShowMoreMobileMenu(p => !p)}
-                            className="h-12 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 rounded-xl flex flex-col items-center justify-center gap-1 text-[10px] font-black text-slate-600 dark:text-zinc-300"
+                            className="h-10 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-750 rounded-full flex items-center justify-center gap-1.5 text-xs font-bold text-slate-700 dark:text-zinc-300 active:scale-95 transition-all duration-200"
                           >
-                            <MoreVertical className="w-4 h-4" />
-                            <span>More Options</span>
+                            <MoreVertical className="w-3.5 h-3.5" />
+                            <span>More</span>
                           </button>
                         </div>
                       </div>
@@ -5283,15 +5837,39 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* Video Info: Title, Channel and Type placed just below the controls */}
+                      {/* Video Info: Title, Channel, Duration, Publish Date, Views, and Syllabus */}
                       {(() => {
                         const currentVideo = activeSession?.type === "playlist"
                           ? playlists.find(p => p.id === activeSession.id)?.videos.find(v => v.id === activeVideoId)
                           : singleVideos.find(v => v.id === activeSession?.id);
                         
-                        const isLive = currentVideo?.duration === "LIVE";
+                        const hasMetadata = singleVideoMetadata && singleVideoMetadata.id === activeVideoId;
 
-                        if (isSingleVideoDetailsLoading) {
+                        const displayTitle = (hasMetadata && singleVideoMetadata.title && singleVideoMetadata.title !== "YouTube Video" && !singleVideoMetadata.title.startsWith("Loading"))
+                          ? singleVideoMetadata.title
+                          : (activeVideoTitle && !activeVideoTitle.startsWith("Loading")
+                              ? activeVideoTitle
+                              : (currentVideo?.title && !currentVideo.title.startsWith("Loading")
+                                  ? currentVideo.title
+                                  : "Lecture Video"));
+
+                        const displayChannel = (hasMetadata && singleVideoMetadata.channelName && singleVideoMetadata.channelName !== "Unknown Channel" && !singleVideoMetadata.channelName.startsWith("Connecting"))
+                          ? singleVideoMetadata.channelName
+                          : (activeVideoChannel && !activeVideoChannel.startsWith("Connecting")
+                              ? activeVideoChannel
+                              : (currentVideo?.channelName || "YouTube Creator"));
+
+                        const displayDuration = (hasMetadata && singleVideoMetadata.duration && singleVideoMetadata.duration !== "10:00")
+                          ? singleVideoMetadata.duration
+                          : (currentVideo?.duration && currentVideo.duration !== "10:00" ? currentVideo.duration : "");
+
+                        const publishDate = hasMetadata ? singleVideoMetadata.publishDate : "";
+                        const description = hasMetadata ? singleVideoMetadata.description : "";
+                        const tags = hasMetadata ? singleVideoMetadata.tags : [];
+                        const viewCount = hasMetadata ? (singleVideoMetadata as any).viewCount : "";
+
+                        // Only show blank skeleton if we have literally no title or active video id yet
+                        if (!activeVideoId && isSingleVideoDetailsLoading) {
                           return (
                             <div className="bg-slate-50 dark:bg-zinc-900/45 border border-slate-200/60 dark:border-zinc-800/60 rounded-2xl p-4 shadow-sm animate-pulse space-y-3">
                               <div className="h-5 bg-slate-200 dark:bg-zinc-800 rounded-lg w-3/4" />
@@ -5303,23 +5881,38 @@ export default function App() {
                           );
                         }
 
-                        const hasMetadata = singleVideoMetadata && singleVideoMetadata.id === activeVideoId;
-                        const publishDate = hasMetadata ? singleVideoMetadata.publishDate : "";
-                        const description = hasMetadata ? singleVideoMetadata.description : "";
-                        const tags = hasMetadata ? singleVideoMetadata.tags : [];
-
                         return (
                           <div className="bg-slate-50 dark:bg-zinc-900/45 border border-slate-200/60 dark:border-zinc-800/60 rounded-2xl p-4 sm:p-5 shadow-sm relative overflow-hidden space-y-3">
                             <div>
-                              <h1 className="text-base sm:text-lg font-bold text-slate-950 dark:text-zinc-50 leading-snug pr-20" title={activeVideoTitle}>
-                                {activeVideoTitle}
-                              </h1>
+                              <div className="flex items-start justify-between gap-4">
+                                <h1 className="text-base sm:text-lg font-bold text-slate-950 dark:text-zinc-50 leading-snug flex-1" title={displayTitle}>
+                                  {displayTitle}
+                                </h1>
+                                {isSingleVideoDetailsLoading && (
+                                  <span className="shrink-0 inline-flex items-center gap-1.5 text-[10px] font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 border border-blue-200/50 dark:border-blue-800/50 px-2 py-0.5 rounded-full animate-pulse">
+                                    <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                                    <span>Syncing info...</span>
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1.5 flex flex-wrap items-center gap-2">
-                                <span className="font-semibold text-slate-700 dark:text-zinc-300">{activeVideoChannel}</span>
+                                <span className="font-semibold text-slate-700 dark:text-zinc-300">{displayChannel}</span>
                                 <span>•</span>
                                 <span className="text-blue-600 dark:text-blue-400 font-bold uppercase tracking-wider text-[10px]">
                                   {activeSession?.type === "playlist" ? "Playlist Module" : "Single Lecture"}
                                 </span>
+                                {displayDuration && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="text-slate-600 dark:text-zinc-300 font-semibold">{displayDuration}</span>
+                                  </>
+                                )}
+                                {viewCount && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="text-slate-500 dark:text-zinc-400">{viewCount}</span>
+                                  </>
+                                )}
                                 {publishDate && (
                                   <>
                                     <span>•</span>
@@ -5327,6 +5920,51 @@ export default function App() {
                                   </>
                                 )}
                               </p>
+
+                              {/* Quick Actions: Bookmark/Save to Folder & Video Details Modal */}
+                              <div className="flex flex-wrap items-center gap-2 pt-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSaveModalTarget({
+                                      type: activeSession?.type === "playlist" ? "playlist" : "video",
+                                      id: activeVideoId,
+                                      title: displayTitle,
+                                      channelName: displayChannel,
+                                      duration: displayDuration,
+                                      thumbnail: `https://i.ytimg.com/vi/${activeVideoId}/hqdefault.jpg`
+                                    });
+                                    setIsSaveModalOpen(true);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/25 text-xs font-bold transition cursor-pointer"
+                                  title="Save lecture to folder or Watch Later"
+                                >
+                                  <Bookmark className="w-3.5 h-3.5 fill-current" />
+                                  <span>Save to Folder / Watch Later</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDetailsModalVideo({
+                                      id: activeVideoId,
+                                      title: displayTitle,
+                                      channelName: displayChannel,
+                                      duration: displayDuration,
+                                      description: description || "Educational lecture and study syllabus.",
+                                      publishDate,
+                                      viewCount,
+                                      tags,
+                                      thumbnail: `https://i.ytimg.com/vi/${activeVideoId}/hqdefault.jpg`
+                                    });
+                                    setIsDetailsModalOpen(true);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-slate-700 dark:text-zinc-300 text-xs font-bold transition cursor-pointer"
+                                >
+                                  <Info className="w-3.5 h-3.5 text-blue-500" />
+                                  <span>Full Video Details</span>
+                                </button>
+                              </div>
                             </div>
 
                             {/* Academic curriculum tags / topics */}
@@ -5486,17 +6124,6 @@ export default function App() {
 
                       </div>
 
-                      {/* AI Study Companion Section */}
-                      <AIStudyCompanion 
-                        videoId={activeVideoId} 
-                        videoTitle={activeVideoTitle} 
-                        channelName={activeVideoChannel} 
-                        onOpenKeyModal={() => setOnboardingOpen(true)} 
-                        initialTab={aiCompanionProps.initialTab}
-                        initialMaterialId={aiCompanionProps.initialMaterialId}
-                        initialChatMessage={aiCompanionProps.initialChatMessage}
-                      />
-
                     </div>
 
                     {/* Left/Right scrollable Lecture list (Unless inside theatre mode) */}
@@ -5511,9 +6138,35 @@ export default function App() {
                               <BookOpen className="w-4.5 h-4.5 text-blue-500" />
                               Lecture Queue
                             </h2>
-                            <span className="text-[10px] bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 font-bold px-2 py-0.5 rounded-full">
-                              {activeSession?.type === "playlist" ? "Playlist Module" : "Single Video"}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {activeSession?.type === "playlist" && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const plObj = playlists.find(p => p.id === activeSession.id);
+                                    if (plObj) {
+                                      setSaveModalTarget({
+                                        type: "playlist",
+                                        id: plObj.id,
+                                        title: plObj.title,
+                                        channelName: plObj.channelName,
+                                        thumbnail: plObj.thumbnail,
+                                        playlist: plObj
+                                      });
+                                      setIsSaveModalOpen(true);
+                                    }
+                                  }}
+                                  className="px-2 py-0.5 rounded-full text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition flex items-center gap-1 cursor-pointer"
+                                  title="Save entire playlist to folder or Watch Later"
+                                >
+                                  <Bookmark className="w-3 h-3 fill-current" />
+                                  <span>Save</span>
+                                </button>
+                              )}
+                              <span className="text-[10px] bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 font-bold px-2 py-0.5 rounded-full">
+                                {activeSession?.type === "playlist" ? "Playlist Module" : "Single Video"}
+                              </span>
+                            </div>
                           </div>
 
                           {/* --- PROGRESSIVE LOADING STATUS PANEL --- */}
@@ -5661,7 +6314,28 @@ export default function App() {
                                     <div className="flex-1 space-y-1">
                                       <div className="text-[9px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest flex items-center justify-between">
                                         <span>LECTURE {v.lectureNumber || idx + 1}</span>
-                                        {v.completed && <CheckCircle className="w-3 h-3 text-emerald-500 fill-current bg-white dark:bg-zinc-900 rounded-full" />}
+                                        <div className="flex items-center gap-1.5">
+                                          {v.completed && <CheckCircle className="w-3 h-3 text-emerald-500 fill-current bg-white dark:bg-zinc-900 rounded-full" />}
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setSaveModalTarget({
+                                                type: "video",
+                                                id: v.id,
+                                                title: v.title,
+                                                channelName: v.channelName || "YouTube",
+                                                duration: v.duration,
+                                                thumbnail: v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`
+                                              });
+                                              setIsSaveModalOpen(true);
+                                            }}
+                                            className="p-1 rounded-md text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition cursor-pointer"
+                                            title="Save lecture to folder, category, or Watch Later"
+                                          >
+                                            <Bookmark className="w-3 h-3 fill-current" />
+                                          </button>
+                                        </div>
                                       </div>
                                       <div className={`text-xs font-bold line-clamp-2 ${isSelected ? "text-slate-950 dark:text-white" : "text-slate-700 dark:text-zinc-300"}`}>
                                         {v.title}
@@ -5706,20 +6380,22 @@ export default function App() {
                       </p>
                     </div>
                     <div className="flex items-center justify-center gap-3 flex-wrap pt-2">
-                      <button
-                        onClick={() => setActiveTab("library")}
+                      <a
+                        href="/app/lectures"
+                        onClick={(e) => { e.preventDefault(); navigateToApp("library"); }}
                         className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition flex items-center gap-2 shadow-sm cursor-pointer"
                       >
                         <Folder className="w-4 h-4" />
                         <span>Course Library</span>
-                      </button>
-                      <button
-                        onClick={() => setActiveTab("home")}
+                      </a>
+                      <a
+                        href="/app/dashboard"
+                        onClick={(e) => { e.preventDefault(); navigateToApp("home"); }}
                         className="px-5 py-2.5 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 text-xs font-bold transition flex items-center gap-2 cursor-pointer"
                       >
                         <Home className="w-4 h-4" />
                         <span>Go to Dashboard</span>
-                      </button>
+                      </a>
                     </div>
                   </div>
                 )
@@ -6080,7 +6756,7 @@ export default function App() {
               {/* DEVELOPER PROFILE TAB */}
               {activeTab === "developer" && (
                 <DeveloperProfile 
-                  onBackToHome={() => setActiveTab("home")} 
+                  onBackToHome={() => navigateToApp("home")} 
                   soundEnabled={soundEnabled}
                   setSoundEnabled={setSoundEnabled}
                 />
@@ -6106,7 +6782,7 @@ export default function App() {
                   setHasGeminiKeyInState={setHasGeminiKeyInState}
                   hasGeminiKeyInState={hasGeminiKeyInState}
                   toast={toast}
-                  onNavigateTab={(tab) => setActiveTab(tab)}
+                  onNavigateTab={(tab) => navigateToApp(tab)}
                 />
               )}
 
@@ -6114,7 +6790,14 @@ export default function App() {
               {activeTab === "library" && (
                 <div className="max-w-7xl mx-auto py-2">
                   <CourseLibrary 
-                    onSelectLecture={(videoId, title, channel, playlistInfo, switchToStudyTab) => {
+                    initialSubjectSlug={activeSubjectSlug}
+                    onSelectSubject={(subj) => {
+                      const sSlug = subj ? slugify(subj.subjectName) : undefined;
+                      setActiveSubjectSlug(sSlug);
+                      setActiveLectureSlug(undefined);
+                      navigateToApp("library", { subjectSlug: sSlug });
+                    }}
+                    onSelectLecture={(videoId, title, channel, playlistInfo, switchToStudyTab, subjectSlug) => {
                       if (playlistInfo && playlistInfo.videos && playlistInfo.videos.length > 0) {
                         const existingIndex = playlists.findIndex(p => p.id === playlistInfo.id);
                         let updatedPlaylists = [...playlists];
@@ -6149,11 +6832,39 @@ export default function App() {
                       }
 
                       if (switchToStudyTab !== false) {
-                        setActiveTab("study");
+                        const sSlug = subjectSlug || activeSubjectSlug;
+                        const lSlug = slugify(title || "lecture");
+                        setActiveSubjectSlug(sSlug);
+                        setActiveLectureSlug(lSlug);
+                        navigateToApp("study", {
+                          subjectSlug: sSlug,
+                          lectureSlug: lSlug,
+                          videoId,
+                          videoTitle: title,
+                          playlistId: playlistInfo?.id
+                        });
                       }
                     }} 
                     onOpenImportUrl={() => {
-                      setActiveTab("home");
+                      navigateToApp("home");
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* LECTURE NOTES TAB */}
+              {activeTab === "notes" && (
+                <div className="max-w-7xl mx-auto py-2">
+                  <NotesHub 
+                    onOpenLecture={(vidId, title, ch) => {
+                      setActiveVideoId(vidId);
+                      if (title) setActiveVideoTitle(title);
+                      if (ch) setActiveVideoChannel(ch);
+                      setActiveSession({ id: vidId, type: "video" });
+                      navigateToApp("study", { videoId: vidId, videoTitle: title });
+                    }}
+                    onNavigateToLibrary={() => {
+                      navigateToApp("library");
                     }}
                   />
                 </div>
@@ -6187,11 +6898,12 @@ export default function App() {
 
 
 
-      {/* 4. Mobile Bottom Navigation bar (Only 5 Icons with labels) - Hidden during Focus Mode */}
+      {/* 4. Mobile Bottom Navigation bar - Hidden during Focus Mode */}
       {!focusMode && (
         <nav className="sticky bottom-0 z-40 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border-t border-slate-200 dark:border-zinc-900 py-1.5 px-2 flex md:hidden items-center justify-around select-none shadow-xl">
-          <button
-            onClick={() => { setActiveTab("home"); setSearchQuery(""); }}
+          <a
+            href="/app/dashboard"
+            onClick={(e) => { e.preventDefault(); navigateToApp("home"); setSearchQuery(""); }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "home" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
@@ -6200,10 +6912,11 @@ export default function App() {
           >
             <Home className="w-5 h-5 stroke-[2.25]" />
             <span className="text-[10px] mt-0.5">Home</span>
-          </button>
+          </a>
 
-          <button
-            onClick={() => { setActiveTab("study"); setSearchQuery(""); }}
+          <a
+            href="/app/study"
+            onClick={(e) => { e.preventDefault(); navigateToApp("study"); setSearchQuery(""); }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "study" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
@@ -6212,10 +6925,11 @@ export default function App() {
           >
             <Tv className="w-5 h-5 stroke-[2.25]" />
             <span className="text-[10px] mt-0.5">Study</span>
-          </button>
+          </a>
 
-          <button
-            onClick={() => { setActiveTab("library"); setSearchQuery(""); }}
+          <a
+            href="/app/lectures"
+            onClick={(e) => { e.preventDefault(); navigateToApp("library"); setSearchQuery(""); }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "library" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
@@ -6223,11 +6937,12 @@ export default function App() {
             }`}
           >
             <Folder className="w-5 h-5 stroke-[2.25]" />
-            <span className="text-[10px] mt-0.5">Library</span>
-          </button>
+            <span className="text-[10px] mt-0.5">Lectures</span>
+          </a>
 
-          <button
-            onClick={() => { setActiveTab("planner"); setSearchQuery(""); }}
+          <a
+            href="/app/planner"
+            onClick={(e) => { e.preventDefault(); navigateToApp("planner"); setSearchQuery(""); }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "planner" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
@@ -6235,20 +6950,41 @@ export default function App() {
             }`}
           >
             <Calendar className="w-5 h-5 stroke-[2.25]" />
-            <span className="text-[10px] mt-0.5">Tasks</span>
-          </button>
+            <span className="text-[10px] mt-0.5">Planner</span>
+          </a>
 
-          <button
-            onClick={() => { setActiveTab("settings"); setSearchQuery(""); }}
+          <a
+            href="/app/settings"
+            onClick={(e) => { 
+              e.preventDefault(); 
+              navigateToApp("settings"); 
+              setSearchQuery(""); 
+            }}
             className={`flex flex-col items-center justify-center min-h-[48px] min-w-[56px] px-2 py-1 rounded-2xl transition-all cursor-pointer relative ${
               activeTab === "settings" && !searchQuery 
                 ? "text-blue-600 dark:text-blue-400 font-extrabold scale-105" 
                 : "text-slate-500 dark:text-zinc-400 font-bold hover:text-slate-900 dark:hover:text-zinc-200 opacity-80"
             }`}
           >
-            <User className="w-5 h-5 stroke-[2.25]" />
+            {currentUser?.photoURL ? (
+              <div className="relative">
+                <img
+                  src={currentUser.photoURL}
+                  alt={currentUser.displayName || "User Profile"}
+                  className="w-6 h-6 rounded-full object-cover border-2 border-blue-500/80 dark:border-blue-400/80 shadow-xs"
+                  referrerPolicy="no-referrer"
+                />
+                <span className="w-2 h-2 rounded-full bg-emerald-500 absolute -bottom-0.5 -right-0.5 ring-1 ring-white dark:ring-zinc-900" />
+              </div>
+            ) : currentUser ? (
+              <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-[10px] flex items-center justify-center shadow-xs">
+                {(currentUser.displayName || currentUser.email || "G").charAt(0).toUpperCase()}
+              </div>
+            ) : (
+              <User className="w-5 h-5 stroke-[2.25]" />
+            )}
             <span className="text-[10px] mt-0.5">Profile</span>
-          </button>
+          </a>
         </nav>
       )}
 
@@ -6349,101 +7085,6 @@ export default function App() {
                 initialMaterialId={aiCompanionProps.initialMaterialId}
                 initialChatMessage={aiCompanionProps.initialChatMessage}
               />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 10. Sticky Bottom Study Bar */}
-      {scrolledPast && activeTab === "study" && (
-        <div 
-          id="sticky-study-bar"
-          className={`fixed bottom-0 right-0 ${
-            focusMode ? "left-0" : sidebarCollapsed ? "left-0 md:left-[72px]" : "left-0 md:left-[260px]"
-          } bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border-t border-slate-200 dark:border-zinc-800 shadow-xl py-3 px-4 z-40 transition-all duration-300 animate-in slide-in-from-bottom`}
-        >
-          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-            {/* Left Column: Video thumbnail, Title, & Progress Indicator */}
-            <div className="flex items-center gap-3 min-w-0 flex-1">
-              <div className="hidden sm:block w-14 aspect-video rounded-lg bg-black overflow-hidden relative border border-slate-200 dark:border-zinc-800 shrink-0">
-                <img 
-                  src={`https://img.youtube.com/vi/${activeVideoId}/mqdefault.jpg`} 
-                  alt="Current Study Video" 
-                  className="w-full h-full object-cover"
-                  referrerPolicy="no-referrer"
-                />
-              </div>
-              <div className="min-w-0">
-                <div className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">
-                  {activeVideoTitle || "Untitled Lecture"}
-                </div>
-                <div className="text-[10px] text-slate-500 dark:text-zinc-400 font-medium mt-0.5 flex items-center gap-1">
-                  <span>{activeVideoChannel || "LearnStudy Instructor"}</span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-zinc-750" />
-                  <span className="text-blue-500 font-extrabold">{settings.playbackSpeed}x Speed</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Right Column: Key Compact Buttons */}
-            <div className="flex items-center gap-2 shrink-0">
-              {/* Favorites Save Button */}
-              <button
-                onClick={handleToggleActiveVideoFavorite}
-                className={`p-2 rounded-xl transition ${favorites.videos.includes(activeVideoId) ? "text-red-500 bg-red-50 dark:bg-red-950/20" : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"}`}
-                title="Save Lecture"
-              >
-                <Heart className={`w-5 h-5 ${favorites.videos.includes(activeVideoId) ? "fill-current" : ""}`} />
-              </button>
-
-              {/* AI Hub Shortcuts */}
-              <button 
-                onClick={() => {
-                  setAiCompanionProps({ initialTab: "hub" });
-                  setAiPanelOpen(true);
-                }}
-                className="bg-purple-600 hover:bg-purple-700 text-white font-black text-xs h-9 px-3.5 rounded-xl flex items-center gap-1.5 transition shadow-sm shrink-0"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-purple-200" />
-                <span>AI Companion</span>
-              </button>
-
-              {/* Complete Lesson Button */}
-              <button 
-                onClick={() => {
-                  if (completingState !== 'idle' || isCurrentVideoCompleted) return;
-                  setCompletingState('saving');
-                  setTimeout(() => {
-                    if (activeSession) {
-                      handleProgressUpdate(9999, 10000); // Trigger finish
-                    }
-                    setCompletingState('completed');
-                    toast.success("Lesson Completed", "Great job! Lecture marked finished.");
-                    setTimeout(() => {
-                      setCompletingState('idle');
-                    }, 1500);
-                  }, 1200);
-                }}
-                disabled={completingState === 'saving' || isCurrentVideoCompleted}
-                className={`font-black text-xs h-9 px-3.5 rounded-xl flex items-center gap-1.5 transition shrink-0 ${
-                  completingState === 'saving'
-                    ? "bg-emerald-600/30 text-emerald-600"
-                    : (completingState === 'completed' || isCurrentVideoCompleted)
-                      ? "bg-emerald-600 text-white"
-                      : "bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm"
-                }`}
-              >
-                {completingState === 'saving' ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (completingState === 'completed' || isCurrentVideoCompleted) ? (
-                  <Check className="w-3.5 h-3.5 text-white stroke-[3px] animate-pulse" />
-                ) : (
-                  <Check className="w-3.5 h-3.5" />
-                )}
-                <span className="hidden md:inline">
-                  {completingState === 'saving' ? "Saving..." : (completingState === 'completed' || isCurrentVideoCompleted) ? "Completed" : "Complete"}
-                </span>
-              </button>
             </div>
           </div>
         </div>
@@ -6597,6 +7238,46 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Save to Folders & Categories / Watch Later Modal */}
+      <SaveToFolderModal
+        isOpen={isSaveModalOpen}
+        onClose={() => setIsSaveModalOpen(false)}
+        target={saveModalTarget}
+        onSaved={() => {
+          setPlaylists(Storage.getPlaylists());
+          setSingleVideos(Storage.getSingleVideos());
+        }}
+      />
+
+      {/* Full Video Details & Syllabus Modal */}
+      <VideoDetailsModal
+        isOpen={isDetailsModalOpen}
+        onClose={() => setIsDetailsModalOpen(false)}
+        video={detailsModalVideo}
+        onStartStudy={(vidId) => {
+          setActiveVideoId(vidId);
+          navigateToApp("study", { videoId: vidId });
+        }}
+        onOpenSaveModal={(vid) => {
+          setSaveModalTarget({
+            type: "video",
+            id: vid.id,
+            title: vid.title,
+            channelName: vid.channelName,
+            duration: vid.duration,
+            thumbnail: vid.thumbnail
+          });
+          setIsSaveModalOpen(true);
+        }}
+        onSeekTo={(seconds) => {
+          if (playerRef.current) {
+            try {
+              playerRef.current.seekTo(seconds, true);
+            } catch {}
+          }
+        }}
+      />
 
       {/* Feedback Modal */}
       <FeedbackModal 

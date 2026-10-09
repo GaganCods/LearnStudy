@@ -251,6 +251,17 @@ export const Storage = {
     notifyStorageMutation();
   },
 
+  deleteNoteForVideo(videoId: string) {
+    if (userAccountSync.hasActiveUser()) {
+      userAccountSync.saveNoteForVideo(videoId, "");
+      return;
+    }
+    const notes = this.getNotes();
+    delete notes[videoId];
+    localStorage.setItem("studytube_guest_notes", JSON.stringify(notes));
+    notifyStorageMutation();
+  },
+
   // Bookmarks
   getBookmarks(): Record<string, Bookmark[]> {
     if (userAccountSync.hasActiveUser()) {
@@ -752,6 +763,282 @@ export const Storage = {
 
     this.saveCustomSubject(importSubj);
     return importSubj;
+  },
+
+  // --- USER FOLDERS & CATEGORIES SYSTEM (Save / Bookmark / Watch Later) ---
+  getOrCreateWatchLaterSubject(): CustomSubjectFolder {
+    const subjects = this.getCustomSubjects();
+    let wlSubj = subjects.find(
+      (s) => s.id === "subject-watch-later" || s.subjectName.toLowerCase() === "watch later"
+    );
+
+    if (!wlSubj) {
+      wlSubj = {
+        id: "subject-watch-later",
+        subjectName: "Watch Later",
+        category: "Watch Later",
+        color: "amber",
+        description: "Lectures and playlists saved to watch and review later.",
+        createdAt: new Date().toISOString(),
+        chapters: []
+      };
+      this.saveCustomSubject(wlSubj);
+    }
+
+    return wlSubj;
+  },
+
+  getAllCategories(): string[] {
+    const subjects = this.getCustomSubjects();
+    const categoriesFromSubjects = subjects.map(s => s.category).filter(Boolean);
+    let customCats: string[] = [];
+    try {
+      const stored = localStorage.getItem("studyai_custom_categories");
+      if (stored) customCats = JSON.parse(stored);
+    } catch {}
+    const defaultCats = [
+      "Watch Later",
+      "Computer Science",
+      "Engineering",
+      "Mathematics",
+      "Science",
+      "Exam Prep",
+      "General Knowledge"
+    ];
+    return Array.from(new Set([...defaultCats, ...categoriesFromSubjects, ...customCats]));
+  },
+
+  createSubjectFolder(params: {
+    name: string;
+    category: string;
+    color?: string;
+    description?: string;
+  }): CustomSubjectFolder {
+    const cleanName = params.name.trim();
+    const cleanCategory = (params.category || "General").trim();
+    const color = params.color || "blue";
+    
+    const newSubject: CustomSubjectFolder = {
+      id: `subject-${Date.now()}`,
+      subjectName: cleanName,
+      category: cleanCategory,
+      color,
+      description: params.description || `Folder for ${cleanName} (${cleanCategory})`,
+      createdAt: new Date().toISOString(),
+      chapters: []
+    };
+
+    this.saveCustomSubject(newSubject);
+
+    // Also sync to CourseFolder
+    try {
+      const courseFolders = this.getCourseFolders();
+      courseFolders.push({
+        id: newSubject.id,
+        name: cleanName,
+        category: cleanCategory,
+        color,
+        playlistIds: [],
+        singleVideoIds: []
+      });
+      this.saveCourseFolders(courseFolders);
+    } catch {}
+
+    // Store custom category in categories list
+    try {
+      const stored = localStorage.getItem("studyai_custom_categories");
+      const current = stored ? JSON.parse(stored) : [];
+      if (!current.includes(cleanCategory)) {
+        current.push(cleanCategory);
+        localStorage.setItem("studyai_custom_categories", JSON.stringify(current));
+      }
+    } catch {}
+
+    return newSubject;
+  },
+
+  saveItemToSubjectFolder(params: {
+    subjectId: string;
+    itemType: "video" | "playlist";
+    id: string;
+    title: string;
+    channelName: string;
+    duration?: string;
+    thumbnail?: string;
+    playlist?: PlaylistInfo;
+  }): void {
+    const subjects = this.getCustomSubjects();
+    const subject = subjects.find(s => s.id === params.subjectId);
+    if (!subject) return;
+
+    if (params.itemType === "video") {
+      let chapter = subject.chapters[0];
+      if (!chapter) {
+        chapter = {
+          id: `ch-${subject.id}-lectures`,
+          chapterNumber: 1,
+          title: "Chapter 1: Lectures & Topics",
+          description: `Lectures saved in ${subject.subjectName}`,
+          lectures: []
+        };
+        subject.chapters.push(chapter);
+      }
+
+      const existingLec = chapter.lectures.find(
+        l => l.youtubeVideoId === params.id || l.id === `lec-${params.id}`
+      );
+
+      if (!existingLec) {
+        chapter.lectures.push({
+          id: `lec-${params.id}-${Date.now()}`,
+          title: params.title || `Lecture: ${params.id}`,
+          videoUrl: `https://www.youtube.com/watch?v=${params.id}`,
+          youtubeVideoId: params.id,
+          duration: params.duration || "10:00",
+          completed: false,
+          progress: 0,
+          lectureNumber: chapter.lectures.length + 1
+        });
+      }
+
+      // Also ensure video exists in singleVideos storage
+      const existingSingle = this.getSingleVideos().find(v => v.id === params.id);
+      this.saveSingleVideo({
+        id: params.id,
+        type: "video",
+        title: params.title,
+        channelName: params.channelName,
+        duration: params.duration || "10:00",
+        thumbnail: params.thumbnail || `https://i.ytimg.com/vi/${params.id}/hqdefault.jpg`,
+        progress: existingSingle?.progress || 0,
+        lastWatchedAt: new Date().toISOString(),
+        completed: existingSingle?.completed || false,
+        isFavorite: existingSingle?.isFavorite || false
+      });
+    } else {
+      const pl = params.playlist || this.getPlaylists().find(p => p.id === params.id);
+      const plTitle = pl?.title || params.title || "Study Playlist";
+      const existingChIdx = subject.chapters.findIndex(
+        ch => ch.id === `ch-${subject.id}-${params.id}` || (ch.description && ch.description.includes(params.id))
+      );
+
+      const convertedLectures: ChapterLecture[] = (pl?.videos || []).map((v, idx) => ({
+        id: `lec-${params.id}-${v.id || idx}`,
+        title: v.title || `Lecture ${idx + 1}`,
+        videoUrl: `https://www.youtube.com/watch?v=${v.id}`,
+        youtubeVideoId: v.id,
+        duration: v.duration || "15:00",
+        completed: !!v.completed,
+        progress: v.progress || 0,
+        lastWatchedPosition: v.lastWatchedPosition || 0,
+        lectureNumber: idx + 1
+      }));
+
+      if (existingChIdx > -1) {
+        subject.chapters[existingChIdx].title = `Chapter ${subject.chapters[existingChIdx].chapterNumber}: ${plTitle}`;
+        if (convertedLectures.length > 0) {
+          subject.chapters[existingChIdx].lectures = convertedLectures;
+        }
+      } else {
+        const nextNum = subject.chapters.length + 1;
+        subject.chapters.push({
+          id: `ch-${subject.id}-${params.id}`,
+          chapterNumber: nextNum,
+          title: `Chapter ${nextNum}: ${plTitle}`,
+          description: `Playlist (${params.id}) by ${params.channelName} • ${convertedLectures.length} lectures`,
+          lectures: convertedLectures
+        });
+      }
+
+      if (pl) {
+        this.savePlaylist(pl);
+      }
+    }
+
+    this.saveCustomSubject(subject);
+
+    // Sync CourseFolder
+    try {
+      const courseFolders = this.getCourseFolders();
+      const cf = courseFolders.find(f => f.id === params.subjectId);
+      if (cf) {
+        if (params.itemType === "video" && !cf.singleVideoIds.includes(params.id)) {
+          cf.singleVideoIds.push(params.id);
+        } else if (params.itemType === "playlist" && !cf.playlistIds.includes(params.id)) {
+          cf.playlistIds.push(params.id);
+        }
+        this.saveCourseFolders(courseFolders);
+      }
+    } catch {}
+  },
+
+  removeItemFromSubjectFolder(params: {
+    subjectId: string;
+    itemType: "video" | "playlist";
+    itemId: string;
+  }): void {
+    const subjects = this.getCustomSubjects();
+    const subject = subjects.find(s => s.id === params.subjectId);
+    if (!subject) return;
+
+    if (params.itemType === "video") {
+      subject.chapters.forEach(ch => {
+        ch.lectures = ch.lectures.filter(
+          l => l.youtubeVideoId !== params.itemId && l.id !== `lec-${params.itemId}`
+        );
+        ch.lectures.forEach((l, idx) => { l.lectureNumber = idx + 1; });
+      });
+      subject.chapters = subject.chapters.filter(ch => ch.lectures.length > 0 || !ch.id.includes("lectures"));
+    } else {
+      subject.chapters = subject.chapters.filter(
+        ch => ch.id !== `ch-${subject.id}-${params.itemId}` && (!ch.description || !ch.description.includes(params.itemId))
+      );
+    }
+
+    subject.chapters.forEach((ch, idx) => {
+      ch.chapterNumber = idx + 1;
+      if (/^Chapter \d+:/i.test(ch.title)) {
+        ch.title = ch.title.replace(/^Chapter \d+:/i, `Chapter ${idx + 1}:`);
+      }
+    });
+
+    this.saveCustomSubject(subject);
+
+    try {
+      const courseFolders = this.getCourseFolders();
+      const cf = courseFolders.find(f => f.id === params.subjectId);
+      if (cf) {
+        if (params.itemType === "video") {
+          cf.singleVideoIds = cf.singleVideoIds.filter(id => id !== params.itemId);
+        } else {
+          cf.playlistIds = cf.playlistIds.filter(id => id !== params.itemId);
+        }
+        this.saveCourseFolders(courseFolders);
+      }
+    } catch {}
+  },
+
+  isItemInSubjectFolder(subjectId: string, itemType: "video" | "playlist", itemId: string): boolean {
+    const subjects = this.getCustomSubjects();
+    const subject = subjects.find(s => s.id === subjectId);
+    if (!subject) return false;
+
+    if (itemType === "video") {
+      return subject.chapters.some(ch =>
+        ch.lectures.some(l => l.youtubeVideoId === itemId || l.id === `lec-${itemId}` || (l.videoUrl && l.videoUrl.includes(itemId)))
+      );
+    } else {
+      return subject.chapters.some(
+        ch => ch.id === `ch-${subject.id}-${itemId}` || (ch.description && ch.description.includes(itemId))
+      );
+    }
+  },
+
+  getSubjectFoldersForItem(itemType: "video" | "playlist", itemId: string): string[] {
+    const subjects = this.getCustomSubjects();
+    return subjects
+      .filter(s => this.isItemInSubjectFolder(s.id, itemType, itemId))
+      .map(s => s.id);
   },
 
   // Favorites

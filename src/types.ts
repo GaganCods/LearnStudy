@@ -182,6 +182,7 @@ export type ActiveTab =
   | "home" 
   | "study" 
   | "library" 
+  | "notes"
   | "flashcards" 
   | "planner" 
   | "calendar" 
