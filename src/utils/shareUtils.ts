@@ -147,21 +147,21 @@ export function chapterToPayload(chapter: CourseChapter, subjectName?: string): 
 
 // Convert payload back into a CustomSubjectFolder
 export function payloadToFolder(payload: SharedFolderPayload): CustomSubjectFolder {
-  const newFolderId = generateFolderId();
+  const folderId = payload.id || generateFolderId();
   return {
-    id: newFolderId,
+    id: folderId,
     subjectName: payload.name || "Shared Folder",
     category: payload.cat || "Shared Folders",
     color: payload.color || "blue",
     description: payload.desc || "",
     createdAt: new Date().toISOString(),
     chapters: (payload.chapters || []).map((ch, idx) => ({
-      id: generateChapterId(),
+      id: ch.id || generateChapterId(),
       chapterNumber: ch.num || idx + 1,
       title: ch.title || `Chapter ${idx + 1}`,
       description: ch.desc || "",
       lectures: (ch.lectures || []).map((lec, lIdx) => ({
-        id: generateLectureId(),
+        id: lec.id || generateLectureId(),
         title: lec.title || `Lecture ${lIdx + 1}`,
         youtubeVideoId: lec.vid || "",
         videoUrl: lec.url || (lec.vid ? `https://www.youtube.com/watch?v=${lec.vid}` : ""),
@@ -178,12 +178,12 @@ export function payloadToFolder(payload: SharedFolderPayload): CustomSubjectFold
 export function payloadToChapter(payload: SharedChapterPayload, targetChapterNum?: number): CourseChapter {
   const newChapterNum = targetChapterNum || payload.num || 1;
   return {
-    id: generateChapterId(),
+    id: payload.id || generateChapterId(),
     chapterNumber: newChapterNum,
     title: payload.title || `Chapter ${newChapterNum}`,
     description: payload.desc || "",
     lectures: (payload.lectures || []).map((lec, lIdx) => ({
-      id: generateLectureId(),
+      id: lec.id || generateLectureId(),
       title: lec.title || `Lecture ${lIdx + 1}`,
       youtubeVideoId: lec.vid || "",
       videoUrl: lec.url || (lec.vid ? `https://www.youtube.com/watch?v=${lec.vid}` : ""),

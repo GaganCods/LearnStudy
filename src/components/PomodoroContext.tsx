@@ -711,6 +711,9 @@ export const PomodoroProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       exportHistory,
       activeVideoInfo,
       setActiveVideoInfo,
+      isAlarmRinging,
+      stopAlarm,
+      snoozeAlarm,
     }}>
       {children}
     </PomodoroContext.Provider>

@@ -9,18 +9,18 @@ import {
   ArrowUp, AlarmClock, Quote, MessageSquarePlus, ArrowLeft,
   Github, Linkedin, Twitter, Globe, Award, User, Folder, Brain, Users, Cloud, CloudOff,
   Layers, LogOut, Crown, CheckCircle2, Menu, Loader2, MoreVertical, Keyboard, AlertTriangle, Bell,
-  ExternalLink, RotateCw, Volume2, VolumeX, Link, Copy, Compass, Gauge
+  ExternalLink, RotateCw, Volume2, VolumeX, Link, Copy, Compass, Gauge, ShieldCheck
 } from "lucide-react";
 import { 
   updateMediaSessionMetadata 
 } from "./utils/mediaSession";
 import { motion, AnimatePresence } from "motion/react";
-import { Storage } from "./utils/storage";
+import { Storage, normalizeChapterKey } from "./utils/storage";
 import { StudyStats } from "./components/StudyStats";
 import { InteractiveNotes } from "./components/InteractiveNotes";
 import { 
   PlaylistInfo, SingleVideoInfo, Bookmark as BookmarkType, 
-  StudySettings, ActiveTab, VideoItem, CustomSubjectFolder 
+  StudySettings, ActiveTab, VideoItem 
 } from "./types";
 import { usePomodoro } from "./components/PomodoroContext";
 import { PomodoroTimer } from "./components/PomodoroTimer";
@@ -28,7 +28,6 @@ import { PomodoroTimer } from "./components/PomodoroTimer";
 import { CompactStudyTimer } from "./components/CompactStudyTimer";
 import { FullScreenTimer } from "./components/FullScreenTimer";
 import { parseYoutubeUrl, fetchPlaylistWithFallback } from "./utils/youtubeParser";
-import { parseShareInput, generateFolderId, generateChapterId } from "./utils/shareUtils";
 import { PlaylistDb } from "./utils/playlistDb";
 import { hasGeminiKey, getGeminiKey, removeGeminiKey, fetchVideoMetadataWithGemini, maskApiKey } from "./utils/gemini";
 import { GeminiOnboardingModal } from "./components/GeminiOnboardingModal";
@@ -49,12 +48,25 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { UserAvatar } from "./components/UserAvatar";
 import { PageNavigationDirectory } from "./components/PageNavigationDirectory";
 import { SaveToFolderModal, SaveTargetItem } from "./components/SaveToFolderModal";
+import { ImportShareModal } from "./components/ShareImportModal";
+import { parseShareInput, generateChapterId, generateLectureId } from "./utils/shareUtils";
 import { VideoDetailsModal, VideoDetailsData } from "./components/VideoDetailsModal";
 import { useAuth } from "./context/AuthContext";
 import { auth } from "./lib/firebase";
 import { AuthModal } from "./components/auth/AuthModal";
 import { NotesHub } from "./components/NotesHub";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { AdminProvider } from "./admin/AdminContext";
+import { AdminLayout } from "./admin/AdminLayout";
+import { GlobalAnnouncementBanner } from "./components/GlobalAnnouncementBanner";
+import { MaintenanceScreen } from "./components/MaintenanceScreen";
+import { AdminService } from "./services/adminService";
+import { AdminRoleService } from "./services/adminRoleService";
+import { usePWA } from "./hooks/usePWA";
+import { PWAInstallModal } from "./components/pwa/PWAInstallModal";
+import { OfflineIndicator } from "./components/pwa/OfflineIndicator";
+import { PWAUpdateToast } from "./components/pwa/PWAUpdateToast";
+import { PWAInstallButton } from "./components/pwa/PWAInstallButton";
 import { 
   APP_PAGES, 
   searchPages, 
@@ -309,19 +321,56 @@ async function fetchVideoFromYouTubeClient(id: string): Promise<any> {
   };
 }
 
-function formatChapterTitle(rawTitle: string, chapterNumber: number): string {
-  if (!rawTitle) return `Chapter ${chapterNumber}`;
-  const cleaned = rawTitle.replace(/^(chapter|ch\.?)\s*\d+[:\-\s]*/i, "").trim();
-  if (!cleaned) return `Chapter ${chapterNumber}`;
-  return `Chapter ${chapterNumber}: ${cleaned}`;
-}
-
 export default function App() {
   const { toast, soundEnabled, setSoundEnabled } = useToast();
   const { currentUser, userProfile, signOutUser, syncStatus, lastSyncedAt, syncNow, isLoading: isAuthLoading } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [isSyncingFromMenu, setIsSyncingFromMenu] = useState(false);
+  const pwa = usePWA();
+
+  // Admin Role Verification & Seamless Access State
+  const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
+  const [isVerifyingAdminUser, setIsVerifyingAdminUser] = useState<boolean>(true);
+
+  // Verify Admin Role and record daily login
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function verifyAdminStatus() {
+      if (!currentUser) {
+        setIsAdminUser(false);
+        setIsVerifyingAdminUser(false);
+        return;
+      }
+
+      setIsVerifyingAdminUser(true);
+      try {
+        const result = await AdminRoleService.verifyAdminRole(
+          currentUser.uid,
+          currentUser.email || undefined,
+          currentUser.displayName || userProfile?.name || undefined
+        );
+
+        if (!isCancelled) {
+          setIsAdminUser(result.isAdmin);
+          // Automatically record daily login for all active users
+          AdminRoleService.recordDailyLogin(currentUser).catch(() => {});
+        }
+      } catch (err) {
+        console.warn("Failed to verify user admin status:", err);
+        if (!isCancelled) setIsAdminUser(false);
+      } finally {
+        if (!isCancelled) setIsVerifyingAdminUser(false);
+      }
+    }
+
+    verifyAdminStatus();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentUser, userProfile?.name]);
 
   // Top-level route: Study Tool Application (Landing page removed completely)
   const [currentRoute, setCurrentRoute] = useState<"app">("app");
@@ -347,6 +396,8 @@ export default function App() {
     setActiveTab(targetTab);
     setActiveSubjectSlug(options?.subjectSlug);
     setActiveLectureSlug(options?.lectureSlug);
+    if ((options as any)?.adminSubRoute) setAdminSubRoute((options as any).adminSubRoute);
+    if ((options as any)?.adminParam !== undefined) setAdminParam((options as any).adminParam);
     if (options?.videoId) setActiveVideoId(options.videoId);
     if (options?.videoTitle) setActiveVideoTitle(options.videoTitle);
     if (options?.searchQuery !== undefined) setSearchQuery(options.searchQuery);
@@ -386,13 +437,24 @@ export default function App() {
   const [showPauseSuggestion, setShowPauseSuggestion] = useState(false);
 
   // Navigation & Theme
+  const initialUrlParsed = typeof window !== "undefined" ? parseInitialUrlState() : { tab: null };
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
-    if (typeof window !== "undefined") {
-      const parsed = parseInitialUrlState();
-      if (parsed.tab) return parsed.tab;
-    }
+    if (initialUrlParsed.tab) return initialUrlParsed.tab;
     return "home";
   });
+  const [adminSubRoute, setAdminSubRoute] = useState<any>(initialUrlParsed.adminSubRoute || "overview");
+  const [adminParam, setAdminParam] = useState<string | undefined>(initialUrlParsed.adminParam);
+
+  // Platform Maintenance Mode State
+  const [maintenanceModeActive, setMaintenanceModeActive] = useState(false);
+  const [maintenanceConfig, setMaintenanceConfig] = useState<any>(null);
+  const [adminBypassActive, setAdminBypassActive] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("learnstudy_admin_bypass") === "true";
+    }
+    return false;
+  });
+
   const [historyFilter, setHistoryFilter] = useState<"all" | "playlist" | "video">("all");
   const [settings, setSettings] = useState<StudySettings>(Storage.getSettings());
   const [searchQuery, setSearchQuery] = useState("");
@@ -407,6 +469,8 @@ export default function App() {
   
   // URL Input
   const [urlInput, setUrlInput] = useState("");
+  const [showAppImportModal, setShowAppImportModal] = useState(false);
+  const [appImportInitialInput, setAppImportInitialInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -850,6 +914,20 @@ export default function App() {
     }
   }, []);
 
+  // Check Platform Maintenance Mode on mount
+  useEffect(() => {
+    AdminService.getMaintenance()
+      .then(cfg => {
+        if (cfg && cfg.enabled) {
+          setMaintenanceModeActive(true);
+          setMaintenanceConfig(cfg);
+        } else {
+          setMaintenanceModeActive(false);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Listen for browser Back and Forward navigation events
   useEffect(() => {
     const handlePopState = () => {
@@ -857,6 +935,10 @@ export default function App() {
       const state = parseInitialUrlState();
       if (state.tab) {
         setActiveTab(state.tab);
+        if (state.tab === "admin") {
+          if (state.adminSubRoute) setAdminSubRoute(state.adminSubRoute as any);
+          if (state.adminParam !== undefined) setAdminParam(state.adminParam);
+        }
       }
       setActiveSubjectSlug(state.subjectSlug);
       setActiveLectureSlug(state.lectureSlug);
@@ -944,12 +1026,26 @@ export default function App() {
 
     const updateTheme = () => {
       const isDark = settings.theme === "dark" || (settings.theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-      
+      const currentlyDark = root.classList.contains("dark");
+      if (currentlyDark === isDark) {
+        return;
+      }
+
       // If View Transition API is supported, use it for seamless transition
       if ("startViewTransition" in document && typeof (document as any).startViewTransition === "function") {
-        (document as any).startViewTransition(() => {
+        try {
+          const transition = (document as any).startViewTransition(() => {
+            applyThemeClasses(isDark);
+          });
+          if (transition && typeof transition.finished?.catch === "function") {
+            transition.finished.catch(() => {});
+          }
+          if (transition && typeof transition.ready?.catch === "function") {
+            transition.ready.catch(() => {});
+          }
+        } catch {
           applyThemeClasses(isDark);
-        });
+        }
       } else {
         applyThemeClasses(isDark);
       }
@@ -1092,13 +1188,6 @@ export default function App() {
             }
           }
         }
-
-        Storage.addVideoToImportFolder({
-          id: activeVideoId,
-          title: mergedTitle,
-          channelName: mergedChannel,
-          duration: mergedDuration
-        });
 
         // 3. Background Gemini AI tags/syllabus enrichment if API key exists
         if (hasGeminiKey()) {
@@ -1748,7 +1837,8 @@ export default function App() {
   // URL input submission
   const handleUrlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!urlInput.trim()) return;
+    const raw = urlInput.trim();
+    if (!raw) return;
 
     setIsLoading(true);
     setErrorMessage("");
@@ -1756,54 +1846,52 @@ export default function App() {
     setBackgroundNewLecturesCount(0);
     setBackgroundPlaylistData(null);
 
+    // 1. Check if user pasted a StudyTube share link
     try {
-      // Check if input is a LearnStudy share link, ID, or encoded payload
-      const shareParsed = parseShareInput(urlInput, Storage.getCustomSubjects());
-      if (shareParsed) {
-        if (shareParsed.type === "folder" && shareParsed.folder) {
-          const folderToAdd = shareParsed.folder;
-          Storage.saveCustomSubject(folderToAdd);
-          toast.success("Course Folder Imported!", `Added "${folderToAdd.subjectName}" with ${(folderToAdd.chapters || []).length} chapters to your Library.`);
-          setIsLoading(false);
-          setUrlInput("");
-          navigateToApp("library", { subjectSlug: slugify(folderToAdd.subjectName) });
-          return;
-        } else if (shareParsed.type === "chapter" && shareParsed.chapter) {
-          const chapter = shareParsed.chapter;
-          const subjects = Storage.getCustomSubjects();
-          if (subjects.length > 0) {
-            const targetSubj = subjects[0];
-            const nextNum = (targetSubj.chapters || []).length + 1;
-            chapter.chapterNumber = nextNum;
-            chapter.title = formatChapterTitle(chapter.title, nextNum);
-            const updatedChapters = [...(targetSubj.chapters || []), chapter];
-            const updatedSubj = { ...targetSubj, chapters: updatedChapters };
-            Storage.saveCustomSubject(updatedSubj);
-            toast.success("Chapter Added!", `Added "${chapter.title}" to "${targetSubj.subjectName}".`);
+      const storedSubjects = Storage.getCustomSubjects() || [];
+      const shareRes = parseShareInput(raw, storedSubjects);
+      if (shareRes) {
+        if (shareRes.type === "folder" && shareRes.folder) {
+          const norm = (shareRes.folder.subjectName || "").trim().toLowerCase();
+          const existing = storedSubjects.find(
+            s => s.id === shareRes.sourceId || s.id === shareRes.folder?.id ||
+                 (norm && (s.subjectName || "").trim().toLowerCase() === norm)
+          );
+          if (existing) {
+            toast.info("Folder Already in Library", `Opened "${existing.subjectName}".`);
+            navigateToApp("library", { subjectSlug: slugify(existing.subjectName) });
           } else {
-            const folderName = shareParsed.subjectName || "Imported Course";
-            const newSubj: CustomSubjectFolder = {
-              id: generateFolderId(),
-              subjectName: folderName,
-              category: "Imported Courses",
-              color: "blue",
-              description: `Imported chapter "${chapter.title}"`,
-              createdAt: new Date().toISOString(),
-              chapters: [{ ...chapter, chapterNumber: 1, title: formatChapterTitle(chapter.title, 1) }]
-            };
-            Storage.saveCustomSubject(newSubj);
-            toast.success("New Folder Created!", `Created "${folderName}" with imported chapter!`);
+            Storage.saveCustomSubject(shareRes.folder);
+            toast.success("Folder Added!", `"${shareRes.folder.subjectName}" added to library.`);
+            navigateToApp("library", { subjectSlug: slugify(shareRes.folder.subjectName) });
           }
           setIsLoading(false);
           setUrlInput("");
-          navigateToApp("library");
+          return;
+        } else if (shareRes.type === "chapter" && shareRes.chapter) {
+          setAppImportInitialInput(raw);
+          setShowAppImportModal(true);
+          setIsLoading(false);
+          setUrlInput("");
           return;
         }
       }
+    } catch (e) {
+      console.warn("Share link parsing notice:", e);
+    }
 
-      const parsed = parseYoutubeUrl(urlInput);
+    try {
+      const parsed = parseYoutubeUrl(raw);
       if (!parsed) {
-        throw new Error("Invalid URL. Please enter a valid YouTube video/playlist link or LearnStudy share link/ID.");
+        // If it's a general web link, open import modal so user can save to folder
+        if (raw.startsWith("http://") || raw.startsWith("https://")) {
+          setAppImportInitialInput(raw);
+          setShowAppImportModal(true);
+          setIsLoading(false);
+          setUrlInput("");
+          return;
+        }
+        throw new Error("Could not recognize this link. Please enter a valid course share link, YouTube link, or study URL.");
       }
 
       const { type, id, videoId: maybeVideoId } = parsed;
@@ -1820,7 +1908,6 @@ export default function App() {
         if (cachedPlaylist && cachedPlaylist.videos.length > 0) {
           // Immediately display cached version! Instant loading (<500ms)
           setPlaylists(Storage.getPlaylists());
-          Storage.addPlaylistToImportFolder(cachedPlaylist);
           setActiveSession({ id: cachedPlaylist.id, type: "playlist" });
           
           const lastWatchedVideo = cachedPlaylist.videos.find(v => v.progress > 0 && v.progress < 95) || cachedPlaylist.videos[0];
@@ -1864,7 +1951,6 @@ export default function App() {
                       thumbnail: data.thumbnail || cachedPlaylist!.thumbnail,
                     };
                     Storage.savePlaylist(updated);
-                    Storage.addPlaylistToImportFolder(updated);
                     setPlaylists(Storage.getPlaylists());
                   }
                 }
@@ -1937,12 +2023,6 @@ export default function App() {
           if (initialVidId && initialVidId.length === 11) {
             toast.info("Opened Lecture", "Loaded the specific lecture from your link.");
             let video = Storage.getSingleVideos().find(v => v.id === initialVidId);
-            Storage.addVideoToImportFolder({
-              id: initialVidId,
-              title: video?.title || "Imported Lecture",
-              channelName: video?.channelName || "YouTube",
-              duration: video?.duration || "10:00"
-            });
 
             setIsSingleVideoDetailsLoading(true);
             setSingleVideoMetadata(null);
@@ -2005,7 +2085,6 @@ export default function App() {
         }
 
         Storage.savePlaylist(playlist);
-        Storage.addPlaylistToImportFolder(playlist);
         setPlaylists(Storage.getPlaylists());
         setActiveSession({ id: playlist.id, type: "playlist" });
         
@@ -2033,14 +2112,6 @@ export default function App() {
       } else {
         // --- SINGLE VIDEO LOAD (HANDLED BY UNIFIED METADATA EFFECT) ---
         let video = Storage.getSingleVideos().find(v => v.id === id);
-        
-        // Auto-add to Course Library Import folder
-        Storage.addVideoToImportFolder({
-          id,
-          title: video?.title || "Imported Lecture",
-          channelName: video?.channelName || "YouTube",
-          duration: video?.duration || "10:00"
-        });
 
         // Set immediately to render skeleton and start player frame immediately
         setIsSingleVideoDetailsLoading(true);
@@ -2092,7 +2163,6 @@ export default function App() {
 
       playlistsFromDb[plIndex] = pl;
       Storage.savePlaylist(pl);
-      Storage.addPlaylistToImportFolder(pl);
       setPlaylists(playlistsFromDb);
       setProgressiveLoadedCount(nextCount);
 
@@ -2139,7 +2209,6 @@ export default function App() {
 
     playlistsFromDb[plIndex] = currentPl;
     Storage.savePlaylist(currentPl);
-    Storage.addPlaylistToImportFolder(currentPl);
     setPlaylists(playlistsFromDb);
 
     // Reset background update state
@@ -2983,9 +3052,94 @@ export default function App() {
     }
   };
 
+  // Maintenance Mode Interceptor
+  if (maintenanceModeActive && !adminBypassActive && activeTab !== "admin") {
+    return (
+      <MaintenanceScreen
+        config={maintenanceConfig}
+        onAdminBypass={() => {
+          setAdminBypassActive(true);
+          try {
+            localStorage.setItem("learnstudy_admin_bypass", "true");
+          } catch {}
+          navigateToApp("admin");
+        }}
+      />
+    );
+  }
+
+  // Admin Control Center View (Guarded strictly by RTDB Admin Role verification)
+  if (activeTab === "admin") {
+    if (isVerifyingAdminUser) {
+      return (
+        <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 flex flex-col items-center justify-center p-6 text-center font-sans">
+          <div className="w-14 h-14 rounded-2xl bg-blue-600/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center mb-4 animate-pulse">
+            <ShieldCheck className="w-7 h-7" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Verifying Admin Authority...</h2>
+          <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-sm">Checking administrator role in Firebase Realtime Database.</p>
+        </div>
+      );
+    }
+
+    if (!isAdminUser) {
+      return (
+        <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 flex flex-col items-center justify-center p-6 text-center font-sans">
+          <div className="w-16 h-16 rounded-3xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center mb-5 shadow-xs">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+          <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Admin Authorization Required</h1>
+          <p className="text-sm text-slate-600 dark:text-zinc-400 mt-2 max-w-md">
+            Direct access to the Admin Dashboard is restricted. Only verified platform administrators can enter this portal.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 mt-6">
+            <button
+              onClick={() => navigateToApp("home")}
+              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Return to Learning Hub</span>
+            </button>
+            {currentUser && (
+              <button
+                onClick={() => signOutUser()}
+                className="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 font-semibold text-xs transition-colors cursor-pointer"
+              >
+                Sign Out
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <AdminProvider initialRoute={adminSubRoute} initialParam={adminParam}>
+        <AdminLayout />
+      </AdminProvider>
+    );
+  }
 
   return (
     <div className="min-h-screen md:h-screen md:max-h-screen bg-slate-50 dark:bg-[#09090B] text-slate-900 dark:text-zinc-100 flex flex-col font-sans transition-colors duration-300 md:overflow-hidden">
+      {/* Global Student Announcement Banners from Admin */}
+      <GlobalAnnouncementBanner />
+      
+      {/* PWA Direct Installation Dialog, Offline Indicator, and Update Toast */}
+      <PWAInstallModal
+        isOpen={pwa.showInstallModal}
+        onClose={() => pwa.setShowInstallModal(false)}
+        onInstall={pwa.triggerInstall}
+        onDismiss={pwa.dismissPrompt}
+        hasNativePrompt={pwa.hasNativePrompt}
+        isIOS={pwa.isIOS}
+      />
+      <OfflineIndicator />
+      <PWAUpdateToast
+        needRefresh={pwa.needRefresh}
+        onUpdate={pwa.updateServiceWorker}
+        onDismiss={pwa.dismissUpdate}
+      />
       
       {/* Username Initial Onboarding Prompt (Only for unauthenticated first-time visitors, never for Gmail auth or on every refresh) */}
       {isNamePromptOpen && !isAuthenticatedUser && (
@@ -3155,6 +3309,24 @@ export default function App() {
             >
               <Search className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
+
+            {/* Admin Dashboard Quick Access Button (ONLY for verified admin) */}
+            {isAdminUser && (
+              <button
+                onClick={() => {
+                  navigateToApp("admin");
+                  setSearchQuery("");
+                }}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 transition-all font-bold text-xs cursor-pointer shadow-xs"
+                title="Open Admin Control Center"
+              >
+                <ShieldCheck className="w-4 h-4 text-rose-500" />
+                <span>Admin Dashboard</span>
+              </button>
+            )}
+
+            {/* PWA Install Button (shows when installable and not in standalone mode) */}
+            <PWAInstallButton variant="badge" />
 
             {/* Theme Toggle */}
             <button
@@ -3348,6 +3520,12 @@ export default function App() {
                 </a>
               ))}
 
+              {/* PWA Direct Installation option in mobile drawer */}
+              <PWAInstallButton
+                variant="menu-item"
+                onActionClick={() => setMobileSidebarOpen(false)}
+              />
+
               <div className="pt-2" />
               
               <button
@@ -3378,61 +3556,82 @@ export default function App() {
                 : "bg-slate-50 dark:bg-white/2"
             }`}>
               {currentUser ? (
-                <div className="flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => {
-                      setMobileSidebarOpen(false);
-                      navigateToApp("settings");
-                    }}
-                    className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer group"
-                    title="Profile & Settings"
-                  >
-                    {currentUser.photoURL ? (
-                      <img
-                        src={currentUser.photoURL}
-                        alt={currentUser.displayName || "User"}
-                        className={`w-8 h-8 rounded-full object-cover border shrink-0 shadow-xs transition-all ${
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => {
+                        setMobileSidebarOpen(false);
+                        navigateToApp("settings");
+                      }}
+                      className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer group"
+                      title="Profile & Settings"
+                    >
+                      {currentUser.photoURL ? (
+                        <img
+                          src={currentUser.photoURL}
+                          alt={currentUser.displayName || "User"}
+                          className={`w-8 h-8 rounded-full object-cover border shrink-0 shadow-xs transition-all ${
+                            activeTab === "settings" && !searchQuery
+                              ? "border-blue-500 ring-2 ring-blue-500/30"
+                              : "border-white dark:border-zinc-700"
+                          }`}
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <UserAvatar
+                          userName={currentUser.displayName || settings.userName || "Scholar"}
+                          size="sm"
+                          className="shrink-0 cursor-pointer"
+                        />
+                      )}
+                      <div className="truncate">
+                        <div className={`text-xs font-bold truncate transition-colors ${
                           activeTab === "settings" && !searchQuery
-                            ? "border-blue-500 ring-2 ring-blue-500/30"
-                            : "border-white dark:border-zinc-700"
-                        }`}
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <UserAvatar
-                        userName={currentUser.displayName || settings.userName || "Scholar"}
-                        size="sm"
-                        className="shrink-0 cursor-pointer"
-                      />
-                    )}
-                    <div className="truncate">
-                      <div className={`text-xs font-bold truncate transition-colors ${
+                            ? "text-blue-700 dark:text-blue-300"
+                            : "text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400"
+                        }`}>
+                          {currentUser.displayName || "Google Scholar"}
+                        </div>
+                        <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold truncate flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                          Google Sync Active
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setMobileSidebarOpen(false);
+                        navigateToApp("settings");
+                      }}
+                      className={`p-2 rounded-xl transition cursor-pointer ${
                         activeTab === "settings" && !searchQuery
-                          ? "text-blue-700 dark:text-blue-300"
-                          : "text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400"
-                      }`}>
-                        {currentUser.displayName || "Google Scholar"}
-                      </div>
-                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold truncate flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                        Google Sync Active
-                      </div>
+                          ? "bg-blue-600 text-white shadow-sm shadow-blue-500/25 dark:bg-blue-500"
+                          : "text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-zinc-800"
+                      }`}
+                      title="Settings"
+                    >
+                      <Settings className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Admin Quick Entry in Mobile Drawer (ONLY for verified admin) */}
+                  {isAdminUser && (
+                    <div className="pt-2 border-t border-slate-200 dark:border-white/5">
+                      <button
+                        onClick={() => {
+                          setMobileSidebarOpen(false);
+                          navigateToApp("admin");
+                        }}
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 hover:bg-rose-500/20 transition cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <ShieldCheck className="w-4 h-4 text-rose-500" />
+                          <span>Admin Dashboard</span>
+                        </div>
+                        <span className="text-[10px] bg-rose-500 text-white px-2 py-0.5 rounded-full font-mono font-bold">Admin</span>
+                      </button>
                     </div>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setMobileSidebarOpen(false);
-                      navigateToApp("settings");
-                    }}
-                    className={`p-2 rounded-xl transition cursor-pointer ${
-                      activeTab === "settings" && !searchQuery
-                        ? "bg-blue-600 text-white shadow-sm shadow-blue-500/25 dark:bg-blue-500"
-                        : "text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-zinc-800"
-                    }`}
-                    title="Settings"
-                  >
-                    <Settings className="w-4 h-4" />
-                  </button>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-center justify-between gap-2">
@@ -3893,6 +4092,13 @@ export default function App() {
                 {!sidebarCollapsed && <span className="relative z-10">Developer Profile</span>}
               </a>
 
+
+              {/* PWA Direct Installation option in desktop sidebar */}
+              <PWAInstallButton
+                variant="menu-item"
+                collapsed={sidebarCollapsed}
+              />
+
               <button
                 onClick={() => setFeedbackModalOpen(true)}
                 className={`w-full relative flex items-center ${
@@ -4028,6 +4234,24 @@ export default function App() {
                           </span>
                           <span className="text-[9px] bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1 py-0.2 rounded font-mono font-bold">Now</span>
                         </button>
+
+                        {/* Admin Control Center Option (ONLY for verified admin) */}
+                        {isAdminUser && (
+                          <button
+                            onClick={() => {
+                              setUserMenuOpen(false);
+                              navigateToApp("admin");
+                              setSearchQuery("");
+                            }}
+                            className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40 transition flex items-center justify-between cursor-pointer border border-rose-500/20 bg-rose-500/5 my-1"
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <ShieldCheck className="w-3.5 h-3.5 text-rose-500" />
+                              <span>Admin Dashboard</span>
+                            </span>
+                            <span className="text-[9px] bg-rose-500 text-white px-1.5 py-0.5 rounded-full font-mono font-bold">Admin</span>
+                          </button>
+                        )}
 
                         <button
                           onClick={async () => {
@@ -4531,9 +4755,13 @@ export default function App() {
                     setActiveTab={(tab) => navigateToApp(tab)}
                     userName={settings.userName}
                     settings={settings}
-                    onResumeSession={(session) => {
-                      if (session.type === "playlist") {
-                        const targetPl = playlists.find(p => p.id === session.id);
+                    onOpenImportModal={() => {
+                      setAppImportInitialInput("");
+                      setShowAppImportModal(true);
+                    }}
+                    onResumeSession={(id, type) => {
+                      if (type === "playlist") {
+                        const targetPl = playlists.find(p => p.id === id);
                         if (targetPl) {
                           setActiveSession({ id: targetPl.id, type: "playlist" });
                           const firstVid = targetPl.videos.find(v => v.progress > 0 && v.progress < 95) || targetPl.videos[0];
@@ -4547,7 +4775,7 @@ export default function App() {
                           }
                         }
                       } else {
-                        const targetVid = singleVideos.find(v => v.id === session.id);
+                        const targetVid = singleVideos.find(v => v.id === id);
                         if (targetVid) {
                           setActiveSession({ id: targetVid.id, type: "video" });
                           setActiveVideoId(targetVid.id);
@@ -4568,21 +4796,21 @@ export default function App() {
                           Import & Study
                         </div>
                         <h2 className="text-xl font-extrabold text-slate-900 dark:text-zinc-50 tracking-tight mt-2">
-                          Add New YouTube Lecture or Playlist
+                          Import Course or Lecture
                         </h2>
                         <p className="text-slate-500 dark:text-zinc-400 text-xs mt-1">
-                          Paste any YouTube video or playlist link to watch distraction-free with AI notes, bookmarks, and transcripts.
+                          Paste any course share link, YouTube video or playlist link, or educational study URL.
                         </p>
                       </div>
                     </div>
                     
                     <form onSubmit={handleUrlSubmit} className="flex flex-col sm:flex-row items-center gap-3">
                       <div className="relative w-full">
-                        <Youtube className="absolute left-4 top-3.5 h-5 w-5 text-slate-400 dark:text-zinc-500" />
+                        <Link className="absolute left-4 top-3.5 h-5 w-5 text-slate-400 dark:text-zinc-500" />
                         <input
                           id="youtube-url-input"
                           type="text"
-                          placeholder="Paste YouTube Playlist or Video URL (e.g. https://youtube.com/playlist?list=...)"
+                          placeholder="Paste course share link, YouTube URL, or study resource..."
                           value={urlInput}
                           onChange={(e) => setUrlInput(e.target.value)}
                           className="w-full bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 text-sm pl-12 pr-4 py-3.5 rounded-2xl text-slate-900 dark:text-zinc-50 shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
@@ -4599,7 +4827,7 @@ export default function App() {
                             Analyzing...
                           </>
                         ) : (
-                          "Load Lecture"
+                          "Import & Open"
                         )}
                       </button>
                     </form>
@@ -4856,14 +5084,14 @@ export default function App() {
                                       ⏱ {duration}
                                     </span>
                                   )}
-                                  {currentVideoObj && currentVideoObj.notesCount > 0 && (
+                                  {currentVideoObj && (currentVideoObj as any).notesCount > 0 && (
                                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 font-semibold border border-amber-100/50 dark:border-amber-900/10">
-                                      📝 {currentVideoObj.notesCount} Notes
+                                      📝 {(currentVideoObj as any).notesCount} Notes
                                     </span>
                                   )}
-                                  {currentVideoObj && currentVideoObj.bookmarksCount > 0 && (
+                                  {currentVideoObj && (currentVideoObj as any).bookmarksCount > 0 && (
                                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-pink-50 dark:bg-pink-950/20 text-pink-700 dark:text-pink-400 font-semibold border border-pink-100/50 dark:border-pink-900/10">
-                                      🔖 {currentVideoObj.bookmarksCount} Bookmarks
+                                      🔖 {(currentVideoObj as any).bookmarksCount} Bookmarks
                                     </span>
                                   )}
                                 </div>
@@ -6013,7 +6241,7 @@ export default function App() {
                                   title="Save lecture to folder or Watch Later"
                                 >
                                   <Bookmark className="w-3.5 h-3.5 fill-current" />
-                                  <span>Save to Folder</span>
+                                  <span>Save to Folder / Watch Later</span>
                                 </button>
 
                                 <button
@@ -7375,6 +7603,75 @@ export default function App() {
           setPlaylists(Storage.getPlaylists());
           setSingleVideos(Storage.getSingleVideos());
         }}
+      />
+
+      {/* Global Import by Link Modal */}
+      <ImportShareModal
+        isOpen={showAppImportModal}
+        onClose={() => setShowAppImportModal(false)}
+        subjects={Storage.getCustomSubjects()}
+        onImportFolder={(folder) => {
+          const subjects = Storage.getCustomSubjects();
+          const norm = (folder.subjectName || "").trim().toLowerCase();
+          const existing = subjects.find(
+            s => s.id === folder.id || (norm && (s.subjectName || "").trim().toLowerCase() === norm)
+          );
+          if (existing) {
+            toast.info("Folder Already in Library", `Opened "${existing.subjectName}".`);
+            navigateToApp("library", { subjectSlug: slugify(existing.subjectName) });
+          } else {
+            Storage.saveCustomSubject(folder);
+            toast.success("Folder Added!", `"${folder.subjectName}" added to library.`);
+            navigateToApp("library", { subjectSlug: slugify(folder.subjectName) });
+          }
+        }}
+        onImportChapter={(chapter, targetSubjectId) => {
+          const subjects = Storage.getCustomSubjects();
+          const target = subjects.find(s => s.id === targetSubjectId);
+          if (target) {
+            const existingChapters = [...(target.chapters || [])];
+            const normIncCh = normalizeChapterKey(chapter.title);
+            const foundIdx = existingChapters.findIndex(
+              c => c.id === chapter.id || (normIncCh && normalizeChapterKey(c.title) === normIncCh)
+            );
+            if (foundIdx > -1) {
+              const matched = existingChapters[foundIdx];
+              const existingLecKeys = new Set(
+                (matched.lectures || []).map(l => l.youtubeVideoId || (l.videoUrl ? l.videoUrl.trim().toLowerCase() : "") || (l.title ? l.title.trim().toLowerCase() : "") || l.id)
+              );
+              const mergedLecs = [...(matched.lectures || [])];
+              for (const l of chapter.lectures || []) {
+                const k = l.youtubeVideoId || (l.videoUrl ? l.videoUrl.trim().toLowerCase() : "") || (l.title ? l.title.trim().toLowerCase() : "") || l.id;
+                if (k && !existingLecKeys.has(k)) {
+                  existingLecKeys.add(k);
+                  mergedLecs.push({
+                    ...l,
+                    id: l.id || generateLectureId(),
+                    lectureNumber: mergedLecs.length + 1
+                  });
+                }
+              }
+              existingChapters[foundIdx] = { ...matched, lectures: mergedLecs };
+            } else {
+              const nextNum = existingChapters.length + 1;
+              existingChapters.push({
+                ...chapter,
+                id: generateChapterId(),
+                chapterNumber: nextNum,
+                title: `Chapter ${nextNum}: ${chapter.title.replace(/^(Chapter|Ch\.?)\s*\d+\s*[:\-]?\s*/i, "").trim() || chapter.title}`,
+                lectures: (chapter.lectures || []).map((l, idx) => ({
+                  ...l,
+                  id: generateLectureId(),
+                  lectureNumber: idx + 1
+                }))
+              });
+            }
+            Storage.saveCustomSubject({ ...target, chapters: existingChapters });
+            toast.success("Chapter Added!", `Added "${chapter.title}" to ${target.subjectName}.`);
+            navigateToApp("library", { subjectSlug: slugify(target.subjectName) });
+          }
+        }}
+        initialInput={appImportInitialInput}
       />
 
       {/* Full Video Details & Syllabus Modal */}

@@ -211,6 +211,20 @@ export const APP_PAGES: PageItem[] = [
     accentText: "text-violet-600 dark:text-violet-400",
     accentBorder: "border-violet-500/30",
     tabParam: "developer"
+  },
+  {
+    id: "admin",
+    title: "Admin Control Center",
+    shortTitle: "Admin Panel",
+    badge: "Admin",
+    description: "Centralized administrative management for users, curated content, analytics, feature flags, health, and system settings.",
+    keywords: ["admin", "control center", "users", "content", "features", "analytics", "health", "system", "moderation", "audit", "maintenance"],
+    category: "Settings & Info",
+    accentColor: "rose",
+    accentBg: "bg-rose-500/10 dark:bg-rose-500/15",
+    accentText: "text-rose-600 dark:text-rose-400",
+    accentBorder: "border-rose-500/30",
+    tabParam: "admin"
   }
 ];
 
@@ -290,6 +304,16 @@ export function getPageShareableUrl(
     pathname = "/app/settings";
   } else if (tab === "developer") {
     pathname = "/app/developer";
+  } else if (tab === "admin") {
+    const adminSub = (params as any)?.adminSubRoute;
+    const adminParam = (params as any)?.adminParam;
+    if (adminSub && adminParam) {
+      pathname = `/admin/${adminSub}/${adminParam}`;
+    } else if (adminSub) {
+      pathname = `/admin/${adminSub}`;
+    } else {
+      pathname = "/admin";
+    }
   } else if (tab === "search" || params?.searchQuery) {
     pathname = "/app/search";
     if (params?.searchQuery) {
@@ -380,6 +404,8 @@ export function searchPages(rawQuery: string): PageItem[] {
  */
 export function parseInitialUrlState(): {
   tab: ActiveTab | null;
+  adminSubRoute?: string;
+  adminParam?: string;
   subjectSlug?: string;
   lectureSlug?: string;
   videoId?: string;
@@ -427,16 +453,26 @@ export function parseInitialUrlState(): {
       "settings": "settings",
       "developer": "developer",
       "about": "developer",
+      "admin": "admin",
     };
 
     let targetSegment = firstSegment;
     let subSegment = pathParts[1] || "";
+    let adminSubRoute: string | undefined = undefined;
+    let adminParam: string | undefined = undefined;
     let subjectSlugFromPath: string | undefined = undefined;
     let lectureSlugFromPath: string | undefined = undefined;
 
-    if (firstSegment === "app") {
+    if (firstSegment === "admin") {
+      targetSegment = "admin";
+      adminSubRoute = pathParts[1] || "overview";
+      adminParam = pathParts[2] || undefined;
+    } else if (firstSegment === "app") {
       targetSegment = subSegment || "home";
-      if (subSegment === "lectures" || subSegment === "library" || subSegment === "courses") {
+      if (subSegment === "admin") {
+        adminSubRoute = pathParts[2] || "overview";
+        adminParam = pathParts[3] || undefined;
+      } else if (subSegment === "lectures" || subSegment === "library" || subSegment === "courses") {
         subjectSlugFromPath = pathParts[2] || undefined;
         lectureSlugFromPath = pathParts[3] || undefined;
       }
@@ -494,6 +530,8 @@ export function parseInitialUrlState(): {
 
     return {
       tab: finalTab,
+      adminSubRoute,
+      adminParam,
       subjectSlug: subjectSlugFromPath,
       lectureSlug: lectureSlugFromPath,
       videoId,

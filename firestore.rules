@@ -1,7 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to check auth
+    // Helper functions
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -10,54 +10,111 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isAuthenticated() && (
+        exists(/databases/$(database)/documents/adminRoles/$(request.auth.uid)) ||
+        (request.auth.token != null && request.auth.token.admin == true)
+      );
+    }
+
+    // Admin Roles collection
+    match /adminRoles/{roleId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || (isAuthenticated() && !exists(/databases/$(database)/documents/adminRoles/{roleId}));
+    }
+
+    // System Settings & Maintenance Mode
+    match /systemSettings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Curated Content & Public Library
+    match /curatedContent/{contentId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Feature Flags
+    match /featureFlags/{flagId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Announcements & Alerts
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Support Tickets & User Feedback
+    match /supportTickets/{ticketId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow create: if true;
+      allow update, delete: if isAdmin();
+    }
+
+    // Audit Logs (immutable write-once by admins)
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false; // Immutable audit log
+    }
+
+    // System Health Status
+    match /systemHealth/{checkId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
     // Users collection and subcollections
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isOwner(userId);
+      allow create, update, delete: if isOwner(userId) || isAdmin();
       
       match /{document=**} {
-        allow read, write: if isOwner(userId);
+        allow read, write: if isOwner(userId) || isAdmin();
       }
     }
 
     // User Data Root Document for synced device study state
     match /userData/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read, write: if isOwner(userId) || isAdmin();
     }
 
     // Courses collection
     match /courses/{courseId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     // Notes collection
     match /notes/{noteId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     // Flashcards collection
     match /flashcards/{cardId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     // Study Plans collection
     match /studyPlans/{planId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     // Pomodoro Sessions collection
     match /pomodoroSessions/{sessionId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
     }
   }
 }

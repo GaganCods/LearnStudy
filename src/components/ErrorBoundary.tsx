@@ -1,8 +1,8 @@
-import * as React from "react";
-import { AlertTriangle, RotateCcw, Home } from "lucide-react";
+import React, { ErrorInfo, ReactNode } from "react";
+import { AlertTriangle, RotateCcw, Home, BookOpen } from "lucide-react";
 
 interface Props {
-  children: React.ReactNode;
+  children: ReactNode;
   fallbackTitle?: string;
   onReset?: () => void;
 }
@@ -25,7 +25,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
     return { hasError: true, error };
   }
 
-  public componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("[ErrorBoundary caught an error]:", error, errorInfo);
   }
 

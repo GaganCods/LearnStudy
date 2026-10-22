@@ -316,7 +316,7 @@ const ToastCard: React.FC<{ toast: ToastItem; index: number; dismiss: () => void
   }, [toast.createdAt]);
 
   // Framer Motion spring configuration for ultra-smooth animations
-  const springConfig = { type: "spring", stiffness: 380, damping: 30 };
+  const springConfig = { type: "spring" as const, stiffness: 380, damping: 30 };
 
   return (
     <motion.div

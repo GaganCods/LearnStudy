@@ -7,7 +7,7 @@ import {
   Loader2, RefreshCw, ArrowUp, ArrowDown, ArrowRight, Palette, Film, Download, Link2,
   Scissors, CheckSquare, Square, MoreVertical, Share2, Copy
 } from "lucide-react";
-import { Storage } from "../utils/storage";
+import { Storage, normalizeChapterKey } from "../utils/storage";
 import { CustomSubjectFolder, CourseChapter, ChapterLecture } from "../types";
 import { useToast } from "./ToastContext";
 import { parseYoutubeUrl, fetchPlaylistWithFallback } from "../utils/youtubeParser";
@@ -15,7 +15,9 @@ import { slugify } from "../utils/pageRegistry";
 import { 
   generateFolderId, 
   generateChapterId, 
-  generateLectureId 
+  generateLectureId,
+  getFolderShareLink,
+  getChapterShareLink
 } from "../utils/shareUtils";
 import { ShareModal, ImportShareModal } from "./ShareImportModal";
 
@@ -216,6 +218,18 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
       if (shareFolder || shareChapter || d) {
         setInitialShareImportInput(window.location.href);
         setShowImportShareModal(true);
+        // Clean params from URL immediately so they don't linger and cause re-import triggers
+        try {
+          params.delete("shareFolder");
+          params.delete("folderId");
+          params.delete("shareChapter");
+          params.delete("chapterId");
+          params.delete("d");
+          params.delete("data");
+          const newSearch = params.toString();
+          const newUrl = `${window.location.pathname}${newSearch ? `?${newSearch}` : ""}${window.location.hash}`;
+          window.history.replaceState({}, "", newUrl);
+        } catch {}
       }
     }
   }, []);
@@ -576,10 +590,6 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
       return subjChanged ? { ...subj, chapters: updatedChapters } : subj;
     });
 
-    if (modified) {
-      Storage.saveCustomSubjects(updatedSubjects);
-    }
-
     return modified ? updatedSubjects : subjectsToSync;
   };
 
@@ -604,6 +614,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
     };
   }, []);
 
+  const enrichedVideoIdsRef = useRef<Set<string>>(new Set());
+
   // Background enrichment for any lectures with missing or placeholder durations ("10:00", "15:00")
   useEffect(() => {
     if (!subjects || subjects.length === 0) return;
@@ -614,7 +626,8 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
     for (const sub of subjects) {
       for (const ch of sub.chapters || []) {
         for (const lec of ch.lectures || []) {
-          if (!lec.duration || lec.duration === "10:00" || lec.duration === "15:00" || lec.duration === "0:00") {
+          const ytId = lec.youtubeVideoId || extractYoutubeId(lec.videoUrl || "");
+          if (ytId && !enrichedVideoIdsRef.current.has(ytId) && (!lec.duration || lec.duration === "10:00" || lec.duration === "15:00" || lec.duration === "0:00")) {
             hasPlaceholders = true;
             break;
           }
@@ -640,8 +653,10 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                   if (
                     ytId &&
                     ytId.length === 11 &&
+                    !enrichedVideoIdsRef.current.has(ytId) &&
                     (!lec.duration || lec.duration === "10:00" || lec.duration === "15:00" || lec.duration === "0:00")
                   ) {
+                    enrichedVideoIdsRef.current.add(ytId);
                     try {
                       const res = await fetch(`/api/video-metadata?id=${ytId}`);
                       if (res.ok) {
@@ -689,80 +704,86 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
     };
   }, [subjects]);
 
+  const isSyncingRef = useRef(false);
+
   const loadSubjects = () => {
-    const stored = Storage.getCustomSubjects() || [];
-    // Remove the dummy starter subject if present
-    const filtered = stored.filter(s => s.id !== "subject-sample-101");
-    
-    // Ensure every subject, chapter, and lecture has a clean unique ID
-    let hasMissingIds = false;
-    const sanitized = filtered.map(s => {
-      let subjModified = false;
-      let folderId = s.id;
-      if (!folderId) {
-        folderId = generateFolderId();
-        subjModified = true;
-      }
-      const fixedChapters = (s.chapters || []).map((ch, idx) => {
-        let chModified = false;
-        let chapId = ch.id;
-        if (!chapId) {
-          chapId = generateChapterId();
-          chModified = true;
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
+
+    try {
+      const stored = Storage.getCustomSubjects() || [];
+      const filtered = stored.filter(s => s.id !== "subject-sample-101");
+      
+      let hasMissingIds = false;
+      const sanitized = filtered.map(s => {
+        let subjModified = false;
+        let folderId = s.id;
+        if (!folderId) {
+          folderId = generateFolderId();
+          subjModified = true;
         }
-        const fixedLectures = (ch.lectures || []).map((lec, lIdx) => {
-          if (!lec.id) {
+        const fixedChapters = (s.chapters || []).map((ch, idx) => {
+          let chModified = false;
+          let chapId = ch.id;
+          if (!chapId) {
+            chapId = generateChapterId();
             chModified = true;
-            return { ...lec, id: generateLectureId(), lectureNumber: lec.lectureNumber || lIdx + 1 };
           }
-          return lec;
+          const fixedLectures = (ch.lectures || []).map((lec, lIdx) => {
+            if (!lec.id) {
+              chModified = true;
+              return { ...lec, id: generateLectureId(), lectureNumber: lec.lectureNumber || lIdx + 1 };
+            }
+            return lec;
+          });
+          if (chModified || chapId !== ch.id) subjModified = true;
+          return {
+            ...ch,
+            id: chapId,
+            chapterNumber: ch.chapterNumber || idx + 1,
+            lectures: fixedLectures
+          };
         });
-        if (chModified || chapId !== ch.id) subjModified = true;
+        if (subjModified) hasMissingIds = true;
         return {
-          ...ch,
-          id: chapId,
-          chapterNumber: ch.chapterNumber || idx + 1,
-          lectures: fixedLectures
+          ...s,
+          id: folderId,
+          chapters: fixedChapters
         };
       });
-      if (subjModified) hasMissingIds = true;
-      return {
-        ...s,
-        id: folderId,
-        chapters: fixedChapters
-      };
-    });
 
-    if (sanitized.length !== stored.length || hasMissingIds) {
-      Storage.saveCustomSubjects(sanitized);
-    }
-    
-    // Sync completion status with singleVideos and playlists on load
-    const synced = syncCompletedStatusWithStoredVideos(sanitized);
-
-    setSubjects(synced);
-    setSelectedSubject((prev) => (prev ? synced.find((s) => s.id === prev.id) || null : null));
-    setPlaylistPlayerSubject((prev) => (prev ? synced.find((s) => s.id === prev.id) || null : null));
-    if (synced[0]?.chapters?.[0]?.id) {
-      setExpandedChapterIds((prev) => ({ ...prev, [synced[0].chapters[0].id]: true }));
-    }
-
-    // Load custom categories based on actual remaining subjects
-    const storedCats = localStorage.getItem("studyai_custom_categories");
-    let catsList: string[] = [];
-    if (storedCats) {
-      try {
-        catsList = JSON.parse(storedCats).filter((c: string) => c !== "Computer Science");
-      } catch (e) {
-        catsList = [];
+      if (hasMissingIds) {
+        Storage.saveCustomSubjects(sanitized);
       }
+      
+      const synced = syncCompletedStatusWithStoredVideos(sanitized);
+
+      setSubjects(synced);
+      setSelectedSubject((prev) => (prev ? synced.find((s) => s.id === prev.id) || null : null));
+      setPlaylistPlayerSubject((prev) => (prev ? synced.find((s) => s.id === prev.id) || null : null));
+      if (synced[0]?.chapters?.[0]?.id) {
+        setExpandedChapterIds((prev) => ({ ...prev, [synced[0].chapters[0].id]: true }));
+      }
+
+      // Load custom categories based on actual remaining subjects
+      const storedCats = localStorage.getItem("studyai_custom_categories");
+      let catsList: string[] = [];
+      if (storedCats) {
+        try {
+          catsList = JSON.parse(storedCats).filter((c: string) => c !== "Computer Science");
+        } catch (e) {
+          catsList = [];
+        }
+      }
+      
+      // Merge with actual categories from stored subjects
+      const actualCats = Array.from(new Set(synced.map(s => s.category).filter(Boolean)));
+      const mergedCats = Array.from(new Set([...catsList, ...actualCats]));
+      setCustomCategories(mergedCats);
+      localStorage.setItem("studyai_custom_categories", JSON.stringify(mergedCats));
+    } finally {
+      isSyncingRef.current = false;
     }
-    
-    // Merge with actual categories from stored subjects
-    const actualCats = Array.from(new Set(synced.map(s => s.category).filter(Boolean)));
-    const mergedCats = Array.from(new Set([...catsList, ...actualCats]));
-    setCustomCategories(mergedCats);
-    localStorage.setItem("studyai_custom_categories", JSON.stringify(mergedCats));
   };
 
   // Handlers for Sharing and Importing Folders & Chapters
@@ -793,6 +814,80 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
   };
 
   const handleImportFolder = (folder: CustomSubjectFolder) => {
+    // Check if a folder with this name or ID already exists in subjects to prevent duplicates
+    const normIncomingName = (folder.subjectName || "").trim().toLowerCase();
+    const existingIndex = subjects.findIndex(
+      (s) =>
+        s.id === folder.id ||
+        (s.subjectName && normIncomingName && s.subjectName.trim().toLowerCase() === normIncomingName)
+    );
+
+    if (existingIndex > -1) {
+      const existing = subjects[existingIndex];
+      let modified = false;
+      const existingChapters = [...(existing.chapters || [])];
+
+      for (const incCh of folder.chapters || []) {
+        const normIncCh = normalizeChapterKey(incCh.title, incCh.chapterNumber);
+        const matchIdx = existingChapters.findIndex(
+          c => c.id === incCh.id || (normIncCh && normalizeChapterKey(c.title, c.chapterNumber) === normIncCh)
+        );
+        if (matchIdx > -1) {
+          const target = existingChapters[matchIdx];
+          const existingLecKeys = new Set(
+            (target.lectures || []).map(l => l.youtubeVideoId || (l.videoUrl ? l.videoUrl.trim().toLowerCase() : "") || (l.title ? l.title.trim().toLowerCase() : "") || l.id)
+          );
+          const newLecs = [...(target.lectures || [])];
+          let addedLec = false;
+          for (const l of incCh.lectures || []) {
+            const lk = l.youtubeVideoId || (l.videoUrl ? l.videoUrl.trim().toLowerCase() : "") || (l.title ? l.title.trim().toLowerCase() : "") || l.id;
+            if (lk && !existingLecKeys.has(lk)) {
+              existingLecKeys.add(lk);
+              newLecs.push({
+                ...l,
+                id: l.id || generateLectureId(),
+                lectureNumber: newLecs.length + 1
+              });
+              addedLec = true;
+            }
+          }
+          if (addedLec) {
+            existingChapters[matchIdx] = { ...target, lectures: newLecs };
+            modified = true;
+          }
+        } else {
+          const nextNum = existingChapters.length + 1;
+          existingChapters.push({
+            ...incCh,
+            id: generateChapterId(),
+            chapterNumber: nextNum,
+            title: formatChapterTitle(incCh.title, nextNum),
+            lectures: (incCh.lectures || []).map((lec, lIdx) => ({
+              ...lec,
+              id: generateLectureId(),
+              lectureNumber: lIdx + 1
+            }))
+          });
+          modified = true;
+        }
+      }
+
+      const finalFolder = modified ? { ...existing, chapters: existingChapters } : existing;
+      if (modified) {
+        Storage.saveCustomSubject(finalFolder);
+        setSubjects(prev => prev.map(s => s.id === finalFolder.id ? finalFolder : s));
+      }
+      setSelectedSubject(finalFolder);
+      onSelectSubject?.(finalFolder);
+      toast.info(
+        "Folder Found in Library",
+        modified
+          ? `Updated "${finalFolder.subjectName}" with new chapters from link.`
+          : `"${finalFolder.subjectName}" is already in your library.`
+      );
+      return;
+    }
+
     const freshFolder: CustomSubjectFolder = {
       ...folder,
       id: generateFolderId(),
@@ -812,7 +907,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
     setSubjects(prev => [freshFolder, ...prev.filter(s => s.id !== freshFolder.id)]);
     setSelectedSubject(freshFolder);
     onSelectSubject?.(freshFolder);
-    toast.success("Folder Added!", `"${freshFolder.subjectName}" imported with Unique ID: ${freshFolder.id}`);
+    toast.success("Folder Added!", `"${freshFolder.subjectName}" added to library.`);
   };
 
   const handleImportChapter = (chapter: CourseChapter, targetSubjectId?: string, newSubjectName?: string) => {
@@ -829,24 +924,50 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
     if (targetSubjectId) {
       const targetSubj = subjects.find(s => s.id === targetSubjectId);
       if (targetSubj) {
-        const nextNum = (targetSubj.chapters || []).length + 1;
-        freshChapter.chapterNumber = nextNum;
-        freshChapter.title = formatChapterTitle(freshChapter.title, nextNum);
-        const updatedChapters = [...(targetSubj.chapters || []), freshChapter];
-        const updatedSubj = { ...targetSubj, chapters: updatedChapters };
+        const existingChapters = [...(targetSubj.chapters || [])];
+        const normIncCh = normalizeChapterKey(freshChapter.title);
+        const matchIdx = existingChapters.findIndex(
+          c => c.id === freshChapter.id || (normIncCh && normalizeChapterKey(c.title) === normIncCh)
+        );
+
+        if (matchIdx > -1) {
+          const targetCh = existingChapters[matchIdx];
+          const existingLecKeys = new Set(
+            (targetCh.lectures || []).map(l => l.youtubeVideoId || (l.videoUrl ? l.videoUrl.trim().toLowerCase() : "") || (l.title ? l.title.trim().toLowerCase() : "") || l.id)
+          );
+          const newLecs = [...(targetCh.lectures || [])];
+          for (const l of freshChapter.lectures || []) {
+            const lk = l.youtubeVideoId || (l.videoUrl ? l.videoUrl.trim().toLowerCase() : "") || (l.title ? l.title.trim().toLowerCase() : "") || l.id;
+            if (lk && !existingLecKeys.has(lk)) {
+              existingLecKeys.add(lk);
+              newLecs.push({
+                ...l,
+                lectureNumber: newLecs.length + 1
+              });
+            }
+          }
+          existingChapters[matchIdx] = { ...targetCh, lectures: newLecs };
+        } else {
+          const nextNum = existingChapters.length + 1;
+          freshChapter.chapterNumber = nextNum;
+          freshChapter.title = formatChapterTitle(freshChapter.title, nextNum);
+          existingChapters.push(freshChapter);
+        }
+
+        const updatedSubj = { ...targetSubj, chapters: existingChapters };
         Storage.saveCustomSubject(updatedSubj);
         setSubjects(subjects.map(s => s.id === updatedSubj.id ? updatedSubj : s));
         if (selectedSubject?.id === updatedSubj.id) setSelectedSubject(updatedSubj);
-        toast.success("Chapter Added!", `Added "${freshChapter.title}" with Unique ID: ${freshChapter.id}`);
+        toast.success("Chapter Added!", `Added "${freshChapter.title}" to ${targetSubj.subjectName}.`);
       }
     } else {
-      const folderName = newSubjectName || "Imported Course";
+      const folderName = newSubjectName || "General Studies";
       const newSubj: CustomSubjectFolder = {
         id: generateFolderId(),
         subjectName: folderName,
-        category: "Imported Courses",
+        category: "General Studies",
         color: "blue",
-        description: `Imported chapter "${freshChapter.title}"`,
+        description: `Folder for "${freshChapter.title}"`,
         createdAt: new Date().toISOString(),
         chapters: [{ ...freshChapter, chapterNumber: 1, title: formatChapterTitle(freshChapter.title, 1) }]
       };
@@ -854,7 +975,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
       setSubjects(prev => [newSubj, ...prev]);
       setSelectedSubject(newSubj);
       onSelectSubject?.(newSubj);
-      toast.success("New Folder Created!", `Created "${folderName}" with imported chapter!`);
+      toast.success("New Folder Created!", `Created "${folderName}" with chapter!`);
     }
   };
 
@@ -2348,6 +2469,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
         isOpen={showImportShareModal}
         onClose={() => setShowImportShareModal(false)}
         subjects={subjects}
+        preselectedFolderId={selectedSubject?.id || null}
         onImportFolder={handleImportFolder}
         onImportChapter={handleImportChapter}
         initialInput={initialShareImportInput}
@@ -3357,6 +3479,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                   {selectedSubject.category}
                 </span>
 
+                <span className="w-1 h-1 rounded-full bg-slate-300 dark:bg-zinc-700" />
                 <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest">
                   {(selectedSubject.chapters || []).length} Folders
                 </span>
@@ -3394,17 +3517,17 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
               <span>Share Folder</span>
             </button>
 
-            {/* Import Chapter into Folder */}
+            {/* Import into Folder */}
             <button
               onClick={() => {
                 setInitialShareImportInput("");
                 setShowImportShareModal(true);
               }}
               className="bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 font-bold text-xs px-3 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
-              title="Import a shared chapter by link or ID"
+              title="Import into this folder by link"
             >
               <Download className="w-3.5 h-3.5 text-indigo-500" />
-              <span>+ Import Chapter</span>
+              <span>Import by Link</span>
             </button>
 
             <button
@@ -3462,13 +3585,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                       onClick={(e) => {
                         e.stopPropagation();
                         setShowSubjectHeaderMenu(false);
-                        navigator.clipboard.writeText(selectedSubject.id);
-                        toast.success("Folder ID Copied!", selectedSubject.id);
+                        const link = getFolderShareLink(selectedSubject);
+                        navigator.clipboard.writeText(link);
+                        toast.success("Share Link Copied!", "Shareable link copied to clipboard.");
                       }}
                       className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
                     >
-                      <Copy className="w-4 h-4 text-blue-500" />
-                      <span>Copy Unique ID</span>
+                      <Share2 className="w-4 h-4 text-indigo-500" />
+                      <span>Copy Share Link</span>
                     </button>
 
                     <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
@@ -3491,7 +3615,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                       onClick={(e) => {
                         e.stopPropagation();
                         setShowSubjectHeaderMenu(false);
-                        onRequestDeleteSubject(selectedSubject, e);
+                        onRequestDeleteSubject(selectedSubject.id, selectedSubject.subjectName, e);
                       }}
                       className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 cursor-pointer transition-colors"
                     >
@@ -3665,13 +3789,14 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setOpenChapterMenuId(null);
-                                  navigator.clipboard.writeText(ch.id);
-                                  toast.success("Chapter ID Copied!", ch.id);
+                                  const link = getChapterShareLink(ch, selectedSubject.subjectName);
+                                  navigator.clipboard.writeText(link);
+                                  toast.success("Chapter Link Copied!", "Shareable direct link copied to clipboard.");
                                 }}
                                 className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 cursor-pointer transition-colors"
                               >
                                 <Copy className="w-4 h-4 text-blue-500" />
-                                <span>Copy Chapter ID</span>
+                                <span>Copy Direct Link</span>
                               </button>
 
                               <div className="my-1 border-t border-slate-100 dark:border-zinc-800" />
@@ -4553,17 +4678,17 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
-          {/* Import by Link or Unique ID Button */}
+          {/* Import by Link Button */}
           <button
             onClick={() => {
               setInitialShareImportInput("");
               setShowImportShareModal(true);
             }}
             className="bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-extrabold text-xs px-4 py-3 rounded-2xl shadow-md shadow-indigo-500/20 transition-all duration-150 flex items-center gap-2 cursor-pointer shrink-0 hover:scale-[1.02] active:scale-[0.98]"
-            title="Import a shared course folder or chapter by entering its link or unique ID"
+            title="Import course folder, chapter, playlist, video, or study material by link"
           >
             <Download className="w-4 h-4" />
-            <span>+ Import by Link / ID</span>
+            <span>Import by Link</span>
           </button>
 
           <button
@@ -4680,12 +4805,7 @@ export const CourseLibrary: React.FC<CourseLibraryProps> = ({
               >
                 <div>
                 <div className="flex items-start justify-between gap-3 mb-3">
-                  <span className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase border truncate max-w-[180px] flex items-center gap-1 ${
-                    subj.category === "Imports" || subj.id === "subject-imported-folder"
-                      ? "bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 border-purple-100 dark:border-purple-900/40"
-                      : "bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border-blue-100 dark:border-blue-900/40"
-                  }`}>
-                    {(subj.category === "Imports" || subj.id === "subject-imported-folder") && <Sparkles className="w-3 h-3 text-purple-500" />}
+                  <span className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase border truncate max-w-[180px] flex items-center gap-1 bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border-blue-100 dark:border-blue-900/40">
                     <span>{subj.category}</span>
                   </span>
 

@@ -22,7 +22,9 @@ import {
   Flashcard,
   StudyPlanItem,
   CourseFolder,
-  CustomSubjectFolder
+  CustomSubjectFolder,
+  CourseChapter,
+  ChapterLecture
 } from "../types";
 
 export interface QuizAttempt {
@@ -937,24 +939,161 @@ class UserAccountSyncService {
   }
 
   // --- CUSTOM SUBJECTS ---
+  private cleanSubjectList(subjects: CustomSubjectFolder[]): CustomSubjectFolder[] {
+    if (!Array.isArray(subjects)) return [];
+    const mergedMap = new Map<string, CustomSubjectFolder>();
+
+    const normChapterKey = (title?: string, chapterNumber?: number): string => {
+      if (!title) return chapterNumber ? `chapter-${chapterNumber}` : "";
+      const stripped = title.replace(/^(Chapter|Ch\.?)\s*\d+\s*[:\-]?\s*/i, "").trim().toLowerCase();
+      if (stripped) return stripped;
+      const full = title.trim().toLowerCase();
+      return full || (chapterNumber ? `chapter-${chapterNumber}` : "");
+    };
+
+    const getLecKey = (lec: ChapterLecture): string => {
+      if (!lec) return "";
+      if (lec.youtubeVideoId && lec.youtubeVideoId.length === 11) return `yt:${lec.youtubeVideoId}`;
+      if (lec.videoUrl) return `url:${lec.videoUrl.trim().toLowerCase()}`;
+      if (lec.title) return `title:${lec.title.trim().toLowerCase()}`;
+      return lec.id || "";
+    };
+
+    const mergeLecs = (existing: ChapterLecture[], incoming: ChapterLecture[]): ChapterLecture[] => {
+      const clean = [...existing];
+      const seen = new Set<string>();
+      for (const l of clean) {
+        const k = getLecKey(l);
+        if (k) seen.add(k);
+      }
+      for (const inc of incoming) {
+        if (!inc) continue;
+        const k = getLecKey(inc);
+        if (k && !seen.has(k)) {
+          seen.add(k);
+          clean.push({ ...inc, lectureNumber: clean.length + 1 });
+        }
+      }
+      return clean;
+    };
+
+    const dedupLecs = (lecs: ChapterLecture[]): ChapterLecture[] => {
+      if (!Array.isArray(lecs)) return [];
+      const clean: ChapterLecture[] = [];
+      const seen = new Set<string>();
+      for (const l of lecs) {
+        if (!l) continue;
+        const k = getLecKey(l);
+        if (k && seen.has(k)) continue;
+        if (k) seen.add(k);
+        clean.push({ ...l, lectureNumber: clean.length + 1 });
+      }
+      return clean;
+    };
+
+    for (const s of subjects) {
+      if (
+        !s ||
+        s.id === "subject-sample-101" ||
+        s.id === "subject-imported-folder" ||
+        s.subjectName?.toLowerCase() === "imported lectures" ||
+        s.subjectName?.toLowerCase() === "imports"
+      ) {
+        continue;
+      }
+      const normName = (s.subjectName || "").trim().toLowerCase();
+      const key = normName || s.id;
+
+      if (!mergedMap.has(key)) {
+        const cleanChapters: CourseChapter[] = [];
+        for (const ch of s.chapters || []) {
+          if (!ch) continue;
+          const chNorm = normChapterKey(ch.title, ch.chapterNumber);
+          const existingIdx = cleanChapters.findIndex(c => {
+            if (c.id === ch.id) return true;
+            const cNorm = normChapterKey(c.title, c.chapterNumber);
+            return !!(chNorm && cNorm && chNorm === cNorm);
+          });
+          if (existingIdx > -1) {
+            const target = cleanChapters[existingIdx];
+            cleanChapters[existingIdx] = {
+              ...target,
+              lectures: mergeLecs(target.lectures || [], ch.lectures || [])
+            };
+          } else {
+            cleanChapters.push({
+              ...ch,
+              chapterNumber: cleanChapters.length + 1,
+              lectures: dedupLecs(ch.lectures || [])
+            });
+          }
+        }
+        mergedMap.set(key, { ...s, chapters: cleanChapters });
+      } else {
+        const existing = mergedMap.get(key)!;
+        const existingChapters = [...(existing.chapters || [])];
+
+        for (const incCh of s.chapters || []) {
+          if (!incCh) continue;
+          const normCh = normChapterKey(incCh.title, incCh.chapterNumber);
+          const foundIdx = existingChapters.findIndex(
+            c => c.id === incCh.id || (normCh && normChapterKey(c.title, c.chapterNumber) === normCh)
+          );
+          if (foundIdx > -1) {
+            const targetCh = existingChapters[foundIdx];
+            existingChapters[foundIdx] = {
+              ...targetCh,
+              lectures: mergeLecs(targetCh.lectures || [], incCh.lectures || [])
+            };
+          } else {
+            existingChapters.push({
+              ...incCh,
+              chapterNumber: existingChapters.length + 1,
+              lectures: dedupLecs(incCh.lectures || [])
+            });
+          }
+        }
+        mergedMap.set(key, { ...existing, chapters: existingChapters });
+      }
+    }
+    return Array.from(mergedMap.values());
+  }
+
   public getCustomSubjects(): CustomSubjectFolder[] {
-    return [...this.state.customSubjects];
+    return this.cleanSubjectList(this.state.customSubjects || []);
   }
 
   public saveCustomSubjects(subjects: CustomSubjectFolder[]) {
-    this.state.customSubjects = [...subjects];
+    const clean = this.cleanSubjectList(subjects);
+    const currStr = JSON.stringify(this.state.customSubjects);
+    const newStr = JSON.stringify(clean);
+    if (currStr === newStr) {
+      return; // prevent redundant loop
+    }
+    this.state.customSubjects = clean;
     this.notify();
     if (this.activeUid && rtdb) {
       const csRef = ref(rtdb, `users/${this.activeUid}/customSubjects`);
-      set(csRef, subjects).catch((e) => console.warn("Save custom subjects RTDB error:", e));
+      set(csRef, clean).catch((e) => console.warn("Save custom subjects RTDB error:", e));
     }
   }
 
   public saveCustomSubject(subject: CustomSubjectFolder) {
-    const list = [...this.state.customSubjects];
-    const idx = list.findIndex((s) => s.id === subject.id);
+    if (
+      !subject ||
+      subject.id === "subject-imported-folder" ||
+      subject.subjectName?.toLowerCase() === "imported lectures" ||
+      subject.subjectName?.toLowerCase() === "imports"
+    ) {
+      return;
+    }
+    const list = this.getCustomSubjects();
+    const norm = (subject.subjectName || "").trim().toLowerCase();
+    const idx = list.findIndex(
+      (s) => s.id === subject.id || (norm && (s.subjectName || "").trim().toLowerCase() === norm)
+    );
     if (idx > -1) {
-      list[idx] = subject;
+      list[idx] = { ...list[idx], ...subject };
     } else {
       list.unshift(subject);
     }

@@ -13,6 +13,7 @@ interface PersonalDashboardProps {
   settings?: StudySettings;
   onResumeSession?: (id: string, type: "playlist" | "video") => void;
   showRecentMaterials?: boolean;
+  onOpenImportModal?: () => void;
 }
 
 export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({ 
@@ -20,7 +21,8 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
   userName,
   settings,
   onResumeSession,
-  showRecentMaterials = false
+  showRecentMaterials = false,
+  onOpenImportModal
 }) => {
   const [stats, setStats] = useState(() => Storage.getStreakStats());
   const [studyLogs, setStudyLogs] = useState(() => Storage.getStudyLogs());
@@ -108,6 +110,10 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
   };
 
   const handleImportClick = () => {
+    if (onOpenImportModal) {
+      onOpenImportModal();
+      return;
+    }
     const el = document.getElementById("import-study-container") || document.getElementById("youtube-url-input");
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -409,7 +415,7 @@ export const PersonalDashboard: React.FC<PersonalDashboardProps> = ({
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           {/* Card 1: Add Lecture */}
           <button
-            onClick={() => setActiveTab?.("study")}
+            onClick={handleImportClick}
             className="p-3.5 sm:p-5 rounded-2xl sm:rounded-3xl bg-gradient-to-br from-blue-500/[0.07] via-white to-blue-500/[0.02] dark:from-blue-950/30 dark:via-[#111218] dark:to-blue-900/10 border border-blue-200/60 dark:border-blue-500/20 shadow-[0_2px_14px_-2px_rgba(59,130,246,0.06)] dark:shadow-none hover:border-blue-500/50 dark:hover:border-blue-400/50 hover:shadow-md transition-all duration-200 text-center sm:text-left group cursor-pointer active:scale-[0.98] flex flex-col items-center sm:items-start justify-center sm:justify-between min-h-[100px] sm:min-h-[110px]"
           >
             <div className="flex flex-col sm:flex-row items-center gap-2.5 sm:gap-3 w-full">

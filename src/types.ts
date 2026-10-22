@@ -193,5 +193,155 @@ export type ActiveTab =
   | "stats" 
   | "pomodoro" 
   | "search" 
-  | "developer";
+  | "developer"
+  | "admin";
+
+// ==========================================
+// 🛡️ ADMIN CONTROL CENTER DATA TYPES
+// ==========================================
+
+export type AdminRole = "admin" | "super_admin" | "content_manager" | "support_agent";
+
+export type AdminRouteTab = 
+  | "overview" 
+  | "users" 
+  | "announcements"
+  | "notifications"
+  | "feedback" 
+  | "settings";
+
+export interface AdminUserRecord {
+  uid: string;
+  name: string;
+  email: string;
+  photoURL?: string;
+  role?: AdminRole;
+  status: "active" | "suspended" | "pending";
+  createdAt: number;
+  lastLoginAt: number;
+  playlistsCount?: number;
+  notesCount?: number;
+  flashcardsCount?: number;
+  totalStudySeconds?: number;
+  suspendedAt?: number;
+  suspendedReason?: string;
+}
+
+export interface CuratedCourseItem {
+  id: string;
+  title: string;
+  channelName: string;
+  category: string; // e.g. "Computer Science", "Physics", "Mathematics"
+  description: string;
+  thumbnail: string;
+  type: "playlist" | "single_video";
+  youtubeId: string;
+  totalLectures: number;
+  totalDuration?: string;
+  isFeatured: boolean;
+  published: boolean;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+  chapters?: CourseChapter[];
+}
+
+export interface FeatureFlagItem {
+  id: string;
+  name: string;
+  description: string;
+  category: "core" | "ai" | "sync" | "media" | "experimental";
+  enabled: boolean;
+  rolloutPercentage: number; // 0 - 100
+  betaOnly: boolean;
+  lastModifiedBy: string;
+  lastModifiedAt: number;
+}
+
+export interface SupportTicketItem {
+  id: string;
+  userId?: string;
+  userEmail: string;
+  userName?: string;
+  category: string;
+  rating: number;
+  message: string;
+  status: "open" | "in_progress" | "resolved" | "dismissed";
+  resolutionNotes?: string;
+  assignedTo?: string;
+  browser?: string;
+  platform?: string;
+  page?: string;
+  device?: string;
+  screen?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SystemAnnouncementItem {
+  id: string;
+  title: string;
+  message: string;
+  type: "info" | "warning" | "success" | "maintenance" | "feature";
+  active: boolean;
+  targetAudience: "all" | "authenticated" | "guests";
+  bannerPosition: "top_bar" | "modal" | "toast";
+  actionLabel?: string;
+  actionUrl?: string;
+  dismissible: boolean;
+  startsAt: number;
+  expiresAt?: number;
+  createdAt: number;
+  createdBy: string;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  adminUid: string;
+  adminEmail: string;
+  adminName: string;
+  action: string;
+  category: "user_management" | "content" | "feature_flags" | "settings" | "security" | "maintenance" | "support";
+  targetId?: string;
+  targetName?: string;
+  details?: Record<string, any>;
+  ipAddress?: string;
+  timestamp: number;
+}
+
+export interface PlatformSettings {
+  siteName: string;
+  siteDescription: string;
+  supportEmail: string;
+  defaultDailyGoalMinutes: number;
+  maxPlaylistsPerUser: number;
+  enablePublicRegistration: boolean;
+  requireEmailVerification: boolean;
+  allowedEmailDomains: string[];
+  geminiDailyQuotaPerUser: number;
+  youtubeApiQuotaMonitoring: boolean;
+  corsAllowedOrigins: string[];
+  updatedAt: number;
+  updatedBy: string;
+}
+
+export interface MaintenanceConfig {
+  enabled: boolean;
+  title: string;
+  message: string;
+  estimatedEndTime?: string;
+  allowAdminBypass: boolean;
+  allowedIps: string[];
+  updatedAt: number;
+  updatedBy: string;
+}
+
+export interface SystemHealthCheck {
+  service: "Firebase Auth" | "Realtime Database" | "Cloud Firestore" | "YouTube API / Scraper" | "Gemini AI" | "Express Server";
+  status: "operational" | "degraded" | "outage" | "checking";
+  latencyMs: number;
+  lastChecked: number;
+  message?: string;
+  details?: any;
+}
 

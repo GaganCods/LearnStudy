@@ -1,10 +1,45 @@
 {
   "rules": {
-    "users": {
+    "roles": {
+      ".read": "auth != null",
       "$uid": {
-        ".read": "auth != null && $uid === auth.uid",
-        ".write": "auth != null && $uid === auth.uid"
+        ".read": "auth != null",
+        ".write": "auth != null && ($uid === auth.uid || root.child('roles').child(auth.uid).child('role').val() === 'admin' || root.child('admins').child(auth.uid).val() === true)"
       }
+    },
+    "admins": {
+      ".read": "auth != null",
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth != null && ($uid === auth.uid || root.child('admins').child(auth.uid).val() === true)"
+      }
+    },
+    "dailyLogins": {
+      ".read": "auth != null",
+      "$date": {
+        "$uid": {
+          ".read": "auth != null",
+          ".write": "auth != null && ($uid === auth.uid || root.child('admins').child(auth.uid).val() === true)"
+        }
+      }
+    },
+    "users": {
+      ".read": "auth != null && (root.child('roles').child(auth.uid).child('role').val() === 'admin' || root.child('admins').child(auth.uid).val() === true)",
+      "$uid": {
+        ".read": "auth != null && ($uid === auth.uid || root.child('roles').child(auth.uid).child('role').val() === 'admin' || root.child('admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && ($uid === auth.uid || root.child('roles').child(auth.uid).child('role').val() === 'admin' || root.child('admins').child(auth.uid).val() === true)"
+      }
+    },
+    "feedback": {
+      ".read": "auth != null",
+      "$ticketId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "announcements": {
+      ".read": "true",
+      ".write": "auth != null && (root.child('roles').child(auth.uid).child('role').val() === 'admin' || root.child('admins').child(auth.uid).val() === true)"
     }
   }
 }

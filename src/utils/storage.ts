@@ -27,6 +27,162 @@ function notifyStorageMutation(eventKey?: string) {
   }
 }
 
+export function normalizeChapterKey(title?: string, chapterNumber?: number): string {
+  if (!title) return chapterNumber ? `chapter-${chapterNumber}` : "";
+  const stripped = title.replace(/^(Chapter|Ch\.?)\s*\d+\s*[:\-]?\s*/i, "").trim().toLowerCase();
+  if (stripped) return stripped;
+  const full = title.trim().toLowerCase();
+  return full || (chapterNumber ? `chapter-${chapterNumber}` : "");
+}
+
+function getLectureUniqueKey(lec: ChapterLecture): string {
+  if (!lec) return "";
+  if (lec.youtubeVideoId && lec.youtubeVideoId.length === 11) {
+    return `yt:${lec.youtubeVideoId}`;
+  }
+  if (lec.videoUrl) {
+    const normUrl = lec.videoUrl.trim().toLowerCase();
+    if (normUrl) return `url:${normUrl}`;
+  }
+  if (lec.title) {
+    const normTitle = lec.title.trim().toLowerCase();
+    if (normTitle) return `title:${normTitle}`;
+  }
+  return lec.id || "";
+}
+
+function deduplicateLectures(lectures: ChapterLecture[]): ChapterLecture[] {
+  if (!Array.isArray(lectures)) return [];
+  const clean: ChapterLecture[] = [];
+  const seen = new Set<string>();
+
+  for (const lec of lectures) {
+    if (!lec) continue;
+    const key = getLectureUniqueKey(lec);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    clean.push({
+      ...lec,
+      lectureNumber: clean.length + 1
+    });
+  }
+  return clean;
+}
+
+function mergeLectures(existing: ChapterLecture[], incoming: ChapterLecture[]): ChapterLecture[] {
+  const clean = [...existing];
+  const seen = new Set<string>();
+
+  for (const lec of clean) {
+    const key = getLectureUniqueKey(lec);
+    if (key) seen.add(key);
+  }
+
+  for (const inc of incoming) {
+    if (!inc) continue;
+    const key = getLectureUniqueKey(inc);
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      clean.push({
+        ...inc,
+        lectureNumber: clean.length + 1
+      });
+    }
+  }
+
+  return clean;
+}
+
+export function mergeAndDeduplicateFolders(folders: CustomSubjectFolder[]): CustomSubjectFolder[] {
+  if (!Array.isArray(folders)) return [];
+
+  const mergedMap = new Map<string, CustomSubjectFolder>();
+
+  for (const s of folders) {
+    if (
+      !s ||
+      s.id === "subject-sample-101" ||
+      s.id === "subject-imported-folder" ||
+      s.subjectName?.toLowerCase() === "imported lectures" ||
+      s.subjectName?.toLowerCase() === "imports"
+    ) {
+      continue;
+    }
+
+    const normName = (s.subjectName || "").trim().toLowerCase();
+    const key = normName || s.id;
+
+    if (!mergedMap.has(key)) {
+      // First time seeing this folder: clean and deduplicate its chapters internally
+      const cleanChapters: CourseChapter[] = [];
+
+      for (const ch of s.chapters || []) {
+        if (!ch) continue;
+        const normKey = normalizeChapterKey(ch.title, ch.chapterNumber);
+
+        const existingIdx = cleanChapters.findIndex(c => {
+          if (c.id === ch.id) return true;
+          const cNorm = normalizeChapterKey(c.title, c.chapterNumber);
+          if (normKey && cNorm && cNorm === normKey) return true;
+          return false;
+        });
+
+        if (existingIdx > -1) {
+          const target = cleanChapters[existingIdx];
+          cleanChapters[existingIdx] = {
+            ...target,
+            lectures: mergeLectures(target.lectures || [], ch.lectures || [])
+          };
+        } else {
+          cleanChapters.push({
+            ...ch,
+            chapterNumber: cleanChapters.length + 1,
+            lectures: deduplicateLectures(ch.lectures || [])
+          });
+        }
+      }
+
+      mergedMap.set(key, {
+        ...s,
+        chapters: cleanChapters
+      });
+    } else {
+      // Duplicate folder with the same name: Merge chapters into existing folder without creating copies
+      const existing = mergedMap.get(key)!;
+      const existingChapters = [...(existing.chapters || [])];
+
+      for (const incCh of s.chapters || []) {
+        if (!incCh) continue;
+        const normIncCh = normalizeChapterKey(incCh.title, incCh.chapterNumber);
+        const foundIdx = existingChapters.findIndex(
+          c => c.id === incCh.id || (normIncCh && normalizeChapterKey(c.title, c.chapterNumber) === normIncCh)
+        );
+
+        if (foundIdx > -1) {
+          const targetCh = existingChapters[foundIdx];
+          existingChapters[foundIdx] = {
+            ...targetCh,
+            lectures: mergeLectures(targetCh.lectures || [], incCh.lectures || [])
+          };
+        } else {
+          existingChapters.push({
+            ...incCh,
+            chapterNumber: existingChapters.length + 1,
+            lectures: deduplicateLectures(incCh.lectures || [])
+          });
+        }
+      }
+
+      mergedMap.set(key, {
+        ...existing,
+        chapters: existingChapters
+      });
+    }
+  }
+
+  return Array.from(mergedMap.values());
+}
+
 export const Storage = {
   // Flashcards
   getFlashcards(): Flashcard[] {
@@ -435,29 +591,44 @@ export const Storage = {
 
   // Custom Subjects with Chapter-wise Lectures
   getCustomSubjects(): CustomSubjectFolder[] {
-    let rawList: CustomSubjectFolder[] = [];
+    let raw: CustomSubjectFolder[] = [];
     if (userAccountSync.hasActiveUser()) {
-      rawList = userAccountSync.getCustomSubjects();
+      raw = userAccountSync.getCustomSubjects();
     } else {
       try {
         const data = localStorage.getItem("studytube_guest_custom_subjects");
-        rawList = data ? JSON.parse(data) : [];
+        raw = data ? JSON.parse(data) : [];
       } catch {
-        rawList = [];
+        raw = [];
       }
     }
-    // Remove legacy import folder completely as requested
-    return rawList.filter(
-      (s) => s && s.id !== "subject-imported-folder" && s.category !== "Imports" && s.subjectName?.toLowerCase() !== "imported lectures"
-    );
+
+    const deduplicated = mergeAndDeduplicateFolders(raw);
+
+    if (!userAccountSync.hasActiveUser() && deduplicated.length !== raw.length) {
+      try {
+        localStorage.setItem("studytube_guest_custom_subjects", JSON.stringify(deduplicated));
+      } catch {}
+    }
+
+    return deduplicated;
   },
 
   saveCustomSubjects(subjects: CustomSubjectFolder[]) {
+    const clean = mergeAndDeduplicateFolders(subjects || []);
+
     if (userAccountSync.hasActiveUser()) {
-      userAccountSync.saveCustomSubjects(subjects);
+      userAccountSync.saveCustomSubjects(clean);
       return;
     }
-    localStorage.setItem("studytube_guest_custom_subjects", JSON.stringify(subjects));
+
+    const currentRaw = localStorage.getItem("studytube_guest_custom_subjects");
+    const cleanStr = JSON.stringify(clean);
+    if (currentRaw === cleanStr) {
+      return; // No changes, prevent endless cycle
+    }
+
+    localStorage.setItem("studytube_guest_custom_subjects", cleanStr);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("studytube_custom_subjects_updated"));
     }
@@ -465,14 +636,27 @@ export const Storage = {
   },
 
   saveCustomSubject(subject: CustomSubjectFolder) {
+    if (
+      !subject ||
+      subject.id === "subject-imported-folder" ||
+      subject.subjectName?.toLowerCase() === "imported lectures" ||
+      subject.subjectName?.toLowerCase() === "imports"
+    ) {
+      return;
+    }
     if (userAccountSync.hasActiveUser()) {
       userAccountSync.saveCustomSubject(subject);
       return;
     }
     const subjects = this.getCustomSubjects();
-    const idx = subjects.findIndex((s) => s.id === subject.id);
+    const normName = (subject.subjectName || "").trim().toLowerCase();
+    const idx = subjects.findIndex(
+      (s) =>
+        s.id === subject.id ||
+        (normName && (s.subjectName || "").trim().toLowerCase() === normName)
+    );
     if (idx > -1) {
-      subjects[idx] = subject;
+      subjects[idx] = { ...subjects[idx], ...subject };
     } else {
       subjects.unshift(subject);
     }
@@ -617,158 +801,6 @@ export const Storage = {
         window.dispatchEvent(new Event("studytube_single_videos_updated"));
       }
     }
-  },
-
-  // Import Folder in Course Library
-  getOrCreateImportSubject(): CustomSubjectFolder {
-    const subjects = this.getCustomSubjects();
-    let importSubj = subjects.find(
-      (s) => s.id === "subject-imported-folder" || s.subjectName.toLowerCase() === "imported lectures" || s.subjectName.toLowerCase() === "imports"
-    );
-
-    if (!importSubj) {
-      importSubj = {
-        id: "subject-imported-folder",
-        subjectName: "Imported Lectures",
-        category: "Imports",
-        color: "blue",
-        description: "Lectures and playlists imported directly from the Home page.",
-        createdAt: new Date().toISOString(),
-        chapters: []
-      };
-      this.saveCustomSubject(importSubj);
-    }
-
-    return importSubj;
-  },
-
-  addPlaylistToImportFolder(playlist: PlaylistInfo): CustomSubjectFolder {
-    if (!playlist) return this.getOrCreateImportSubject();
-
-    const importSubj = this.getOrCreateImportSubject();
-    const playlistTitle = playlist.title || "Imported Playlist";
-    const playlistId = playlist.id;
-
-    const existingChapterIndex = importSubj.chapters.findIndex(
-      (ch) => ch.id === `ch-import-pl-${playlistId}` || (ch.description && ch.description.includes(playlistId))
-    );
-
-    const convertedLectures: ChapterLecture[] = (playlist.videos || []).map((v: any, idx: number) => ({
-      id: `lec-pl-${playlistId}-${v.id || idx}`,
-      title: v.title || `Lecture ${idx + 1}`,
-      videoUrl: `https://www.youtube.com/watch?v=${v.id}`,
-      youtubeVideoId: v.id,
-      duration: v.duration || "15:00",
-      completed: !!v.completed,
-      progress: v.progress || 0,
-      lastWatchedPosition: v.lastWatchedPosition || 0,
-      lectureNumber: idx + 1
-    }));
-
-    if (existingChapterIndex > -1) {
-      const existingCh = importSubj.chapters[existingChapterIndex];
-      const existingLecMap = new Map<string, ChapterLecture>();
-      existingCh.lectures.forEach((l) => {
-        if (l.youtubeVideoId) existingLecMap.set(l.youtubeVideoId, l);
-      });
-      const mergedLectures = convertedLectures.map((lec) => {
-        const prev = lec.youtubeVideoId ? existingLecMap.get(lec.youtubeVideoId) : undefined;
-        if (prev) {
-          return {
-            ...lec,
-            completed: prev.completed || lec.completed,
-            progress: Math.max(prev.progress || 0, lec.progress || 0),
-            lastWatchedPosition: prev.lastWatchedPosition || lec.lastWatchedPosition || 0,
-            notes: prev.notes || lec.notes
-          };
-        }
-        return lec;
-      });
-
-      existingCh.title = `Chapter ${existingCh.chapterNumber}: ${playlistTitle}`;
-      existingCh.description = `Imported playlist (${playlistId}) from ${playlist.channelName || "YouTube"} • ${mergedLectures.length} lectures`;
-      existingCh.lectures = mergedLectures;
-    } else {
-      const nextChNum = importSubj.chapters.length + 1;
-      const newChapter: CourseChapter = {
-        id: `ch-import-pl-${playlistId}`,
-        chapterNumber: nextChNum,
-        title: `Chapter ${nextChNum}: ${playlistTitle}`,
-        description: `Imported playlist (${playlistId}) from ${playlist.channelName || "YouTube"} • ${convertedLectures.length} lectures`,
-        lectures: convertedLectures
-      };
-      importSubj.chapters.push(newChapter);
-    }
-
-    importSubj.chapters.forEach((ch, idx) => {
-      ch.chapterNumber = idx + 1;
-      if (/^Chapter \d+:/i.test(ch.title)) {
-        ch.title = ch.title.replace(/^Chapter \d+:/i, `Chapter ${idx + 1}:`);
-      }
-    });
-
-    this.saveCustomSubject(importSubj);
-    return importSubj;
-  },
-
-  addVideoToImportFolder(video: { id: string; title?: string; channelName?: string; duration?: string }): CustomSubjectFolder {
-    if (!video || !video.id) return this.getOrCreateImportSubject();
-
-    const importSubj = this.getOrCreateImportSubject();
-    let singleCh = importSubj.chapters.find(
-      (ch) => ch.id === "ch-import-single-videos" || ch.title.toLowerCase().includes("individual lectures")
-    );
-
-    if (!singleCh) {
-      singleCh = {
-        id: "ch-import-single-videos",
-        chapterNumber: 1,
-        title: "Chapter 1: Individual Lectures",
-        description: "Standalone video lectures imported from the Home page",
-        lectures: []
-      };
-      importSubj.chapters.unshift(singleCh);
-    }
-
-    const existingIndex = singleCh.lectures.findIndex(
-      (l) => l.youtubeVideoId === video.id || l.id === `lec-single-${video.id}`
-    );
-
-    const cleanTitle = (video.title && video.title !== "Loading lecture details..." && video.title !== "YouTube Video" && video.title !== "Connecting...")
-      ? video.title
-      : "";
-
-    if (existingIndex > -1) {
-      const existingLec = singleCh.lectures[existingIndex];
-      if (cleanTitle) existingLec.title = cleanTitle;
-      if (video.duration && video.duration !== "0:00" && video.duration !== "10:00") {
-        existingLec.duration = video.duration;
-      }
-    } else {
-      const newLec: ChapterLecture = {
-        id: `lec-single-${video.id}`,
-        title: cleanTitle || `Lecture: ${video.id}`,
-        videoUrl: `https://www.youtube.com/watch?v=${video.id}`,
-        youtubeVideoId: video.id,
-        duration: (video.duration && video.duration !== "0:00") ? video.duration : "10:00",
-        completed: false,
-        progress: 0,
-        lectureNumber: singleCh.lectures.length + 1
-      };
-      singleCh.lectures.push(newLec);
-    }
-
-    singleCh.description = `Standalone video lectures imported from the Home page • ${singleCh.lectures.length} lecture${singleCh.lectures.length === 1 ? "" : "s"}`;
-
-    importSubj.chapters.forEach((ch, idx) => {
-      ch.chapterNumber = idx + 1;
-      if (/^Chapter \d+:/i.test(ch.title)) {
-        ch.title = ch.title.replace(/^Chapter \d+:/i, `Chapter ${idx + 1}:`);
-      }
-    });
-
-    this.saveCustomSubject(importSubj);
-    return importSubj;
   },
 
   // --- USER FOLDERS & CATEGORIES SYSTEM (Save / Bookmark / Watch Later) ---

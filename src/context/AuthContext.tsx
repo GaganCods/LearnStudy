@@ -45,7 +45,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [errorHint, setErrorHint] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
-  const toast = useToast();
+  const { toast } = useToast();
 
   // Subscribe to Cloud Sync status changes
   useEffect(() => {
